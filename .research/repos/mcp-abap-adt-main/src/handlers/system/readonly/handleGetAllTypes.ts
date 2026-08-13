@@ -1,0 +1,102 @@
+/**
+ * Handler for retrieving all valid ADT object types and validating a type.
+ */
+
+import { XMLParser } from 'fast-xml-parser';
+import { createAdtClient } from '../../../lib/clients';
+import type { HandlerContext } from '../../../lib/handlers/interfaces';
+import { return_error } from '../../../lib/utils';
+export const TOOL_DEFINITION = {
+  name: 'GetAdtTypes',
+  available_in: ['onprem', 'cloud'] as const,
+  description:
+    '[read-only] Retrieve all valid ADT object types (CLAS, TABL, PROG, DEVC, FUGR, INTF, DDLS, DTEL, DOMA, SRVD, SRVB, BDEF, DDLX, etc.) or validate a specific type name.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      validate_type: {
+        type: 'string',
+        description: 'Type name to validate (optional)',
+      },
+    },
+    required: [],
+  },
+} as const;
+
+function _parseObjectTypesXml(xml: string) {
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '',
+    parseAttributeValue: true,
+    trimValues: true,
+  });
+  const result = parser.parse(xml);
+  const types: { name: string; description: string; provider: string }[] = [];
+  const objects = result['opr:objectTypes']?.['opr:objectType'];
+  if (Array.isArray(objects)) {
+    for (const obj of objects) {
+      types.push({
+        name: obj.name,
+        description: obj.text,
+        provider: obj.provider,
+      });
+    }
+  } else if (objects) {
+    types.push({
+      name: objects.name,
+      description: objects.text,
+      provider: objects.provider,
+    });
+  }
+  return types;
+}
+
+function extractNamedItems(xml: string) {
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '',
+    parseAttributeValue: true,
+    trimValues: true,
+  });
+  const result = parser.parse(xml);
+  const items: Array<{ name: string; description: string }> = [];
+  const namedItems = result['nameditem:namedItemList']?.['nameditem:namedItem'];
+  if (Array.isArray(namedItems)) {
+    for (const item of namedItems) {
+      items.push({
+        name: item['nameditem:name'],
+        description: item['nameditem:description'],
+      });
+    }
+  } else if (namedItems) {
+    items.push({
+      name: namedItems['nameditem:name'],
+      description: namedItems['nameditem:description'],
+    });
+  }
+  return items;
+}
+
+export async function handleGetAdtTypes(context: HandlerContext, _args: any) {
+  const { connection, logger } = context;
+  try {
+    const client = createAdtClient(connection, logger);
+    const response = await client
+      .getUtils()
+      .getAllTypes(999, '*', 'usedByProvider');
+    logger?.info('Fetched ADT object types list');
+    const items = extractNamedItems(response.data);
+    return {
+      isError: false,
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(items),
+        },
+      ],
+    };
+  } catch (error) {
+    logger?.error('Failed to fetch ADT object types', error as any);
+    return return_error(error);
+  }
+}

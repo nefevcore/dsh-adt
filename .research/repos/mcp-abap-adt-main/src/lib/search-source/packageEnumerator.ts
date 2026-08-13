@@ -1,0 +1,98 @@
+import type { IPackageContentItem } from '@mcp-abap-adt/interfaces';
+import { createAdtClient } from '../clients';
+import type { HandlerContext } from '../handlers/interfaces';
+
+export type ScanObjectType = 'PROG' | 'FUGR' | 'CLAS';
+
+/**
+ * The contents item as the ADT client hands it over. Kept as a local alias so
+ * call sites read in this module's vocabulary; the shape itself is owned by
+ * `@mcp-abap-adt/interfaces` (adt-clients 9.0.0 renamed `adtType` to `type`).
+ */
+export type PackageContentItem = IPackageContentItem;
+
+export interface EnumeratedObject {
+  devclass: string;
+  object_type: ScanObjectType;
+  object_name: string;
+}
+
+export interface EnumerateInput {
+  packages: string[];
+  include_subpackages: boolean;
+  object_filter?: string;
+  object_types: readonly ScanObjectType[];
+}
+
+export type PackageContentsFetcher = (
+  packageName: string,
+  options: { includeSubpackages: boolean },
+) => Promise<PackageContentItem[]>;
+
+const ADT_TYPE_TO_FAMILY: Record<string, ScanObjectType> = {
+  'PROG/P': 'PROG',
+  'FUGR/F': 'FUGR',
+  'CLAS/OC': 'CLAS',
+};
+
+function globToRegExp(glob: string): RegExp {
+  let pattern = '';
+  for (const ch of glob) {
+    if (ch === '*') pattern += '.*';
+    else if (ch === '?') pattern += '.';
+    else pattern += ch.replace(/[\\.+^$()|[\]{}]/g, '\\$&');
+  }
+  return new RegExp(`^${pattern}$`, 'i');
+}
+
+export async function enumerateScanTargets(
+  fetch: PackageContentsFetcher,
+  input: EnumerateInput,
+): Promise<EnumeratedObject[]> {
+  const wantedFamilies = new Set<ScanObjectType>(input.object_types);
+  const filter = input.object_filter
+    ? globToRegExp(input.object_filter)
+    : undefined;
+  const seen = new Set<string>();
+  const out: EnumeratedObject[] = [];
+
+  for (const pkg of input.packages) {
+    const items = await fetch(pkg.toUpperCase(), {
+      includeSubpackages: input.include_subpackages,
+    });
+    for (const item of items) {
+      if (item.isPackage) continue;
+      const family = ADT_TYPE_TO_FAMILY[item.type];
+      if (!family || !wantedFamilies.has(family)) continue;
+      if (filter && !filter.test(item.name)) continue;
+      const key = `${item.packageName} ${family} ${item.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        devclass: item.packageName,
+        object_type: family,
+        object_name: item.name,
+      });
+    }
+  }
+
+  out.sort((a, b) => {
+    if (a.devclass !== b.devclass) return a.devclass < b.devclass ? -1 : 1;
+    if (a.object_type !== b.object_type)
+      return a.object_type < b.object_type ? -1 : 1;
+    return a.object_name < b.object_name ? -1 : 1;
+  });
+
+  return out;
+}
+
+export function createPackageContentsFetcher(
+  ctx: HandlerContext,
+): PackageContentsFetcher {
+  const client = createAdtClient(ctx.connection, ctx.logger);
+  const utils = client.getUtils();
+  return (packageName, options) =>
+    utils.getPackageContentsList(packageName, {
+      includeSubpackages: options.includeSubpackages,
+    });
+}

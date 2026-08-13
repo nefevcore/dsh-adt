@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+	<head>
+		<meta charset="UTF-8">
+		<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>SAP Help Portal | SAP Online Help</title>
+		<!-- <script type="application/javascript" src="//assets.adobedtm.com/ccc66c06b30b/6fef444d50e0/launch-dec827c65643-staging.min.js"></script> -->
+
+		<!-- 
+			Moving this to head, so we can take out
+			div#app completely and mount the vue app
+			directly in body
+												-->
+		<script type="module" crossorigin src="/assets/index-CAh4h9xE.js"></script>
+		<link rel="modulepreload" crossorigin href="/assets/abap-syntax-QE22NUQl.js">
+		<link rel="stylesheet" crossorigin href="/assets/abap-syntax-BZq6yJb8.css">
+		<link rel="stylesheet" crossorigin href="/assets/index-CDTuYlsh.css">
+	</head>
+
+	<body>
+		<script>
+			//set up a variable to handle function calls if adobe is not enabled
+			let sap_s;
+		</script>
+		<script>
+			//EDDL Tracking
+			window.adobeDataLayer = window.adobeDataLayer || [];	
+		</script>
+	</body>
+</html>

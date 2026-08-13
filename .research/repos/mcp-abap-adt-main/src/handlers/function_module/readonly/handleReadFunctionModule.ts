@@ -1,0 +1,121 @@
+import { createAdtClient } from '../../../lib/clients';
+import type { HandlerContext } from '../../../lib/handlers/interfaces';
+import {
+  type AxiosResponse,
+  return_error,
+  return_response,
+} from '../../../lib/utils';
+import { assertFunctionGroupMatches } from '../shared/parseContainerGroup';
+
+export const TOOL_DEFINITION = {
+  name: 'ReadFunctionModule',
+  available_in: ['onprem', 'cloud', 'legacy'] as const,
+  description:
+    'Operation: Read, Create, Update. Subject: FunctionModule. Will be useful for reading, creating, or updating function module. [read-only] Read ABAP function module source code and metadata. Answers: "show function module code", "display FM source", "view function X", "get function module implementation". Returns source code, package, responsible, description.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      function_module_name: {
+        type: 'string',
+        description: 'Function module name (e.g., Z_MY_FM).',
+      },
+      function_group_name: {
+        type: 'string',
+        description:
+          'Function group name containing the function module (e.g., Z_MY_FG).',
+      },
+      version: {
+        type: 'string',
+        enum: ['active', 'inactive'],
+        description: 'Version to read: "active" (default) or "inactive".',
+        default: 'active',
+      },
+    },
+    required: ['function_module_name', 'function_group_name'],
+  },
+} as const;
+
+export async function handleReadFunctionModule(
+  context: HandlerContext,
+  args: {
+    function_module_name: string;
+    function_group_name: string;
+    version?: 'active' | 'inactive';
+  },
+) {
+  const { connection, logger } = context;
+  try {
+    const {
+      function_module_name,
+      function_group_name,
+      version = 'active',
+    } = args;
+    if (!function_module_name || !function_group_name)
+      return return_error(
+        new Error('function_module_name and function_group_name are required'),
+      );
+
+    const client = createAdtClient(connection, logger);
+    const functionModuleName = function_module_name.toUpperCase();
+    const functionGroupName = function_group_name.toUpperCase();
+    const obj = client.getFunctionModule();
+
+    // Read metadata FIRST — the ADT backend resolves FM by name regardless of
+    // the group segment in the URL, so we must verify ownership from metadata
+    // (<adtcore:containerRef/>) before trusting any source payload.
+    let metadata: string | null = null;
+    const metaResult = await obj.readMetadata({
+      functionModuleName,
+      functionGroupName,
+    });
+    if (metaResult?.metadataResult?.data) {
+      metadata =
+        typeof metaResult.metadataResult.data === 'string'
+          ? metaResult.metadataResult.data
+          : safeStringify(metaResult.metadataResult.data);
+    }
+
+    const realGroup = assertFunctionGroupMatches(
+      metadata,
+      functionGroupName,
+      functionModuleName,
+    );
+
+    let source_code: string | null = null;
+    const readResult = await obj.read(
+      { functionModuleName, functionGroupName: realGroup },
+      version as 'active' | 'inactive',
+    );
+    if (readResult?.readResult?.data) {
+      source_code =
+        typeof readResult.readResult.data === 'string'
+          ? readResult.readResult.data
+          : safeStringify(readResult.readResult.data);
+    }
+
+    return return_response({
+      data: JSON.stringify(
+        {
+          success: true,
+          function_module_name: functionModuleName,
+          function_group_name: realGroup,
+          version,
+          source_code,
+          metadata,
+        },
+        null,
+        2,
+      ),
+    } as AxiosResponse);
+  } catch (error: any) {
+    return return_error(error);
+  }
+}
+
+function safeStringify(data: unknown): string {
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return String(data);
+  }
+}

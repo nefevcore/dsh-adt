@@ -1,0 +1,41 @@
+out
+site
+wiki
+client/out/**
+client/dist/**
+sharedapi/out/**
+server/out/**
+server/dist/**
+node_modules
+client/server
+client/node_modules
+server/node_modules
+.vscode-test/
+*.vsix
+tmp
+*.tsbuildinfo
+bookmarks.json
+*.cpuprofile
+.github/copilot-instructions.md
+.github/agents/
+.github/agents_disabled/
+.github/skills/
+.github/hooks/
+.github/instructions
+.vscode/
+.agents/
+skills-lock.json
+# Webpack cache directories
+client/node_modules/.cache/
+server/node_modules/.cache/
+# Generated JavaScript files (compiled from TypeScript)
+client/src/**/*.js
+client/src/**/*.js.map
+server/src/**/*.js
+server/src/**/*.js.map
+modules/*/src/**/*.js
+modules/*/src/**/*.js.map
+.venv
+# MemPalace per-project files
+mempalace.yaml
+entities.json

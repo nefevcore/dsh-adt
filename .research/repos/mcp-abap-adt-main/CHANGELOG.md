@@ -1,0 +1,2455 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients` `^10.1.0` and `@mcp-abap-adt/interfaces` `^13.1.0`** (from `^8.0.0` / `^11.3.0`), plus `auth-providers` `^1.2.0`, `auth-broker` `^1.0.8` and `connection` `^1.10.2`. Two adt-clients majors are crossed; no MCP tool was added, removed or renamed, and no tool schema changed.
+  - **Config, state and shared types are imported from `interfaces` instead of `adt-clients`**, which stopped re-exporting them — 22 handler modules. Two were also renamed: `ObjectReference` → `IObjectReference`, `SearchObjectsParams` → `ISearchObjectsParams`.
+  - **A package contents item exposes `type`, not `adtType`** (interfaces 13 unified the shape as `IAdtObjectHit`). `PackageContentItem` in `lib/search-source/packageEnumerator.ts` is now an alias of `IPackageContentItem` rather than a hand-maintained copy, so it cannot drift again.
+  - **`UpdateUnitTest` and `DeleteUnitTest` refuse locally instead of asking the server.** ADT exposes no resource for updating or deleting a *test run*; the client method these handlers called threw that refusal from the inside, and adt-clients 9.0.0 dropped it from the declared contract. The tools are unchanged in name, schema and outcome — their descriptions already said "will return an error" — they simply no longer make a round trip to be told no.
+  - **`UpdateCdsUnitTest` and `DeleteCdsUnitTest` keep working through a narrow, documented cast.** These are real operations — update writes the local test class source, delete removes the global class, both implemented by `AdtCdsUnitTest` — but `getCdsUnitTest()` now returns a capability set that omits them, and the class is not exported. `CdsUnitTestWrites` describes exactly the two methods the class declares; it should be deleted once the accessor's type covers them.
+
+### Fixed
+- **Removed two NUL bytes committed inside a template literal** in `lib/search-source/packageEnumerator.ts`, where the dedup key's separators were `\0` instead of spaces. Harmless at runtime — a NUL separates as well as a space — but it made the file register as binary, so `grep` reported "binary file matches" and skipped it instead of showing the line.
+- **`ListTransports` no longer reports an empty list while the user owns transport requests.** The tool returned `{"success": true, "count": 0, "transports": []}` for every input — any user, any `modifiable_only` — on a system where the queried user owned 55 modifiable requests, while `GetSqlQuery` against `E070` and `GetTransport` on the same connection both returned the data. The endpoint negotiates `application/vnd.sap.adt.transportorganizertree.v1+xml`, a *tree*: requests sit under status containers one level below the category (`tm:root > tm:workbench > tm:modifiable > tm:request`), `tm:workbench` repeats once per transport target, and there is a parallel `tm:customizing` branch. The parser looked for `tm:request` only directly under the root or directly under `tm:workbench`, so every lookup missed and the list came back empty — silently, with `success: true`. Requests are now collected from anywhere in the tree (the flatter shapes keep working), deduplicated by request number, and a request with no `tm:status` inherits the status of its container. `modifiable_only` is additionally enforced client-side, because the tree carries released requests too and it is not established that the endpoint honours the `status` query parameter. Unit-tested against a reconstructed tree payload; `scripts/probe-transport-list.ts` dumps the raw payload from a real system so the fixture can be replaced with a capture. ([#168](https://github.com/fr0ster/mcp-abap-adt/issues/168))
+
+### Added
+- **Diagnostic script `scripts/probe-transport-list.ts`** — dumps the raw `/sap/bc/adt/cts/transportrequests` payload for a given user and env file, so the transport-list parser can be checked against the shape a system actually returns.
+
+### Security
+- **`npm audit` is back to 0.** Four advisories had accumulated in production dependencies since 8.12.1 — `js-yaml` (GHSA-5p4m-2wfm-xmqj, high), `ip-address` via `express-rate-limit` (high), `fast-uri` via the MCP SDK's `ajv` (high) and `hono` via the MCP SDK (moderate) — enough to fail CI's `npm audit --omit=dev --audit-level=high` gate on `main` as well, independently of this migration. All four resolved in-range: `npm audit fix` without `--force`, touching only `package-lock.json`. No `overrides` entry and no direct-dependency range change was needed.
+
+### Notes
+- adt-clients 10.1.0 changes one path that used to "succeed": an update passing `super_package` for a root package changed nothing and reported success, and now actually moves the package. A caller of `UpdatePackage` relying on the old no-op will see a real move.
+
+## [8.13.0] - 2026-07-24
+
+### Fixed
+- **Tool failures now reach the client as a plain message, with no service prefixes.** Previously a failed tool call arrived prefixed with `MCP error -32603: ` — and in the worst case double-wrapped as `MCP error -32603: ADT error: McpError: MCP error -32602: …`, with the truthful `-32602` (invalid arguments) overwritten by a generic `-32603`. Multi-item `content` was also collapsed into a single string on the error path. Root causes removed across five layers: `return_error` no longer prepends `Error: `; `BaseMcpServer` and `BaseHandlerGroup` return the `{ isError: true, content }` result instead of throwing `McpError` (which the SDK re-prefixes); 87 handler-level `throw new McpError` and `ADT error:` sites were routed through `return_error` (74 + 13); and the `McpError` symbol is now barred from `src/` except a single backward-compatibility re-export in `lib/utils.ts`, enforced by a static AST test that forbids every import and use of it elsewhere. Helper functions that feed a success payload keep throwing (a local `Error` type) so an error can never surface as `{ success: true }`. A custom/external handler group that throws the SDK's `McpError` is also handled: `return_error` strips the `MCP error -N: ` prefix at the boundary. Argument-validation errors keep their `MCP error -32602: ` prefix by design — the SDK raises those before our code runs, that code is correct, and they never reach `return_error`. Verified end to end against a live trial system. ([#155](https://github.com/fr0ster/mcp-abap-adt/issues/155))
+
+## [8.12.1] - 2026-07-22
+
+### Security
+- **Cleared the two remaining moderate `@hono/node-server` advisories (GHSA-frvp-7c67-39w9) via an npm `override`.** `@hono/node-server` is a transitive dependency of `@modelcontextprotocol/sdk` (pulled in by the Streamable HTTP transport); even the latest SDK (1.29.0) still pins `^1.19.9`, so there is no in-range fix and `npm audit fix --force` would *downgrade* the SDK to 1.24.3. Pinning `@hono/node-server` to `^2.0.5` via `overrides` resolves 2.0.11 and takes `npm audit` to **0 vulnerabilities**. Safe because the SDK's `streamableHttp` uses only `getRequestListener` from the package (verified present and unchanged in 2.0.11); the vulnerable `serve-static` sub-path is never imported. This deliberately reintroduces a single override (all overrides were removed in #141) — justified here because in-range resolution is impossible until the MCP SDK bumps its own hono dependency. Build, `test:check`, and the SAP-free server/transport unit tests pass unchanged.
+
+## [8.12.0] - 2026-07-22
+
+### Removed
+- **Version-history tools are no longer advertised for non-versioned object types.** `function_group`, `domain`, `data_element` and `package` were exposed by the version tools but their adt-clients handlers' `getVersions`/`getVersionSource` have always thrown "not supported" — the calls were dead on arrival. Removed from:
+  - the `object_type` enum of the generic `GetObjectVersions` / `GetObjectVersionSource` / `GetObjectVersionDiff` (they now accept only the 9 genuinely versioned types: class, program, interface, function_module, table, structure, ddl, behavior_definition, metadata_extension);
+  - the per-type high-level surface — the 12 tools `Get{FunctionGroup,Domain,DataElement,Package}{Versions,VersionSource,VersionDiff}` are gone (39 → 27 per-type version tools, total tool count 365 → 353).
+
+  Those object types remain fully supported by `LockObject` and every other tool — they are lockable, just not versioned. This surfaced from the adt-clients 8.0.0 migration below: the honest capability types turned an always-failing runtime call into a compile error. **Breaking to the tool surface** (removed enum values + removed tools) — a client that requested version history for these types received a runtime error before and now gets a schema/`Unsupported object_type` error instead.
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients@^8.0.0` and `@mcp-abap-adt/interfaces@^11.3.0`** (from `^7.6.0` / `^11.2.0`). adt-clients 8.0.0 is a breaking major that narrows every `AdtClient.getXxx()` return type from the fat `IAdtObject` to the honest capability composite each handler actually implements (`IAdtSourceObject`, `IAdtNonVersionedObject`, or an inline intersection); interfaces 11.3.0 adds those composites. Calling a capability a handler does not implement is now a compile error instead of a silent runtime throw — which is exactly what caught the version-tools defect above. Our direct interfaces range is bumped to `^11.3.0` to keep a single top-level interfaces version aligned with the client and re-export the current type surface.
+
+### Security
+- **Cleared two high-severity production advisories (#164).** `fast-xml-parser` 5.9.3–5.10.0 → 5.10.1 (GHSA-8r6m-32jq-jx6q, DOCTYPE entity-expansion reset) and `fast-uri` 3.0.0–3.1.3 → 3.1.4 (GHSA-v2hh-gcrm-f6hx, host confusion via backslash authority delimiter; transitive via `@modelcontextprotocol/sdk` → ajv), via `npm audit fix` (lockfile only, no `package.json` dependency edits). The CI `Security audit (production deps, high+)` gate now passes. Two remaining moderate `@hono/node-server` advisories require a breaking MCP SDK major and are tracked separately.
+
+## [8.11.0] - 2026-07-22
+
+### Fixed
+- **Read handlers no longer mask a failed read as `success:true` + null (#159).** 17 readonly handlers (`ReadDomain`, `ReadClass`, `ReadInterface`, `ReadProgram`, `ReadTable`, `ReadStructure`, `ReadDdl`, `ReadDataElement`, `ReadFunctionGroup`, `ReadFunctionModule`, `ReadFunctionInclude`, `ReadPackage`, `ReadServiceDefinition`, `ReadServiceBinding`, `ReadMetadataExtension`, `ReadBehaviorDefinition`, `ReadBehaviorImplementation`) wrapped their `read`/`readMetadata` calls in inner `try/catch` blocks that only logged a `warn` and swallowed the error, then returned `success:true` with `source_code:null`/`metadata:null` regardless. A hard failure — expired token, network error, HTTP 5xx — or a genuinely non-existent object was thus delivered to the caller as a successful (but empty) read. The inner swallows are removed; read errors now propagate to the existing outer `catch → return_error`, so a failed read returns a structured failure (tool result `isError:true`). This is the READ-path sibling of the activation/deletion masking fixes. `GetStructuresList` was not affected — it already surfaces a root read failure via `return_error` and flags partial append issues explicitly.
+
+## [8.10.0] - 2026-07-21
+
+### Fixed
+- **Locked/failed activations no longer report a false `success:true`.** Migrated to `@mcp-abap-adt/adt-clients@^7.6.0`, which fixes the activation-masking bug (adt-clients #79): ADT's `/sap/bc/adt/activation` returns HTTP 200 even when activation fails (object locked in another session, syntax errors), and the shared `activateObjectInSession` helper previously returned that response unchecked. Every high-level `Update*`/`Activate*` tool built on it (`UpdateDomain`, and the whole family across domain, program, table, structure, class, interface, ddl, tabletype, functionModule, functionInclude, metadataExtension, behaviorDefinition, enhancement, unitTest) therefore returned `{"success":true,"...":"updated and activated successfully"}` on a locked object. With 7.6.0 the client now throws on an explicit activation-failure signal; the handler's catch maps it to a structured `McpError` (tool result `isError:true`), so consumers can finally tell the operation failed. Fixes #154.
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients@^7.6.0` and `@mcp-abap-adt/interfaces@^11.2.0`** (from `^7.4.4` / `^10.0.0`). adt-clients 7.6.0 sources its public types from interfaces `^11.2.0`; bumping our direct interfaces range keeps a single top-level interfaces version aligned with the client. No handler API change.
+
+## [8.9.0] - 2026-07-17
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients@^7.4.4` and `@mcp-abap-adt/interfaces@^10.0.0`** (from `^7.4.2` / `^9.2.0`). interfaces 10.0.0 is a major bump whose only breaking change is removing the no-op `source_code` field from the low-level create-params (`ICreateAccessControl/ServiceDefinition/EnhancementParams`) — source is written via the update flow. This does **not** affect us: our handlers use the high-level config types (`IServiceDefinitionConfig.sourceCode`, unchanged), not the low-level create-params. adt-clients 7.4.3 dropped the matching dead create() pass-through.
+- **`CreateServiceDefinition`:** removed the now-dead `sourceCode` from the `create()` config (create makes the shell only; the body is still written by the follow-up `update()` from 8.7.1). No behavior change.
+
+## [8.8.1] - 2026-07-16
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients@^7.4.2`** (from `^7.4.0`). Two correctness fixes to `update()`'s read-back: the post-update readiness poll and the final returned read now target the **inactive** version — the one the write just produced — instead of `'active'` (which 404s for a never-activated object and returns stale content for an existing one). So reading back the result of an `update()` (including the `CreateServiceDefinition` `create → update → activate` flow) now returns the freshly written source. `@mcp-abap-adt/interfaces` stays `^9.2.0`. Non-breaking; no tool contract changed.
+
+## [8.8.0] - 2026-07-16
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients@^7.4.0`** (from `^7.3.1`). 7.4.0 adds a session-scoped lock registry with an `unlockAll()` safety net, which complements the uninterruptible critical sections from 8.7.0 by making orphaned locks recoverable. `@mcp-abap-adt/interfaces` stays `^9.2.0`. Non-breaking; no tool contract changed.
+
+## [8.7.1] - 2026-07-16
+
+### Fixed
+- **`CreateServiceDefinition` created the object with an empty body.** The service-definition `create()` POST only registers the shell (metadata: name/description/package) — it does **not** persist the `define service … { … }` source, and the handler had no follow-up write step (a regression in the underlying `@mcp-abap-adt/adt-clients` create flow, which used to run create → lock → update → unlock). The handler now runs an explicit high-level `update()` (lock → write source → unlock) right after create whenever `source_code` is provided, then activates — so the service definition is created with its real body. (Root cause is in adt-clients' `AdtServiceDefinition.create()`; this handler-side fix restores correct behavior immediately.)
+
+## [8.7.0] - 2026-07-16
+
+### Fixed
+- **Timeouts no longer leave objects locked and inactive.** A mutating tool (Create/Update/Delete) runs a stateful lock → modify → unlock chain as several separate ADT requests. On a slow system a short per-request timeout would abort one of them mid-flight; aborting the socket drops the stateful ADT session and orphans the lock handle, so the follow-up unlock has nothing to release — the object was left **locked and inactive** (whereas a normal error keeps the session alive, so unlock worked). Every high-level Create/Update/Delete handler (70 tools) is now wrapped in an **uninterruptible critical section**: `beginCriticalSection()` before it runs and `endCriticalSection()` in a `finally`, via `@mcp-abap-adt/connection` 1.10.0. While active, the connection raises the request timeout to a large ceiling (`SAP_TIMEOUT_CRITICAL`, default 600000 ms) so slow write requests run to completion instead of being interrupted. Feature-detected, so it degrades to a no-op on older connections.
+
+### Changed
+- **Migrated to `@mcp-abap-adt/connection@^1.10.0`** (from `^1.9.1`), which adds the reference-counted `beginCriticalSection()` / `endCriticalSection()` primitives used above. Non-breaking.
+
+## [8.6.1] - 2026-07-05
+
+### Changed
+- **Declared the SAP connection environment variables in `server.json` (#142 follow-up).** The MCP Registry entry carried no `environmentVariables`, so registry-based installers (e.g. FLUJO) launched the server with no configuration — it then ran in tool-inspection-only mode and the client timed out waiting for a usable connection. `server.json` now declares the connection variables (`SAP_URL` required; `SAP_AUTH_TYPE`, `SAP_SYSTEM_TYPE` with choices/defaults; `SAP_CLIENT`, `SAP_JWT_TOKEN` (secret), `SAP_USERNAME`, `SAP_PASSWORD` (secret), `SAP_LANGUAGE`, `SAP_MASTER_SYSTEM`, `SAP_RESPONSIBLE`), so registry clients can prompt for and inject them. No code change — the server already completes the MCP handshake without env vars (verified); this only surfaces the required configuration to installers. Republished to the MCP Registry via `mcp-publisher`.
+
+## [8.6.0] - 2026-07-05
+
+### Added
+- **Message Class (MSAG / T100) CRUD tools.** Exposes the new message-class client from `@mcp-abap-adt/adt-clients` 7.3.x as MCP tools:
+  - **ReadOnly group:** `ReadMessageClass` (class header + all messages), `ReadMessageClassMessage` (one message by number).
+  - **HighLevel group:** `GetMessageClass`, `CreateMessageClass`, `UpdateMessageClass`, `DeleteMessageClass`, and per-message `GetMessageClassMessage`, `CreateMessageClassMessage`, `UpdateMessageClassMessage`, `DeleteMessageClassMessage`.
+  - Message classes are not activatable/versioned, so there are no Check/Activate/Versions tools for them. Transport handling matches the other CRUD objects (`transport_request` sent as `corrNr`; required for transportable packages). `available_in: ['onprem', 'cloud']`.
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients@^7.3.1` and `@mcp-abap-adt/interfaces@^9.2.0`** (from `^7.2.1` / `^9.1.0`). 7.3.0 adds the Message Class client (`getMessageClass()` / `getMessageClassMessage()`); 7.3.1 wires `transport_request` (`corrNr`) from config. Non-breaking for existing tools.
+
+## [8.5.2] - 2026-07-05
+
+### Fixed
+- **`npx -y @mcp-abap-adt/core` (and any fresh install) crashed with `Cannot find module 'yaml'` (#143).** The runtime config loader (`src/lib/config/yamlConfig.ts`) imported the `yaml` package, but `yaml` was declared only in `devDependencies` — so it was absent from the published tarball and every consumer install failed at startup. Consolidated all runtime YAML parsing onto `js-yaml` (already a runtime `dependency`, via `load()`), migrated the two integration-test helpers off `yaml` as well, and **removed the `yaml` package entirely** — one YAML library instead of two, and the runtime import now resolves from a declared dependency. Added `yamlConfig` unit tests to guard it.
+
+### Security
+- **Removed all dependency `overrides` — `npm audit` is 0 without any of them.** The overrides added in 8.5.1 turned out to be crutches: a clean lockfile resolution already reaches patched versions within each maintainer's declared semver range, so forcing transitive versions (an untested parent/child combination) was both unnecessary and a maintenance liability. Dropped the entire `overrides` block (11 entries) and let the tree resolve in-range. The single dep that stayed stuck — `esbuild` (low, dev-only, pinned by `tsx@4.21` to `~0.27.0`) — was fixed the right way: by bumping the direct dev dependency we own, `tsx ^4.21.0 → ^4.22.4`, whose maintainer moved the pin to `esbuild ~0.28.0` (includes the patched `0.28.1`). No overrides remain; every fix now comes from a direct-dependency bump or in-range resolution. Verified: `npm audit` 0, `build` + `test:check` + 348 unit tests green. Dev-tooling only, not in the published tarball — no republish required.
+
+## [8.5.1] - 2026-07-01
+
+### Security
+- **Supply-chain dependency remediation (0 shipped high/critical).** Fixed the runtime vulnerabilities at their root by migrating to `@mcp-abap-adt/adt-clients@^7.2.1` (its security release bumping `axios ^1.18.1` + `fast-xml-parser ^5.9.3`), and bumping this package's own direct deps to match: `axios ^1.14.0 → ^1.18.1`, `fast-xml-parser ^5.5.10 → ^5.9.3`, `js-yaml ^4.1.1 → ^4.3.0`. Added `overrides` to pull patched transitive deps still on vulnerable versions: `form-data ^4.0.6`, `hono ^4.12.27`, `@hono/node-server ^1.19.14`, `fast-uri ^3.1.3`, `ws ^8.21.0`, `ip-address ^10.2.0`, `qs ^6.15.3` (all within the same major — no breaking bumps). `npm audit` dropped from 57→5; the production (`--omit=dev`) tree carries no high/critical. The 5 residual advisories are dev-tooling only (MCP Inspector → `shell-quote`/`concurrently`, Jest → `js-yaml@3`, `tsx` → `esbuild`, `@babel/core`) and are not in the published tarball; `shell-quote` has no upstream patch yet (tracked).
+- **Supply-chain hardening (low-noise).** Added a CI security gate — `npm audit --omit=dev --audit-level=high` — that fails the build only on shipped high+/critical vulnerabilities, keeping signal high without nagging on dev/low/moderate noise. Post-install scripts intentionally left enabled (no dep in the tree ships install/postinstall scripts; local scripts and CI actions must keep working).
+
+## [8.5.0] - 2026-06-30
+
+### Added
+- **Version history now surfaces the transport request (#30).** `GetObjectVersions` / `Get<Object>Versions` now include `transportRequest` (e.g. `DS4K901917`) and `transportDescription` per version when the SAP version feed carries them — so an agent can map an object's versions to the transports that produced them, which is the "transports of an object" piece of #30. Comes from `@mcp-abap-adt/adt-clients` 7.2.0; no tool/argument change (the new fields are additive on each version entry).
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients@^7.2.0` and `@mcp-abap-adt/interfaces@^9.1.0`** (from `^7.1.0` / `^9.0.0`). 7.2.0 parses the per-version transport-request link into the new optional `IObjectVersion.transportRequest`/`transportDescription` (requires interfaces ^9.1.0). Non-breaking.
+
+## [8.4.0] - 2026-06-29
+
+### Added
+- **Version diff tools (#30).** `GetObjectVersionDiff` (generic, ReadOnly) and per-object `Get<Object>VersionDiff` (HighLevel, 13 types — e.g. `GetClassVersionDiff`, `GetProgramVersionDiff`) return a unified diff between two object versions, given the two `content_uri`s from a `…Versions` call. Each fetches both version sources and diffs them (jsdiff, 3 lines of context); the response includes `identical` and the unified `diff`. Per-object `available_in` mirrors the type's `Get<Object>` tool. Completes #30's "diff between two versions" (2b) alongside the version-history (8.2.0) and per-object high-level (8.3.0) tools.
+
+## [8.3.0] - 2026-06-29
+
+### Added
+- **Per-object high-level version tools (#30).** Added `Get<Object>Versions` and `Get<Object>VersionSource` for the 13 versioned object types (class, program, interface, function_group, function_module, table, structure, ddl, domain, data_element, package, behavior_definition, metadata_extension) to the **HighLevel** group — e.g. `GetProgramVersions`/`GetProgramVersionSource`, `GetClassVersions`/`GetClassVersionSource`. These mirror the per-object `Get<Object>` read tools (the way `GetProgram` coexists with the read-only `ReadProgram`), so development clients that run with the ReadOnly analytics group disabled still get object version history. Each tool's `available_in` matches its `Get<Object>` counterpart (e.g. `GetProgramVersions` is onprem/legacy only). The generic `GetObjectVersions`/`GetObjectVersionSource` in the ReadOnly group are unchanged.
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients@^7.1.0`** (from `^7.0.1`). 7.1.0 makes where-used result parsing namespace-prefix agnostic (`usagereferences:` vs `usageReferences:`), further hardening append detection in `GetStructuresList` (#128) on systems that emit the other prefix; it also adds per-group subpath exports (`/core`, `/runtime`, …) — not yet adopted here. Non-breaking; no tool contract changed.
+
+## [8.2.0] - 2026-06-28
+
+### Added
+- **Object history tools (#30).** Two read-only tools backed by `@mcp-abap-adt/adt-clients` 7.0.0's version-history API: `GetObjectVersions` (lists an object's SAP version history — `versionId`, `author`, `updatedAt`, `title`, and an opaque `contentUri` per entry) and `GetObjectVersionSource` (fetches the source of a specific version by its `contentUri`). Both dispatch by `object_type` across the same 13 object types as the generic object tools (class, program, interface, function_group, function_module, table, structure, ddl, domain, data_element, package, behavior_definition, metadata_extension); object types without a version endpoint return a clear `UNSUPPORTED_OPERATION` error rather than raw HTTP.
+
+### Changed
+- **Migrated to `@mcp-abap-adt/adt-clients@^7.0.1` and `@mcp-abap-adt/interfaces@^9.0.0`** (from `^6.1.0` / `^7.2.0`). 7.0.1 also makes where-used resilient on S/4 systems whose `/usageReferences/scope` sub-resource returns 404 — the library now falls back to an unscoped search with client-side type narrowing, hardening the append detection in `GetStructuresList` (#128) at the library level. No mcp-abap-adt tool contract changed by the migration.
+
+## [8.1.1] - 2026-06-27
+
+### Fixed
+- **`GetStructuresList` no longer loses append structures on heavily-used objects (#128).** The append (where-used) search now scopes to append structures only (`enableOnlyTypes: ['TABL/DS']`) instead of searching all types: where-used caps the number of returned records, so on a widely-referenced base (e.g. a standard S/4 table) the append records were crowded out by other reference types and dropped, yielding `0` appends. It also resolves the base `object_type` itself (try `structure`, fall back to `table`) so a table base no longer 404s on a structures URI, and it sets `appends_unavailable: true` when the where-used lookup fails for every object_type — so callers can tell "could not determine appends" apart from "no appends" instead of getting a silent `0`.
+
+## [8.1.0] - 2026-06-26
+
+### Added
+- **Per-call `master_language` parameter on the high-level `Create*` tools** (#105). Optional; lets a caller set the master/original language of a single created object (e.g. `"DE"`, `"ZH"`), overriding the session default. Threaded into the ADT client as `config.masterLanguage`. Covers class, program, interface, ddl, domain, structure, table, table type, data element, function group, service definition, service binding, behavior definition, metadata extension, package. When omitted, resolution falls back to the session language (`SAP_LANGUAGE`) then `EN`.
+- **`x-sap-language` HTTP/SSE request header** (#105). Per-request/per-session master-language override for created objects (precedence: tool parameter → `x-sap-language` header → `SAP_LANGUAGE` → `EN`). Carried in a request-scoped context (`AsyncLocalStorage`), not the process-global system-context cache, so it cannot leak across requests, sessions, or connection modes.
+- **Compact facade `create`/`update`/`delete` now expose every routed object type's required arguments.** Previously many type-specific args (e.g. `table_name`, `structure_name`, `service_definition_name`, `ddl_code`, `lock_handle`, `implementation_code`, `properties`, `container_class`, `test_class`, `cds_view_name`, …) were absent from the compact schemas, so schema-driven MCP clients could not construct valid calls for most object types. All missing properties have been added as optional properties to `compactCreateSchema`, `compactUpdateSchema`, and `compactDeleteSchema`. Non-breaking (additive optional properties; compact schema `required` stays `['object_type']`; no routed handler changed).
+- **Runtime guard `compactSchemaCompleteness.test.ts`** — fails CI if any routed handler's top-level required arg is not present in the corresponding compact schema, preventing future drift.
+- **Corrected compact facade descriptions** for `HandlerCreate`: `UNIT_TEST` now advertises `container_class*/test_class*` and `CDS_UNIT_TEST` now advertises `class_name*/package_name*/cds_view_name*` (previously both incorrectly showed `run_id*`, which is an update/delete arg).
+
+## [8.0.0] - 2026-06-26
+
+### Changed (BREAKING)
+- **`View` DDL-source tools renamed to `Ddl`.** Migrated to `@mcp-abap-adt/adt-clients@^6.0.0`, whose misnamed `getView()` client became the generic DDL-source client `getDdl()` (`/sap/bc/adt/ddic/ddl/sources/` — CDS views, AMDP table functions, other DDL sources). MCP tools renamed: `GetView`→`GetDdl`, `ReadView`→`ReadDdl`, `CreateView`→`CreateDdl`, `UpdateView`→`UpdateDdl`, `DeleteView`→`DeleteDdl`, `CheckView`→`CheckDdl`, `ActivateView`→`ActivateDdl`, and the `*ViewLow` variants → `*DdlLow`. The tool argument `view_name` is now `ddl_name`.
+- **Generic object tools** (`LockObject`/`UnlockObject`/`CheckObject`/`ValidateObject`/`DeleteObject`): the `object_type` value `"view"` is renamed to `"ddl"` (removed, no alias).
+- **Compact facade** (`HandlerGet`/`HandlerCreate`/… ): the `object_type` value `VIEW` is renamed to `DDL` and its `view_name` argument to `ddl_name` (removed, no alias).
+
+## [7.2.1] - 2026-06-23
+
+### Fixed
+- **`GetStructuresList` now returns extension (append) structures in the tree.** Calling it with just a structure name (e.g. `ZMCP_SHR_STRU`) returns a hierarchy containing both the included structure (`kind: include`) and the appending structure that `extend type <this> with …` (`kind: append`). Previously appends were missed: the where-used lookup used the default scope (some object types unselected, so the extension's type was excluded) and a fragile `displayName`/`globalType` regex. It now uses `getWhereUsedList({ enableAllTypes: true })` and the parsed references. Also removed dead `.APPEND` source-parsing (ADT never emits `.APPEND` in a structure's source — appends are separate `extend type` objects). Verified end-to-end on a real system.
+
+## [7.2.0] - 2026-06-22
+
+### Added
+- **DNS-rebinding protection for the HTTP/SSE transports.** `--http-allowed-hosts`/`--sse-allowed-hosts`, `--http-allowed-origins`/`--sse-allowed-origins`, and `--http-enable-dns-protection`/`--sse-enable-dns-protection` (plus the matching `MCP_HTTP_*`/`MCP_SSE_*` env vars and the `http`/`sse` `allowed-hosts`/`allowed-origins`/`enable-dns-protection` YAML keys) now take effect: when enabled with an allowlist, requests with a non-allowlisted `Host`/`Origin` header are rejected with HTTP 403. Transport-aware (http uses `http*`, sse uses `sse*`); applied in `registerRoutes` so both standalone and embedded modes are protected; `/mcp/health` is ungated. Defaults off (no-op). This is Host/Origin allowlist validation, NOT browser CORS. Values are matched exactly (Host includes port, e.g. `localhost:3000`). Implemented as own Express middleware rather than the now-deprecated SDK transport options.
+
+## [7.1.3] - 2026-06-20
+
+> Fixes the SSE transport host/port resolution, removes a broken CLI bin entry,
+> and corrects the install documentation (`README.md`/`docs/` ship in `files`,
+> so the doc fixes reach npm users with this release).
+
+### Fixed
+- **SSE transport now honours its own host/port.** `--transport=sse` resolved the final host/port from the HTTP defaults/flags (`httpHost`/`httpPort`, so it listened on `3000`), ignoring `--sse-host`/`--sse-port` and `MCP_SSE_HOST`/`MCP_SSE_PORT`. Host/port resolution is now transport-aware: SSE falls back to the SSE defaults (host `127.0.0.1`, port `3001`) and its `--sse-*` flags / `MCP_SSE_*` env vars take effect; the generic `--host`/`--port` still win when provided. (`src/lib/config/ServerConfigManager.ts`.)
+- **Removed the dangling `mcp-abap-adt-v2` bin entry.** `package.json`/`package-lock.json` still mapped `mcp-abap-adt-v2` → `bin/mcp-abap-adt-v2.js`, a file removed in an earlier release, so a global install created a broken `mcp-abap-adt-v2` symlink. The only binary is `mcp-abap-adt`. Also fixed a stale `mcp-abap-adt-v2` example in `tools/show-storage-paths.js` help output.
+- **Documentation accuracy sweep:**
+  - Install docs/README used the wrong npm scope `@fr0ster/mcp-abap-adt`; corrected to `@mcp-abap-adt/core` (the GitHub repo path and the `io.github.fr0ster/…` registry id are unchanged).
+  - Stale local-pack tarball names / version pins (`…-1.1.0/1.2.0.tgz`) → version-independent `mcp-abap-adt-core-<version>.tgz` (so they no longer drift); Node requirement `18` → `22+` (matches `engines`); removed the non-existent `npm run start:legacy` / `dev:stdio` references and the `bin/mcp-abap-adt-v2.js` run examples.
+  - Corrected narrative drift: default transport is `stdio` (not HTTP); HTTP/SSE host default is `127.0.0.1` (not `0.0.0.0`); removed non-existent `--http`/`--sse` CLI shortcuts; refreshed handler-group tool counts and the `src/handlers/` directory list; the `system` handler group rides with `readonly` (it is not always included).
+  - Regenerated `docs/user-guide/AVAILABLE_TOOLS*.md` from the current `TOOL_DEFINITION`s (function-include tools, `GetStructuresList`, `GetIncludesList` tree, `GetProgFullCode` removal, refreshed counts).
+  - Removed documentation for the CORS / allowed-hosts / DNS-rebinding-protection options (`--http`/`--sse-allowed-origins`/`-allowed-hosts`/`-enable-dns-protection`, the matching `MCP_*` env vars, and the `http`/`sse` `allowed-origins`/`allowed-hosts`/`enable-dns-protection` YAML keys): they are parsed but not wired to the servers, so documenting them overstated capability. Actually implementing these is planned for a follow-up release.
+
+## [7.1.2] - 2026-06-20
+
+> **Test infrastructure only.** The published runtime (`dist/`) is unchanged from
+> 7.1.1 — no tool, handler, or library behaviour changed for consumers. This
+> release bundles integration-test reliability fixes and a stale-metadata fix.
+
+### Fixed
+- **`shared:setup` resilient to the cloud activation-run timeout.** Bulk-activating the ~24 shared objects in one activation run can exceed adt-clients' fixed ~45s request timeout; on a timeout the setup now skips the doomed full-group retries and falls back to batched activation (chunks of 5, with a second pass retrying only the leftovers) instead of failing.
+- **Runtime profiling test produces a trace.** The runnable class now does measurable CPU work so the profiler arms and a trace is written; a trivial single-statement class finished before tracing engaged, so the trace never resolved (`Failed to resolve traceId`).
+- **Runtime dump test actually creates and reads a dump** (was silently skipping or hitting a `400 session` error). It activates the division-by-zero class, triggers the dump on a separate connection (so the dumping run's server-side context loss does not poison the connection used to read the dump), fixes dump-id extraction from the feed entry (`id` field, plural `/runtime/dumps/<id>` path, URL-encoded, no decode), binds the read dump to the uniquely-named generated class, and fails (instead of skipping) when no dump is produced. `params.dump_id` remains the explicit opt-out for read-only environments.
+- **`server.json` version** was stale at `7.0.3`; bumped to match the package version.
+
+## [7.1.1] - 2026-06-19
+
+### Fixed
+- **`UpdateFunctionInclude` now supports an `activate` parameter** (default `false`) — when `true`, the include is activated after the source update so the new source becomes the active version, mirroring `UpdateFunctionModule`. Previously the tool always left the updated source inactive.
+- Integration-test + `test-config.yaml.template` fixes for the new function-include / structure tools (verified end-to-end on a real system): the FUGR-include lifecycle update source is now a valid declaration (a bare executable statement in an include caused "Statement is not accessible"); the `ListFunctionGroupIncludes` test no longer asserts the generated `L<FUGR>UXX` collector is absent (the tool faithfully returns ALL `FUGR/I` includes — collector filtering is a backup-tool concern); the template seeds the shared `ZMCP_SHR_FGRP` / `Z_MCP_SHR_FM` the function-include tests reference.
+
+## [7.1.0] - 2026-06-18
+
+### Added
+- **Function-group include tools.** Six new MCP tools expose ADT function-group include operations:
+  - Read-only: `ReadFunctionInclude` (source + metadata), `ListFunctionGroupIncludes` (a FUGR's includes — TOP + custom), `ListFunctionModules` (a FUGR's function modules).
+  - High-level: `CreateFunctionInclude`, `UpdateFunctionInclude`, `DeleteFunctionInclude`.
+  - The list tools surface the new adt-clients `getUtils().listFunctionGroupIncludes()` / `listFunctionModules()` (nodestructure drill-down). `DeleteFunctionInclude` surfaces SAP's refusal message when an include can only be deleted via the Function Builder.
+- Integration tests (`FunctionIncludeReadOnlyHandlers`, `FunctionIncludeHighHandlers`) and `tests/test-config.yaml.template` cases for the new tools.
+- **Structure embedding tools (tree output).** New read-only `GetStructuresList` — recursively lists the structures embedded in an ABAP structure (or table) as a TREE. Each node records the embedded structure name, the `attribute` it is embedded under (named include `attr : include X;` vs anonymous `include X;` → `null`), and `kind`: `include` (from the source) or `append` (an extension found via where-used whose source is `extend type <this> with …`). Includes come from the DDL/classic source (`include X;`, `.INCLUDE`/`.APPEND`); appends are resolved via where-used (toggle with `include_extensions`, default true). Cycle-guarded. `GetIncludesList` reworked from a flat list to a recursive TREE (each include may have child includes; cycle-guarded, depth-capped). Integration test `GetStructuresListHandler` + `tests/test-config.yaml.template` case (shared structures `ZMCP_SHR_STRU` / `ZMCP_SHR_STRU_INC`).
+
+### Changed
+- Bumped `@mcp-abap-adt/adt-clients` from `^5.6.0` to `^5.8.0` (adds `listFunctionModules`/`listFunctionGroupIncludes`; `getFunctionInclude().read()` returns source; `delete()` surfaces server-refused deletions). Clean registry install (no `link:true`/`file:`).
+
+## [7.0.3] - 2026-06-13
+
+### Changed
+- Bumped `@mcp-abap-adt/adt-clients` from `^5.5.0` to `^5.6.0`. Picks up: `package` create now honours the configurable master language (so `CreatePackage` stamps the session `SAP_LANGUAGE` like the other object types — #105), and the behaviorDefinition namespace URL-encoding fix (namespaced `/NSP/…` behavior definitions can now be read/locked/updated/activated/checked/unlocked/deleted). Clean registry install (no `link:true`/`file:` in the lockfile).
+
+### Note
+- Per-call `master_language` tool parameter on `Create*` and the inbound `X-SAP-Language` header override are a planned follow-up; this release wires the session-language default to package as well.
+
+## [7.0.2] - 2026-06-13
+
+### Added
+- **Created objects now adopt the logon language as their master/original language.** `getSystemContext()` reads `SAP_LANGUAGE` into `masterLanguage`, and `createAdtClient()` forwards it to the ADT client, so every `Create*` tool stamps `adtcore:masterLanguage`/`adtcore:language` with the session language instead of always `EN`. When `SAP_LANGUAGE` is unset the client still defaults to `EN`. Requires the configured language to be installed on the target system (otherwise SAP normalizes it to the system default). (#105)
+
+### Changed
+- Bumped `@mcp-abap-adt/adt-clients` from `^5.4.4` to `^5.5.0` for the configurable-master-language support. Clean registry install (no `link:true`/`file:` in the lockfile).
+
+### Note
+- A per-call `master_language` parameter on the high-level `Create*` tool schemas (to override the session language per object) is planned as a follow-up; the underlying client already supports `config.masterLanguage`.
+
+## [7.0.1] - 2026-06-11
+
+### Fixed
+- Bumped `@mcp-abap-adt/adt-clients` from `^5.4.2` to `^5.4.4` to pick up the stateful-lock-chain fix. Object writes (e.g. `UpdateClass`) no longer fail with HTTP `423 — not locked (invalid lock handle)` on older ABAP kernels (e.g. BASIS 7.55) over HTTP: the client now keeps the connection stateful for the whole `lock → check → update → unlock` chain across all object types, instead of switching back to stateless before the lock-bound PUT. Newer kernels (758/816) already tolerated the stateless write. No server-side API or tool-schema change. (#106)
+
+## [7.0.0] - 2026-05-30
+
+### Changed
+- **BREAKING: `EmbeddableMcpServer` now applies `ReadVsGetDedupStrategy` by default.** Previously the embeddable server defaulted to `NoDedupStrategy`, so exposing `readonly` + `high` together surfaced both `Read<X>` and `Get<X>` for the same operation (e.g. `ReadProgram` + `GetProgram`), leaving tool selection up to the client. Embedders (e.g. cloud-llm-hub) now get the same single-tool-per-operation view as the standalone launcher. Consumers that relied on both variants being exposed must opt out by passing `readOnlyDedupStrategy: new NoDedupStrategy()`. No code-level API change — the difference is the set of tools exposed to clients.
+
+## [6.11.3] - 2026-05-30
+
+### Removed
+- **`GetProgFullCode` removed as a redundant read path.** A program or function group with includes can already be read through one canonical path — `ReadProgram` / `ReadFunctionGroup` (main) → `GetIncludesList` → `GetInclude` per include — and an explicit `GetInclude` is required anyway (includes can live outside any single object's tree). Two overlapping strategies made LLM and RAG-based tool selection non-deterministic. The piecemeal path covers function groups as well (`GetIncludesList` accepts `FUGR`), so no capability is lost. (#100)
+
+### Changed
+- **Sharpened source-read tool descriptions for clearer LLM / semantic tool selection.** `ReadProgram` now reads as "Read a MAIN ABAP program … NOT for includes — use `GetInclude`" (dropping the misleading "Create, Update" lead-in on a read-only tool), and `GetInclude` now reads as "Read ANY single ABAP include source by name, from anywhere in the repository … the correct tool for include names (PROG/I)". `GetIncludesList` is unchanged. (#100)
+
+## [6.11.2] - 2026-05-29
+
+### Fixed
+- **`ReadProgram` could still return a silent `{ success: true, source_code: null }` for non-main-program names.** The 6.11.1 heuristic only fired when *both* source and metadata came back empty; when the `programs` endpoint returned metadata for a non-`PROG/P` object (e.g. an include) the response slipped through to a misleading `success: true` with `source_code: null`. `ReadProgram` now parses `adtcore:type` from the metadata and rejects anything other than a main program (`PROG/P`) with a structured `{ success: false, error: "invalid_object_type", object_type, message }`. No tool redirect is emitted — choosing the right tool is the consumer's decision. The tool description now states it works only for main programs (`PROG/P`). (#91)
+
+## [6.11.1] - 2026-05-29
+
+### Fixed
+- **`ReadProgram` returned a silent `{ success: true, source_code: null }` for include names.** LLM agents loading a report's full source call `ReadProgram` on the include names returned by `GetIncludesList`, get `null`, read it as a permission/inactive-object problem rather than "wrong tool", and stall. A readable main program (`PROG/P`) always returns source; when both source and metadata come back empty the name is an include (`PROG/I`). `ReadProgram` now returns a structured `{ success: false, error: "include_name_passed", suggestion: "GetInclude(\"<name>\")" }` so the caller gets an actionable signal at the point of failure. (#91)
+- **`GetProgFullCode` read include source via the wrong content key.** `handleGetInclude` returns `{ type: 'text', text }`, but two call sites read `c.data`: the recursive `collectIncludes` helper (so nested includes were never discovered) and the `FUGR` branch (so every function-group include came back as `code: null`). All sites now read `c.text`. (#91)
+
+## [6.11.0] - 2026-05-28
+
+### Added
+- **`LockObjectLow` / `UnlockObjectLow` now support `function_module`.** The schema already advertised `function_module` with `GROUP|FM_NAME` name format, but the handlers returned an unsupported-operation error. Both now parse the compound name and delegate to `client.getFunctionModule().lock()/unlock()`. (#90)
+
+### Changed
+- **Tool descriptions aligned with implementation.** `GetWhereUsed` now lists the closed set of supported `object_type` values, documents the `GROUP|FM_NAME` format for function modules, clarifies that `view = CDS DDL source` (classic DDIC views unsupported), and warns about the cost of `enable_all_types`. `DeleteObjectLow` and the four compact `Handler{Create,Delete,Get,Update}` tools annotate `PROGRAM` as `[onprem/legacy only]` in their descriptions (no `available_in` change — the rest of the supported types are still valid on cloud). `GetIncludesList` spells out the four supported `object_type` enum values. (#90)
+- **`server.json` version synced to package.json.** It had drifted to `6.8.0`; now follows the package version.
+
+### Removed
+- **Dead `filePath` / `writeResultToFile` plumbing.** A side-channel `filePath` argument was accepted (often without being declared in `inputSchema`) by ten read-only handlers — `GetInclude`, `GetIncludesList`, `GetSqlQuery`, `GetEnhancements`, `GetEnhancementSpot`, `GetEnhancementImpl`, `GetPackageContents`, `GetAbapAST`, `GetAbapSemanticAnalysis`, `GetAbapSystemSymbols`. The lib comment claimed it sandboxed writes to `./output`, but did no validation — any absolute path the process could write to was accepted. The feature was no longer relied on, so it has been removed along with `src/lib/writeResultToFile.ts`. (#90)
+
+### Fixed
+- **`tools/generate-tools-docs.js` truncated descriptions at the first inner quote.** Both the per-property and the top-level extractor used `/description\s*:\s*['"]([^'"]+)['"]/`, which stops the capture at the first `'` or `"` of any kind. New descriptions added in this release would have rendered as `Answers:`, `form`, `Supported values:` etc. in `AVAILABLE_TOOLS*.md`. Switched to a quote-balanced pattern with an unescape pass. (#90)
+
+## [6.10.0] - 2026-05-24
+
+### Added
+- **`SearchSource` time budget → partial results.** New `time_budget_ms` argument: when the internal scan deadline is exceeded, the tool returns the hits gathered so far instead of nothing, with a new `truncated.by_timeout: true` flag. Set it below your client/transport timeout (e.g. `540000` for a 600s client). Addresses the "no partial result after 600s" failure in #89.
+
+### Changed
+- **`SearchSource` default `max_hits_per_object` raised `1` → `100`.** The old default of 1 silently capped per-object hits and tripped `truncated.by_object_cap` on any object with ≥2 matches. (#89)
+- **`SearchSource` tool description clarified:** `by_object_cap` means a per-object hit cap was reached (raise `max_hits_per_object`), NOT a limit on the number of objects scanned (that is `max_objects` / `by_max_objects`). Added concurrency guidance — `concurrency` is capped at 16 per call; run only ONE `SearchSource` per destination at a time (parallel calls saturate the SAP scan backend). (#89)
+
+### Notes
+- The remaining #89 item — pushing the substring filter to a server-side ADT source-search endpoint (the only change that makes large-package scans *fast* rather than just *interruptible*) — is deferred pending live-system research into the ADT API.
+
+## [6.9.2] - 2026-05-24
+
+### Documentation
+- README: document the NTLM hard-reject behavior in the Kerberos auth section (carries the connection `1.9.1` change to the published package).
+
+## [6.9.1] - 2026-05-24
+
+### Changed
+- Bump `@mcp-abap-adt/connection` to `^1.9.1`, which adds **NTLM hard-reject** for Kerberos auth: a Kerberos connection now fails with a clear error if the SAP system offers NTLM (instead of silently swallowing the 401). Only Kerberos/SPNEGO is accepted.
+
+## [6.9.0] - 2026-05-24
+
+### Added
+- **Certificate (mTLS) and Kerberos (SPNEGO) authentication** for on-prem HTTP connections. Select via `SAP_AUTH_TYPE=certificate` or `SAP_AUTH_TYPE=kerberos`.
+  - Certificate: PEM (`SAP_CERT_PATH` + `SAP_CERT_KEY_PATH`) or PKCS#12 (`SAP_CERT_PFX_PATH` + optional `SAP_CERT_PASSPHRASE`). mTLS — no `SAP_USERNAME`/`SAP_PASSWORD` needed.
+  - Kerberos: single-leg Negotiate via the optional `kerberos` native package; SPN from `SAP_KERBEROS_SPN` (or derived `HTTP@<host>`, service class via `SAP_KERBEROS_SERVICE`). Requires a valid TGT (`kinit`) or keytab on the host.
+  - Both bypass the auth-broker (no browser/OAuth flow). Requires `@mcp-abap-adt/interfaces@^7.2.0`, `@mcp-abap-adt/connection@^1.9.0`.
+
+### ⚠️ Help wanted — not yet validated on a live system
+These two auth paths pass full unit coverage but have **not** been exercised against a real SAP system. If you have an on-prem system with **client-certificate** or **Kerberos/SPNEGO** SSO, please try `SAP_AUTH_TYPE=certificate`/`kerberos` and report results — especially whether Kerberos works with a single-leg Negotiate token or your system requires mutual-auth continuation. Please open an issue with what you see; feedback will confirm or refine these flows.
+
+## [6.8.0] - 2026-05-16
+
+### Changed
+- `SearchSource.packages` now accepts ABAP `*` masks (e.g. `Z*`, `ZFI_*`, `/NS/Z*`) alongside exact dev-class names. Mask resolution reuses the same ADT informationsystem/search path that `SearchObject` uses for `objectType=DEVC`. Mask resolution is best-effort and capped at the ADT result window (1000 references); for certainty, pass concrete package names. The tool description carries the no-guarantees disclosure so an LLM caller sees it.
+- `SearchSource.scanned.packages` now reports the resolved-and-deduplicated starting-package count (post-mask resolution, post-dedup) instead of raw input length. Closes #87.
+
+### Notes
+- `+` (single-char) wildcard probed against an onprem E19 system and found unsupported by the ADT `informationsystem/search` endpoint (despite SAP CP-pattern docs). Dropped from public examples; the resolver still detects `+` for forward-compat with backends that may honor it.
+
+## [6.7.0] - 2026-05-14
+
+### Added
+- `SearchSource` (onprem + legacy) — source-text search across ABAP repository objects without invoking `SUBMIT AFX_CODE_SCANNER`. Scans programs (`PROG/P`), function groups (`FUGR/F`, including FMs and FUGR/PU/PD/PT/PY auto-includes), and classes (`CLAS/OC`, main include only in v1). Supports AND-query, up to three exclusion substrings, per-object hit cap, comment-line skip, subpackage recursion, object-name glob filter, bounded parallelism (default 8, max 16), and a deterministic `truncated` signal (`by_object_cap` / `by_max_objects`). Cloud is explicitly out of scope (no indexed source-search endpoint; see fr0ster/mcp-abap-adt-clients#36). Closes #79.
+
+### Notes
+- Comments are **searched by default**. Set `exclude_comments=true` to drop col-1 `*` and full-line `"` comment lines (AFX-strict semantics; whitespace-prefixed `*` is not a comment in ABAP and is never skipped).
+- The `version` parameter affects PROG and CLAS main include reads only — FUGR subincludes are always read against the active version because the include endpoint exposes no version selector.
+- Class subincludes (CCDEF / CCMAC / CCAU / CCIMP / CCPUBLIC) are not yet enumerable through the MCP surface and are out of scope for v1; tracked as a follow-up.
+
+## [6.6.0] - 2026-05-14
+
+### Added
+- `RuntimeRunClass` (onprem + cloud) — execute an ABAP class implementing `if_oo_adt_classrun` and return its stdout text. Optional `profile=true` runs through the profiler and additionally surfaces `profile.profiler_id` / `profile.trace_id` (same retry tunables as the previous tool).
+- `RuntimeRunProgram` (onprem only) — execute an ABAP report and return its stdout text. Optional `profile=true` starts a profiler trace; trace must be located afterwards via `RuntimeListProfilerTraceFiles` (program execution is fire-and-forget).
+
+### Deprecated
+- `RuntimeRunClassWithProfiling` and `RuntimeRunProgramWithProfiling` are now marked deprecated in their tool descriptions. They remain functional. Prefer the unified `RuntimeRunClass` / `RuntimeRunProgram` with `profile=true`. Scheduled for removal in a future major release.
+
+## [6.5.3] - 2026-05-13
+
+### Added
+- `RuntimeRunClassWithProfiling` now accepts optional `max_trace_attempts`, `trace_retry_delay_ms`, and `trace_lookup_uris` so callers can tune trace-resolution polling. Defaults remain 5 attempts × 2000 ms; raise on slow systems (e.g. SAP trial cloud) where the trace file is written with extra delay. Closes #82.
+
+## [6.5.2] - 2026-05-13
+
+### Fixed
+- Bump `@mcp-abap-adt/adt-clients` to `^5.4.2` and `@mcp-abap-adt/connection` to `^1.8.1` to pick up the stale-CSRF 401 recovery fix (fr0ster/mcp-abap-connection#7, originally reported as #78). On on-prem SAP with basic auth, a cached-but-stale CSRF token caused POST/PUT/DELETE to fail permanently with `401 + login HTML`; the connection layer now detects this case, clears the token/cookies, and retries.
+
+## [6.5.1] - 2026-04-24
+
+### Documentation
+- README: mention optional `readOnlyDedupStrategy` in the `EmbeddableMcpServer` example and link to the dedup strategies section in `HANDLERS_MANAGEMENT.md`.
+
+## [6.5.0] - 2026-04-24
+
+### Added
+- `EmbeddableMcpServer` accepts optional `readOnlyDedupStrategy: IReadOnlyDedupStrategy` to hide duplicate `Read<X>` readonly handlers when another group (HighLevel / LowLevel / Compact) contributes an equivalent. Ships two implementations: `NoDedupStrategy` (default — no behavior change for existing consumers) and `ReadVsGetDedupStrategy` (hides `Read<X>` when `Get<X>` is exposed). Consumers can also plug custom strategies for role-based rules. Exported from `@mcp-abap-adt/core/handlers` and `@mcp-abap-adt/core/server`.
+- CLI launcher validates `--exposition` — `compact` must be exposed alone, `high` and `low` are mutually exclusive. Fails fast at startup with a clear error on misconfiguration.
+- Diagnostic scripts `scripts/read-fm.ts` and `scripts/probe-fm.ts` for reproducing function-module endpoint quirks against an arbitrary env file.
+
+### Changed
+- CLI launcher opts into `ReadVsGetDedupStrategy` by default, so running the shipped server no longer exposes duplicate pairs like `ReadFunctionModule` + `GetFunctionModule` when both `readonly` and `high` are enabled.
+
+### Fixed
+- `ReadFunctionModule` / `GetFunctionModule`: ADT resolves function modules by name regardless of the group segment in the URL, so passing a wrong group silently returned the correct FM's source and echoed the wrong group back in the response. Both handlers now read metadata first, verify the owning group via `<adtcore:containerRef/>`, and reject mismatches with an explicit error (`Function module X belongs to group Y, not Z.`). The response now echoes the real group from metadata rather than the input.
+
+### Backward compatibility
+- `EmbeddableMcpServer` default dedup is `NoDedupStrategy` — existing consumers see no change in exposed tool sets until they explicitly pass a strategy.
+- Invalid `--exposition` combinations previously silently produced duplicate-tool errors at runtime or exposed overlapping handlers; they now fail at startup with an explicit message.
+
+## [6.4.1] - 2026-04-21
+
+### Fixed
+- `docker/Dockerfile`: switch default `MCP_TRANSPORT` from `stdio` to `http` so the image runs as an HTTP MCP server out of the box
+- `docker/Dockerfile`: correct launcher path (`dist/server/v2/launcher.js` → `dist/server/launcher.js`) — previous path did not exist and prevented the container from starting
+- `docker/Dockerfile`: pass `--allow-destination-header` so callers can supply SAP connection parameters via request headers (no default SAP connection baked into the image)
+- `docker/Dockerfile`: fix healthcheck endpoint (`/health` → `/mcp/health`) to match the actual route exposed by `StreamableHttpServer`
+- `docker/Dockerfile`: use `npm run build:fast` in the builder stage — the full `build` runs Biome which requires `.gitignore`, but `.dockerignore` excludes it
+
+## [6.4.0] - 2026-04-20
+
+### Added
+- `EmbeddableMcpServer` accepts a new optional `systemType: 'onprem' | 'cloud' | 'legacy'` option. When set, it overrides the process-global `SAP_SYSTEM_TYPE` env var for the `available_in` tool filter of that server instance only. Enables hosts that serve multiple SAP systems per request (e.g., proxies routing to a mix of on-premise Cloud Connector and cloud-hosted destinations) to register the correct tool set per instance without mutating `process.env`. (#69)
+- `BaseMcpServer` constructor accepts the same `systemType` option for subclasses.
+
+### Changed
+- Filter-skip debug log now reports whether the resolved system type came from the per-instance option or the env var (`source=option` / `source=env`).
+
+### Backward compatibility
+- `systemType` is optional; omitting it preserves the previous behavior (env var fallback, default `cloud`). No consumer changes required.
+
+## [6.3.1] - 2026-04-19
+
+### Changed
+- Bumped `@mcp-abap-adt/adt-clients` to ^5.2.1 to drop transitive `node-rfc` dependency in favor of `@mcp-abap-adt/sap-rfc-lite`
+
+## [6.3.0] - 2026-04-18
+
+### Changed
+- Enriched all CRUD tool descriptions (Create, Read, Update, Activate) with structured Operation/Subject context for improved RAG-based tool selection (#66)
+- Unified description format across all 13 object types: Class, Program, Table, View, Domain, DataElement, Interface, FunctionModule, BehaviorDefinition, MetadataExtension, ServiceDefinition, ServiceBinding, Structure
+
+## [6.2.2] - 2026-04-17
+
+### Added
+- Debug and tracing scripts: `debug-profiling`, `get-dump`, `list-dumps`, `list-traces`
+- All scripts accept CLI parameters (`--class`, `--user`, `--id`, etc.) and support `--help`
+
+## [6.2.1] - 2026-04-17
+
+### Fixed
+- `SAP_SYSTEM_TYPE` was commented out in `.env.example` — users on on-premise systems silently lost access to Program tools because the default is `cloud`
+
+### Documentation
+- Added `SAP_SYSTEM_TYPE` to all `.env` examples in installation and CLI docs
+- Added `SAP_SYSTEM_TYPE` to SAP Connection environment variables reference
+
+## [6.2.0] - 2026-04-16
+
+### Changed
+- Updated `@mcp-abap-adt/connection` to ^1.8.0
+- Updated `@mcp-abap-adt/adt-clients` to ^5.1.0
+
+## [6.1.0] - 2026-04-16
+
+### Changed
+- RFC connection is no longer tied to legacy systems — it is now a general-purpose connection transport for any on-prem system with SAP NW RFC SDK (closes #63)
+
+## [6.0.0] - 2026-04-16
+
+### Breaking Changes
+- **Removed** `RuntimeListDumps` tool — use `RuntimeListFeeds(feed_type='dumps')` instead, which uses the same ADT feed API as Eclipse and avoids timezone issues
+- **Removed** `datetime` and `user` parameters from `RuntimeGetDumpById` — `dump_id` is now the only required parameter; get dump IDs from `RuntimeListFeeds` first
+
+### Fixed
+- `UpdateInterface` fails with "Parameter corrNr could not be found" on SAP BTP ABAP Cloud — added missing `transportRequest` parameter to interface update call (closes #61)
+
+### Changed
+- `RuntimeGetDumpById` simplified: only accepts `dump_id` (from `RuntimeListFeeds`), no more datetime+user search with ±60s window (closes #62)
+- Compact `HandlerDumpList` now delegates to `RuntimeListFeeds` instead of removed `RuntimeListDumps`
+
+## [5.2.0] - 2026-04-15
+
+### Added
+- `ActivateServiceDefinition` handler (high + low level) for standalone activation of ABAP service definitions (closes #60)
+- `ActivateServiceBinding` handler (high + low level) for standalone activation of ABAP service bindings (closes #60)
+- Integration test for ServiceBinding high-level handlers (create with variant, activate, delete)
+- Shared service definition `ZMCP_SHR_SRVD01` in shared_dependencies for binding tests
+- Service definitions support in shared:setup and shared:teardown
+
+### Changed
+- `CreateServiceBinding`: replaced `binding_type` (ODataV2/ODataV4) with `binding_variant` using `ServiceBindingVariant` type — supports ODATA_V2_UI, ODATA_V2_WEB_API, ODATA_V4_UI, ODATA_V4_WEB_API; default changed to ODATA_V4_UI (Fiori Elements) (closes #59, #60)
+- `UpdateServiceBinding`: replaced `service_type` with `binding_variant` for consistent API
+- Upgraded `@mcp-abap-adt/interfaces` to ^7.0.0, `@mcp-abap-adt/adt-clients` to ^5.0.0
+- Long test timeout increased from 400s to 600s
+
+## [5.1.1] - 2026-04-13
+
+### Fixed
+- Update handlers must unlock objects in finally block on failure — `UpdateBehaviorDefinition` and `UpdateMetadataExtension` now wrap lock/update/unlock in try/finally to prevent stale locks when update fails (closes #57)
+
+### Changed
+- Upgraded `@mcp-abap-adt/adt-clients` to 4.0.5
+
+## [5.1.0] - 2026-04-13
+
+### Added
+- 13 high-level Check tools for standalone syntax/semantic validation of ABAP objects (closes #54): CheckBehaviorDefinition, CheckClass, CheckDataElement, CheckDomain, CheckFunctionGroup, CheckFunctionModule, CheckInterface, CheckMetadataExtension, CheckPackage, CheckProgram, CheckStructure, CheckTable, CheckView
+- Normalized response contract for Check tools: shared `object_name` field, `session_id`/`session_state` stripped from output
+- `normalizeCheckResponse` utility for consistent Check tool response normalization
+- Integration tests for all 13 Check handlers with step-by-step logging
+
+## [5.0.11] - 2026-04-13
+
+### Fixed
+- `IAbapConnection.connect()` is now part of the interface contract — CSRF token and session cookies are established before any ADT requests, removing unsafe `as any` cast (relates to #53)
+
+### Changed
+- Upgraded `@mcp-abap-adt/interfaces` to ^6.1.0, `@mcp-abap-adt/connection` to ^1.6.0
+
+## [5.0.10] - 2026-04-13
+
+### Changed
+- Dropped Node 20 support, minimum is now Node 22
+
+## [5.0.9] - 2026-04-13
+
+### Fixed
+- Skip syntax check when saving without activation (`activate=false`) — allows uploading source code with unresolved dependencies (e.g., CDS views with circular references) for later mass activation via `ActivateObjects` (closes #52)
+
+## [5.0.8] - 2026-04-13
+
+### Added
+- `ActivateObjects` tool for group/mass activation of any ABAP object types (closes #49)
+- Per-type Activate tools in high-level group: ActivateDomain, ActivateDataElement, ActivateTable, ActivateStructure, ActivateView, ActivateClass, ActivateInterface, ActivateProgram, ActivateFunctionModule, ActivateFunctionGroup, ActivateBehaviorDefinition, ActivateMetadataExtension
+- Uncommented `ActivateObjectLow` in low-level group
+- Known Limitations section in architecture docs — parallel write tool calls are not supported
+
+### Fixed
+- Objects not activating after creation — added long polling wait between unlock and activate in 10 high-level handlers (closes #47)
+
+## [5.0.6] - 2026-04-13
+
+### Fixed
+- Stdio mode: log output no longer leaks into stdout (reserved for JSON-RPC protocol) — all logger fallbacks now use stderr or noop (closes #46)
+- CSRF token errors on write operations — `resolveSystemContext` was making HTTP requests on the handler connection, invalidating cookies/CSRF token (closes #45)
+
+### Changed
+- **Breaking:** Removed `resolveSystemContext` and `resetSystemContextCache` from public API — these were internal functions that mutated connection state. Use `getSystemContext()` (read-only) and `setSystemContext()` instead.
+- `EmbeddableMcpServer` now accepts `systemContext` option to set system info without HTTP calls
+- `BaseMcpServer` no longer calls `resolveSystemContext` on the handler connection — system context is resolved once at startup on a temporary connection
+
+## [5.0.4] - 2026-04-13
+
+### Added
+- Export `resolveSystemContext`, `getSystemContext`, `resetSystemContextCache` and `IAdtSystemContext` from `@mcp-abap-adt/core/utils` for consumers that bypass `BaseMcpServer` (closes #44)
+
+### Changed
+- Updated `@mcp-abap-adt/adt-clients` to 4.0.4 — validates responsible person before create to prevent cryptic SAP error
+
+## [5.0.3] - 2026-04-12
+
+### Changed
+- Updated `@mcp-abap-adt/adt-clients` to 4.0.3 — fixes `$TMP` and similar local package handling
+
+## [5.0.2] - 2026-04-11
+
+### Changed
+- Improved tool descriptions for RAG search quality — front-loaded action verbs, added "Answers:" trigger phrases for GetWhereUsed, SearchObject, and all Read* handlers (closes #42)
+
+## [5.0.1] - 2026-04-11
+
+### Removed
+- Compact wrappers `HandlerFeedList`, `HandlerSystemMessageList`, `HandlerGatewayErrorList` — duplicated system-level tools, causing LLM tool selection confusion
+
+## [5.0.0] - 2026-04-11
+
+### Changed
+- Migrated to `@mcp-abap-adt/adt-clients` 4.0.0 factory API (`getProfiler()`, `getDumps()`, `getFeeds()`)
+
+### Added
+- `RuntimeListFeeds` — unified ADT feed reader (descriptors, variants, dumps, system messages, gateway errors)
+- `RuntimeListSystemMessages` — SM02 system messages
+- `RuntimeGetGatewayErrorLog` — SAP Gateway error log (/IWFND/ERROR_LOG) with detail view
+- Compact wrappers: `HandlerFeedList`, `HandlerSystemMessageList`, `HandlerGatewayErrorList`
+
+## [4.9.0] - 2026-04-08
+
+### Changed
+- Merged `RuntimeAnalyzeDump` into `RuntimeGetDumpById` — one tool with `response_mode` parameter (`payload`, `summary`, `both`) instead of two overlapping tools
+
+### Removed
+- `RuntimeAnalyzeDump` tool (use `RuntimeGetDumpById` with `response_mode: "summary"` instead)
+
+## [4.8.9] - 2026-04-07
+
+### Changed
+- `SearchObject` now returns compact TSV (tab-separated) format instead of JSON, further reducing payload size
+
+## [4.8.8] - 2026-04-07
+
+### Fixed
+- `SearchObject` now returns compact JSON instead of raw XML, reducing payload size significantly (fixes #39)
+
+## [4.8.7] - 2026-04-06
+
+### Fixed
+- `GetPackageTree` now returns an error for non-existent packages instead of an empty tree (fixes #38)
+
+## [4.8.6] - 2026-04-05
+
+### Fixed
+- Skip SAP auth flow for MCP ping requests (protocol-level check, no SAP connection needed)
+- Serialize concurrent OAuth token acquisition per destination to prevent port conflicts
+
+### Changed
+- Disable `x-mcp-destination` header processing by default; opt-in via `--allow-destination-header` flag (HTTP/SSE)
+
+## [4.8.5] - 2026-04-05
+
+### Fixed
+- Pass logger to `createAdtClient()` in all 150 handlers for proper adt-clients logging
+- Retry on transient SAP errors (SWB_TOOL019) in HighTester after delete+create
+- Update `@mcp-abap-adt/adt-clients` to 3.14.5
+
+## [4.8.4] - 2026-04-05
+
+### Fixed
+- BDEF low-level test: wrap unlock in try-catch to prevent lock leak on failure
+- shared:setup: retry group activation up to 3 times to resolve circular dependencies
+
+## [4.8.3] - 2026-04-04
+
+### Fixed
+- Domain/DataElement create handlers: use lock + read-modify-write update pattern instead of full chain (fixes intermittent "description is missing" errors)
+- Update `@mcp-abap-adt/adt-clients` to 3.14.4 (fixes DataElement create XML)
+
+### Changed
+- Add `shared:setup` prerequisite step to testing documentation
+
+## [4.8.2] - 2026-04-04
+
+### Changed
+- Update all dependencies to latest versions (except express)
+- Migrate to TypeScript 6, add `rootDir` to tsconfig.json
+- Fix test type errors for TypeScript 6 compatibility
+
+## [4.8.1] - 2026-04-02
+
+### Changed
+- Add build (tsc) step to pre-commit hook to catch type errors before commit
+
+## [4.8.0] - 2026-04-02
+
+### Added
+- `RuntimeListDumps`: new `from` / `to` parameters (YYYYMMDDHHMMSS system local time) for server-side time-range filtering. Response is now a structured `dumps` array with `dump_id`, `datetime`, `error`, `title`, and `user` fields — replaces the raw atom feed payload.
+- `RuntimeGetDumpById`: dump lookup by `datetime` + `user` without knowing the dump ID. Pass `datetime` (ISO or `"YYYY-MM-DD HH:MM:SS"`) and `user` to resolve the dump automatically using a ±2-minute server-side window and ±60-second client-side match. `dump_id` is now optional.
+
+### Changed
+- `RuntimeGetDumpById`: `dump_id` parameter is no longer required — provide either `dump_id` or `datetime` + `user`.
+
+## [4.7.1] - 2026-04-01
+
+### Fixed
+- Update server.json version to match package version
+
+## [4.7.0] - 2026-04-01
+
+### Changed
+- Replace archived `node-rfc` with `@mcp-abap-adt/sap-rfc-lite` — a lightweight maintained fork with the same API surface. This change only affects RFC connections to legacy SAP systems (BASIS < 7.50). HTTP connections are not affected. If you experience issues with legacy RFC connections, please open an issue and downgrade to v4.6.0.
+
+## [4.6.0] - 2026-03-31
+
+### Added
+- HTTPS/TLS support for HTTP and SSE server transports. Configure via CLI (`--tls-cert`, `--tls-key`, `--tls-ca`), environment variables (`MCP_TLS_CERT`, `MCP_TLS_KEY`, `MCP_TLS_CA`), or YAML config (`tls:` section). Protocol is auto-detected from cert + key presence.
+
+## [4.5.2] - 2026-03-27
+
+### Added
+- Pre-commit hook via husky + lint-staged — auto-fixes formatting and lint issues before commit so CI stays green.
+
+## [4.5.1] - 2026-03-26
+
+### Changed
+- Rewrite `ListTransports` handler to use `AdtClient.getRequest().list()` with proper Accept negotiation instead of direct `connection.makeAdtRequest()`. Update `@mcp-abap-adt/adt-clients` to 3.13.0.
+- Add integration tests for `ListTransports` handler.
+
+## [4.5.0] - 2026-03-26
+
+### Fixed
+- Give `SAP_AUTH_TYPE` priority over `SAP_JWT_TOKEN` in test helpers — fixes onprem basic-auth tests failing when OS has stale BTP JWT token (#24).
+
+### Changed
+- Update `@mcp-abap-adt/adt-clients` to 3.12.0 — adds 415 Content-Type negotiation with auto-retry and caching. Accept correction enabled by default (#22, #23).
+
+## [4.4.2] - 2026-03-26
+
+### Fixed
+- Guarantee unlock via `try-finally` in all update handlers — prevents locked objects when errors occur between lock and unlock (#22). Affected: UpdateProgram, UpdateClass, UpdateInterface, UpdateView, UpdateTable, UpdateStructure, UpdateDomain, UpdateServiceDefinition, UpdateDataElement.
+
+## [4.4.1] - 2026-03-26
+
+### Improved
+- Rewrite `SearchObject` tool description with operation-first approach for better RAG discoverability (#21). Description now leads with action verbs (find, search, locate, check exists) instead of object type lists, so embedding vectors match user intent queries like "is there a program named X?".
+
+## [4.4.0] - 2026-03-22
+
+### Improved
+- Enrich 15 tool descriptions with domain-specific keywords for better vector RAG discoverability (#20). Tools like `SearchObject`, `GetTypeInfo`, `GetTransaction`, `GetTableContents`, and others now include ABAP object type names (DEVC, CLAS, TABL, DDLS, BDEF, DDLX, etc.) so embedding-based tool discovery returns correct results.
+
+## [4.3.2] - 2026-03-20
+
+### Improved
+- Suppress `ping` request logging in StreamableHttpServer and SseServer — ping is now silent unless debug logging is enabled, reducing log noise.
+
+## [4.3.1] - 2026-03-20
+
+### Improved
+- StreamableHttpServer request logging now includes MCP method, tool name, destination, and completion status. Helps diagnose issues like #19 where health polls generate excessive `tools/list` noise.
+
+## [4.3.0] - 2026-03-19
+
+### Added
+- `GET /mcp/health` endpoint for HTTP and SSE transports — lightweight health check without MCP protocol overhead. Returns `status`, `uptime`, `version`, `transport`, and `activeSessions` (SSE only). Resolves #18.
+- Unit tests for health endpoint (both transports).
+
+## [4.2.1] - 2026-03-15
+
+### Fixed
+- Shorten `server.json` description to fit MCP registry 100-character limit.
+
+## [4.2.0] - 2026-03-15
+
+### Added
+- **16 new Read\* tools** — read source code and metadata for all object types with CRUD handlers:
+  ReadClass, ReadInterface, ReadProgram, ReadTable, ReadStructure, ReadView, ReadDomain,
+  ReadDataElement, ReadFunctionModule, ReadFunctionGroup, ReadPackage, ReadServiceDefinition,
+  ReadServiceBinding, ReadMetadataExtension, ReadBehaviorDefinition, ReadBehaviorImplementation.
+- `transport_request` parameter for UpdateBehaviorDefinition (low), UpdateMetadataExtension (high).
+- `record_changes` parameter for CreatePackage (high + low).
+- Transported Object CRUD integration test reproducing GitHub #11 (transport lock issue on legacy systems).
+
+### Fixed
+- `SAP_SYSTEM_TYPE` now propagated from test config to `process.env`, so `createAdtClient` correctly selects `AdtClientLegacy` on legacy systems.
+- `transport_request` passed in class update tests for transportable packages.
+- UpdateDataElement now passes `transportRequest` to adt-clients.
+- BDEF low test resilience: guaranteed BIMPL unlock via try/finally, delay after delete in cleanup, skip create if BDEF already exists (transport re-create limitation).
+- Removed duplicate GetFunction handler (delegates to GetFunctionModule).
+- Auto-detect JWT auth for `--env-path`, SAP_CLIENT auto-resolve.
+
+## [4.1.1] - 2026-03-13
+
+### Fixed
+- Unit test `systemContext.test.ts` updated to match `SAP_SYSTEM_TYPE` env var approach (removed obsolete `isModernAdtSystem` mock).
+
+## [4.1.0] - 2026-03-13
+
+### Added
+- `SAP_SYSTEM_TYPE` environment variable (`cloud` | `onprem` | `legacy`) to explicitly control SAP system type. Default: `cloud`.
+- `--system-type` CLI argument as alternative to the env var.
+- Eager HTTP session initialization — `connect()` is now called for all connection types (not just RFC), establishing CSRF token and cookies before the first request.
+
+### Changed
+- Removed unreliable auto-detection via `/sap/bc/adt/core/discovery`. System type is now determined solely by `SAP_SYSTEM_TYPE`.
+- **Migration note:** on-premise users must set `SAP_SYSTEM_TYPE=onprem` in `.env` to access on-premise-only tools (e.g., Programs).
+
+### Fixed
+- 403 errors on first request to SAP systems (e.g., E96) that require pre-established session cookies.
+- Inconsistent legacy detection across different shell environments, proxy configs, and ICM sessions.
+
+## [4.0.0] - 2026-03-13
+
+### Added
+- **Legacy system support (BASIS < 7.50)**: automatic detection of legacy systems, `AdtClientLegacy` factory, RFC connection transport via `SADT_REST_RFC_ENDPOINT`.
+- **RFC connection type**: `--connection-type=rfc` CLI flag and `SAP_CONNECTION_TYPE=rfc` env var for legacy systems requiring SAP NW RFC SDK.
+- **`available_in` mechanism**: each handler's `TOOL_DEFINITION` declares supported environments (`onprem`, `cloud`, `legacy`). Unsupported tools are hidden from clients at registration time.
+- **Legacy `available_in` on 102 handlers**: Class, Interface, View, Program, Function Group/Module, Package (read/update/delete), Include, Unit Test, and common utilities.
+- **FunctionGroup/FunctionModule on cloud**: previously restricted to on-premise only.
+- **Runtime profiling and dumps on cloud**: class-based profiling now works on ABAP Cloud.
+- **Shared dependencies management**: `npm run shared:setup` / `shared:teardown` / `shared:check` for test objects.
+- **Test infrastructure**: `test:init` / `test:reinit` scripts, explicit connection config (`env`, `system_type`, `connection_type`) in `test-config.yaml`, `available_in` support in test cases for system-aware skipping.
+- **AVAILABLE_TOOLS_LEGACY.md**: generated documentation listing 115 legacy-compatible tools.
+
+### Changed
+- **BREAKING: Node 18 dropped** — minimum Node.js version is now 20.0.0.
+- **BREAKING: `@mcp-abap-adt/adt-clients` upgraded** from 2.x to 3.11.2 (major API changes).
+- **BREAKING: `@mcp-abap-adt/connection` upgraded** to 1.5.3.
+- **CI matrix**: Node 20 + 25 on 3 OS for push/PR; Node 20/22/24/25 for release.
+- **Guaranteed unlock**: force-release DDIC locks, unlock-on-error in CreateDataElement/CreateDomain.
+- **TADIR conflict retry**: automatic retry on 409 TADIR conflict during create operations.
+
+### Fixed
+- Circular reference in CDS unit test handlers.
+- i18n check handling (adt-clients 3.8.7).
+- MetadataExtension high/low test object conflicts (separate config keys).
+- Function test lock conflicts (separate high/low test objects).
+- Package tests use `update()` for lock/unlock.
+- Jest 30 deprecated `--testPathPattern` migrated to `--testPathPatterns`.
+- `SAP_USER` → `SAP_USERNAME` in configuration examples.
+
+## [3.2.1] - 2026-03-07
+
+### Fixed
+- **Integration test cleanup**: close MCP connections, reuse auth session, random ports.
+
+## [3.2.0] - 2026-03-05
+
+### Added
+- **GetTableContents handler**: fully implemented — was a stub returning "temporarily unavailable", now reads table data via ADT Data Preview API with field extraction and SQL query generation.
+
+### Changed
+- **parseSqlQueryXml**: exported from `handleGetSqlQuery` for reuse in `GetTableContents`.
+
+## [3.1.0] - 2026-03-04
+
+### Added
+- **BehaviorImplementation low-level MCP tools**: registered `ValidateBehaviorImplementationLow`, `CreateBehaviorImplementationLow`, `LockBehaviorImplementationLow` in LowLevelHandlersGroup.
+
+### Fixed
+- **System context not passed to AdtClient**: `createAdtClient()` now forwards `responsible` and `masterSystem` from resolved system context to `AdtClient` options. Fixes package creation on BTP Cloud failing with "Enter a valid user, not , as the person responsible".
+- **ValidatePackageLow schema**: added missing `super_package` property to `inputSchema.properties` (was in `required` but not declared — MCP SDK rejected the parameter in hard mode).
+- **CreatePackageLow handler**: removed incorrect `createResult` check — `AdtPackage.create()` returns `{ errors: [] }` without `createResult` (packages are containers with no response body).
+
+## [3.0.0] - 2026-03-04
+
+### Changed
+- **BREAKING: Separate Create and Update** — Create handlers no longer accept source code. Use Update after Create to set source code.
+
+## [2.7.5] - 2026-03-03
+
+### Fixed
+- **MCP Registry publish**: sync `server.json` version with npm package version (`2.5.2` → `2.7.5`).
+
+## [2.7.4] - 2026-03-03
+
+### Added
+- **System context HTTP headers for HTTP/SSE transport**:
+  - `x-sap-master-system` and `x-sap-responsible` headers allow per-request system context override.
+  - Priority: HTTP headers → `process.env` → cloud `getSystemInformation()` API.
+  - Enables on-prem transport request binding for HTTP/SSE connections without `.env` file.
+- **System context cache isolation**: cache is reset before each non-stdio request to prevent stale values leaking between requests targeting different SAP systems.
+
+## [2.7.3] - 2026-03-03
+
+### Fixed
+- **Release workflow lint gate** for `v2.7.2`:
+  - Applied Biome formatting/import ordering fixes in updated hard-mode test infrastructure and integration suites.
+  - Kept hard-mode behavior unchanged; this patch is focused on CI/release pipeline stability.
+
+## [2.7.2] - 2026-03-03
+
+### Added
+- **YAML-driven MCP hard mode test infrastructure**:
+  - Added `environment.integration_hard_mode` support for integration tests.
+  - Added real MCP client execution path for `stdio`, `sse`, and `http` transports.
+  - Added MCP CRUD smoke/matrix scripts in `tools/`.
+
+### Fixed
+- **Real MCP integration gaps in tests**:
+  - Lambda-based integration suites now support hard mode via real MCP tool calls.
+  - `LowTester` hard mode now bootstraps MCP session (`GetSession`) so low-level lock/unlock flows receive required `session_id`.
+  - Hard mode test object names now include per-run suffix to prevent object name collisions between runs.
+- **System context bootstrap on server startup**:
+  - Launcher now hydrates on-prem system context env values earlier so real MCP runs consistently resolve context.
+
+## [2.7.1] - 2026-03-01
+
+### Added
+- **`SAP_MASTER_SYSTEM` and `SAP_RESPONSIBLE`** documented in CLI help (`--help`) and `.env.example`.
+
+## [2.7.0] - 2026-03-01
+
+### Added
+- **System context support for on-premise systems** (issue #11):
+  - `masterSystem` and `responsible` are now passed to all ADT create/update XML requests via `IAdtSystemContext`.
+  - On-prem resolution: `SAP_MASTER_SYSTEM` env var → `getSystemInformation()` API fallback (cloud).
+  - Responsible resolution: `SAP_RESPONSIBLE` env var → `SAP_USERNAME` fallback → API.
+  - Ensures correct transport request binding on on-premise systems.
+- **New `.env` variables for on-premise configuration**:
+  - `SAP_MASTER_SYSTEM` — SAP system ID (e.g., `E19`, `DEV`). Required for on-prem create/update operations.
+  - `SAP_RESPONSIBLE` — Responsible user (optional, falls back to `SAP_USERNAME`).
+- **Test infrastructure**: `resolveTestSystemContext()` resolves system context from YAML config for integration tests.
+
+### Changed
+- **Upgraded `@mcp-abap-adt/adt-clients`** from `^2.0.0` to `^2.2.0`.
+- Renamed `default_system` → `default_master_system` in test config template.
+
+## [2.6.1] - 2026-02-27
+
+### Fixed
+- **`UpdateProgram` missing `transport_request`**: Added `transport_request` to schema, interface, and `.update()` call — same fix as other handlers in 2.6.0.
+
+### Changed
+- **Upgraded `@mcp-abap-adt/adt-clients`** to `1.2.2`.
+
+## [2.6.0] - 2026-02-27
+
+### Added
+- **`ListTransports` tool** (read-only):
+  - Lists transport requests for the current or specified user.
+  - Filters by modifiable status (default: modifiable only).
+  - Use before create/update to find the correct transport request.
+
+### Fixed
+- **`transportRequest` forwarding in all high-level handlers** (issue #11):
+  - Create handlers now forward `transportRequest` to the internal update (PUT) step: `CreateFunctionModule`, `CreateTable`, `CreateInterface`, `CreateView`, `CreateProgram`, `CreateDomain`, `CreateDataElement`.
+  - Standalone update handlers now forward `transportRequest`: `UpdateStructure`, `UpdateDomain`, `UpdateServiceDefinition`.
+  - Added `transport_request` to tool schemas where it was missing: `UpdateClass`, `UpdateView`, `UpdateBehaviorDefinition`.
+
+### Changed
+- **Upgraded `@mcp-abap-adt/adt-clients`** from `0.3.22` to `1.2.1`.
+
+### Documentation
+- Regenerated tools documentation:
+  - `docs/user-guide/AVAILABLE_TOOLS.md`
+  - `docs/user-guide/AVAILABLE_TOOLS_HIGH.md`
+  - `docs/user-guide/AVAILABLE_TOOLS_LOW.md`
+  - `docs/user-guide/AVAILABLE_TOOLS_COMPACT.md`
+  - `docs/user-guide/AVAILABLE_TOOLS_READONLY.md`
+
+## [2.5.2] - 2026-02-23
+### Fixed
+- **`--mcp` precedence over local `.env`**:
+  - Fixed CLI fallback logic so `.env` from current working directory is no longer auto-loaded when `--mcp=<destination>` is provided.
+  - Startup auth source display now correctly prioritizes `service-key: <destination>` over `.env`.
+- **JWT auth error diagnostics**:
+  - Improved HTTP/SSE request-time error reporting for missing JWT tokens by surfacing token provider failure reason in `BaseMcpServer`.
+- **Auth broker runtime behavior**:
+  - Fixed v2 auth-broker config to respect `--unsafe` instead of always forcing safe in-memory stores.
+
+### Added
+- **Browser OAuth callback port override**:
+  - Added `--browser-auth-port=<port>` and `MCP_BROWSER_AUTH_PORT` to override auth callback server port (useful when default ports are occupied).
+- **Inspector runtime dependency safety**:
+  - Added explicit `express-rate-limit` dev dependency to avoid missing transitive package issues during `dev:http` inspector startup.
+
+### Documentation
+- Updated auth and CLI docs for `--mcp` behavior and browser auth callback port override:
+  - `README.md`
+  - `docs/user-guide/AUTHENTICATION.md`
+  - CLI help text via `ServerConfigManager`.
+
+## [2.5.1] - 2026-02-21
+### Changed
+- **Compact handler descriptions**:
+  - Reworked compact handler descriptions to be explicit and deterministic for tool routing.
+  - Added per-`object_type` required parameter mapping directly in handler descriptions (`TYPE(param*)` format).
+  - Clarified read vs validate intent to avoid `HandlerGet` / `HandlerValidate` confusion.
+- **Compact schemas metadata**:
+  - Added missing parameter descriptions in compact schemas to remove `No description` in generated tool docs.
+
+### Documentation
+- Regenerated tools documentation:
+  - `docs/user-guide/AVAILABLE_TOOLS.md`
+  - `docs/user-guide/AVAILABLE_TOOLS_HIGH.md`
+  - `docs/user-guide/AVAILABLE_TOOLS_COMPACT.md`
+
+## [2.5.0] - 2026-02-21
+### Added
+- **Compact facade CRUD routing**:
+  - Added compact facade CRUD operations routed by `object_type`.
+  - Added compact router/matrix coverage for supported object/action combinations.
+- **Compact lifecycle and test handlers**:
+  - Added compact handlers for validation, unlock, and unit test workflows.
+
+### Changed
+- **Compact routing architecture**:
+  - Removed legacy `HandlerAction` path and standardized on dedicated compact handlers.
+
+## [2.4.2] - 2026-02-20
+### Added
+- **Service Binding high-level tools**:
+  - Added `CreateServiceBinding`, `GetServiceBinding`, `UpdateServiceBinding`, `DeleteServiceBinding`, `ListServiceBindingTypes`, `ValidateServiceBinding`.
+  - Added `serviceBindingPayloadUtils` for response parsing/format normalization.
+- **Runtime profiling tools**:
+  - Added `RuntimeAnalyzeProfilerTrace`, `RuntimeRunClassWithProfiling`, `RuntimeRunProgramWithProfiling`.
+
+### Changed
+- **System read-only handlers**:
+  - Migrated `GetAllTypes`, `GetObjectStructure`, and `GetSqlQuery` to `AdtClient` flow.
+- **Lint/type hygiene**:
+  - Removed explicit `any` usage in new service binding/runtime handlers and high-level handler registrations.
+
+## [2.4.1] - 2026-02-17
+### Fixed
+- **Dev HTTP/SSE launch scripts**:
+  - Fixed dist entry path to `dist/server/launcher.js` in `tools/dev-http-v2.js` and `tools/dev-sse-v2.js`.
+  - Fixed `dev:http` transport argument to `--transport=http`.
+- **HTTP/SSE server startup reliability**:
+  - Updated standalone server startup flow to listen on `listening`/`error` events, preventing false "started" logs followed by silent exits.
+  - Kept strong server references in launcher to avoid premature process shutdown.
+
+### Changed
+- **Runtime profiling + dumps explorer**:
+  - Refocused tool workflow to class-based profiling run flow.
+  - Improved ABAP user resolution/validation and diagnostics for dumps/traces filtering.
+  - Improved object validation/update flow and trace feed handling in interactive tool.
+- **Tools documentation**:
+  - Updated `tools/README.md` to reflect class-focused profiling flow and ABAP user resolution behavior.
+
+## [2.4.0] - 2026-02-15
+### Added
+- **Runtime diagnostics tools**:
+  - Added runtime profiling tools: `RuntimeCreateProfilerTraceParameters`, `RuntimeListProfilerTraceFiles`, `RuntimeGetProfilerTraceData`.
+  - Added runtime dump tools: `RuntimeListDumps`, `RuntimeGetDumpById`.
+- **Architecture documentation**:
+  - Added comprehensive architecture document: `docs/architecture/ARCHITECTURE.md`.
+
+### Changed
+- **Runtime payload format**:
+  - Runtime profiling and dump handlers now return parsed JSON payloads (instead of raw XML strings in `payload`).
+  - Runtime dump read uses `dump_id` input (`RuntimeGetDumpById`) instead of URI-based input.
+- **Dependencies**:
+  - Updated `@mcp-abap-adt/adt-clients` to `^0.3.16`.
+
+### Documentation
+- Regenerated tools docs (`docs/user-guide/AVAILABLE_TOOLS*.md`) with runtime diagnostics tools.
+- Updated `README.md` feature list with runtime diagnostics capabilities.
+
+## [2.3.1] - 2026-02-13
+### Fixed
+- **YAML config flag compatibility**:
+  - Added `--conf` support as an alias for `--config` in argument parsing.
+  - Fixed YAML template flow: when config file is missing, template generation now exits cleanly instead of continuing into inspection-only mode.
+- **YAML env config clarity**:
+  - Added `env-path` YAML option to map directly to `--env-path`.
+  - Clarified `env` as destination name and removed duplicate `allowed-origins` entry in template.
+- **HTTP/SSE connection context resolution**:
+  - Enforced priority: `x-mcp-destination` header -> server default destination (`--mcp` / `--env-path`) -> `400` error.
+  - HTTP default-destination broker initialization now uses the resolved destination key.
+
+## [2.3.0] - 2026-02-13
+### Changed
+- **.env parsing policy**:
+  - Inline comments are no longer parsed from values.
+  - `#` is treated as a comment only when it starts the line.
+  - This avoids accidental truncation of secrets containing `#` (for example passwords/tokens).
+- **Update tool error handling**:
+  - Added unified ADT/SAP error extraction for update handlers to improve `409` conflict diagnostics.
+  - XML exception payloads (`exc:exception`) are now surfaced as detailed user-facing errors in previously generic update flows.
+- **GetTypeInfo structure fallback**:
+  - Added optional structure lookup fallback (`include_structure_fallback`, default: `true`).
+  - Fallback is executed only when type lookups return `404` or empty result.
+  - Non-`404` errors no longer silently fall through to unrelated lookups.
+
+### Documentation
+- Updated `.env` comments guidance in:
+  - `README.md`
+  - `docs/user-guide/AUTHENTICATION.md`
+
+## [2.2.7] - 2026-02-12
+### Fixed
+- **CI (Biome)**: Applied formatting fixes required by `npx biome check src --diagnostic-level=error`.
+  - `src/handlers/function_module/high/handleGetFunctionModule.ts`
+  - `src/lib/config/envResolver.ts`
+
+## [2.2.6] - 2026-02-12
+### Changed
+- **Function Module handlers**: Fixed parameter propagation for function module operations:
+  - `GetFunctionModule` and `DeleteFunctionModule` now require and pass `function_group_name`.
+  - `GetFunction` (read-only) now requires and passes `function_group`.
+  - `UpdateFunctionModule` (high/low) now forwards `transport_request` to ADT update calls.
+- **CLI env resolution**: Updated env argument behavior:
+  - `--env=<name>` now resolves to platform sessions path: `{sessions}/<name>.env`.
+  - Added `--env-path=<path|file>` for explicit `.env` file usage.
+  - `MCP_ENV_PATH` now maps to explicit env file path behavior (same as `--env-path`).
+- **Errors**: Improved function module update error messages for transport-related `400` responses and XML SAP errors.
+
+## [2.2.5] - 2026-02-11
+### Changed
+- **Tools docs generator**: Reworked `tools/generate-tools-docs.js` to scan only handler code in `src/handlers/**`.
+- **Tools docs structure**: Updated `docs/user-guide/AVAILABLE_TOOLS.md` hierarchy to `Group (level) → Object (folder) → Tools`.
+- **Coverage fix**: Ensured BDEF and other handler folders are included consistently in generated tools documentation.
+
+## [2.2.4] - 2026-02-11
+### Changed
+- **Discoverability metadata**: Updated npm keywords and package metadata to improve MCP search relevance for ABAP, ABAP Cloud, JWT/XSUAA, and service-key flows.
+- **Registry description**: Shortened `server.json` description to meet the MCP publisher 100-character constraint.
+- **README positioning**: Clarified first-screen value proposition around full CRUD, On-Premise + ABAP Cloud support, and auth options.
+
+## [2.2.3] - 2026-02-10
+### Added
+- **Docs**: Added dedicated Terminology and Authentication guides, with links from README.
+
+### Changed
+- **README**: Reworked first-screen content and links to emphasize configurator usage and destinations.
+- **Docs structure**: Moved GitHub configuration README into deployment docs and fixed internal links.
+- **Client configuration docs**: Linked to the configurator repo and usage guide.
+
+## [2.2.2] - 2026-02-10
+### Added
+- **Client support**: Added OpenCode and Copilot configuration support.
+- **Claude config**: Added `.mcp.json` project configuration and docs.
+- **Configurator options**: Added URL, headers, and timeout options in `mcp-abap-adt-configure`.
+
+### Changed
+- **Configurator split**: Removed `mcp-abap-adt-configure` from core. Use `@mcp-abap-adt/configurator` (repo: `mcp-abap-adt-conf`) with `mcp-conf` instead.
+- **Codex/Goose handling**: Improved transport handling and timeout defaults for non-stdio transports.
+- **Default-disabled entries**: Updated JSON config handling and docs to keep new entries disabled by default.
+- **Streamable HTTP**: Refactored server handling for per-request connections.
+
+### Fixed
+- **Goose config**: Corrected enabled state handling in `writeGooseConfig`.
+
+## [2.2.0] - 2026-02-09
+### Added
+- **MCP Registry metadata**: Added `server.json` and `mcpName` for registry publishing.
+- **Client configurator**: Added `mcp-abap-adt-configure` to add/enable/disable/remove MCP entries across clients.
+- **Auto-config docs**: Added `docs/installation/CLIENT_INSTALLERS.md` with usage and common tasks.
+
+### Changed
+- **Default logger loading**: Lazy-load logger to avoid bundler issues with optional transports.
+- **Claude config**: Write MCP settings under `projects.<full_path>.mcpServers` for Claude CLI on Linux.
+- **Config defaults**: New entries for Cline/Codex/Windsurf/Goose are disabled by default; enable explicitly.
+
+## [2.1.7] - 2026-01-29
+### Fixed
+- **UpdateLocalTestClass**: Added detailed SAP error information for 409 conflict errors to improve troubleshooting (#6)
+
+## [2.1.6] - 2026-01-29
+### Fixed
+- **GetIncludesList, GetObjectsList, GetObjectsByType, GetEnhancements, GetObjectInfo**: Migrate from deprecated `fetchNodeStructure` stub to `AdtClient.getUtils().fetchNodeStructure()` - fixes "not implemented" errors
+
+### Changed
+- **LowTester logging**: Unified to compact format with emojis, matching LambdaTester output style
+
+## [2.1.5] - 2026-01-28
+### Added
+- **Startup diagnostics**: Display SAP connection configuration at server startup when using `--env` parameter
+  - Shows source file, SAP URL, client, auth type, and UAA URL
+  - Tokens and secrets are safely masked (first/last 4 chars for long values, full mask for short)
+  - Helps diagnose auth issues by showing which config is actually used
+
+## [2.1.4] - 2026-01-21
+### Fixed
+- **CreateLocalTestClass**: Return full SAP error details on failure (including the original response payload).
+
+## [2.1.3] - 2026-01-02
+### Changed
+- **Documentation**: Restored the stateful ADT flow guide without file-based session persistence references.
+- **Available tools**: Regenerated `docs/user-guide/AVAILABLE_TOOLS.md` and restored links across docs.
+
+### Removed
+- **Lock/session persistence**: Removed filesystem lock registry and session persistence helpers/config from core and tests.
+- **CLI commands**: `adt-lock-object`, `adt-unlock-object`, `adt-manage-locks`, `adt-manage-sessions`, and `adt-unlock-objects` removed from package bins.
+- **User guides**: Removed usage/scenario docs tied to legacy session flows.
+
+## [2.1.2] - 2026-01-02
+### Changed
+- **Lock registry types**: `LockState.objectType` now uses `AdtObjectType` with normalization for legacy entries.
+- **adt-lock-object**: No longer registers lock handles in `.locks/active-locks.json`; session save only.
+
+### Removed
+- **CLI commands**: `adt-unlock-object`, `adt-manage-locks`, `adt-manage-sessions`, and `adt-unlock-objects` removed from package bins.
+
+## [2.1.1] - 2025-12-31
+### Changed
+- **@mcp-abap-adt/auth-broker**: bumped to `^0.3.0` - auto-detect service key format, credentials wrapper support, debug logging
+- **@mcp-abap-adt/auth-stores**: bumped to `^0.3.0`
+
+## [2.1.0] - 2025-12-31
+### Fixed
+- Updated `@mcp-abap-adt/auth-broker` so installs now pull `0.2.17` instead of the stale `0.2.14` release that was hiding upstream fixes.
+- Removed the accidental `@mcp-abap-adt/core` dependency that caused consumers to download the old `1.4.1` tarball.
+
+## [2.0.3] - 2025-12-31
+### Changed
+- **@mcp-abap-adt/auth-broker**: bumped to `0.2.15` so the locked dependency pulls in the latest fixes referenced by the release.
+
+### Fixed
+- **CI workflow package install**: `.github/workflows/ci.yml` now looks for `mcp-abap-adt-core-*.tgz`, matching the actual npm pack output before testing global install.
+
+## [2.0.2] - 2025-12-30
+### Changed
+- **GetWhereUsed handler**: Now uses `getWhereUsedList()` from adt-clients and returns parsed JSON with structured references instead of raw XML
+
+### Fixed
+- **Release workflow**: Simplified to use npm registry instead of uploading tgz artifacts
+
+## [2.0.1] - 2025-12-30
+### Documentation
+- Added glama.ai badge with security/license/quality grades
+- Updated README example to use `EmbeddableMcpServer` instead of deprecated `HandlerExporter.registerOnServer()`
+
+## [2.0.0] - 2025-12-30
+### Added
+- **EmbeddableMcpServer**: New server class for external integration (e.g., cloud-llm-hub)
+  - Accepts injected `AbapConnection` from consumer
+  - Extends `BaseMcpServer` with proper handler registration
+  - Configurable exposition levels: `readonly`, `high`, `low`, `system`, `search`
+  - Export via `@mcp-abap-adt/core/server`
+
+### Changed
+- **HandlerExporter**: Now serves only as registry factory
+  - Use `createRegistry()` to get `IHandlersRegistry` for custom scenarios
+  - `getHandlerEntries()` and `getToolNames()` still available for inspection
+
+### Removed
+- **BREAKING**: `HandlerExporter.registerOnServer()` method removed
+  - Had bug with handler signature (passed context twice)
+  - Replace with `EmbeddableMcpServer` for cleaner architecture
+
+### Migration Guide
+```typescript
+// Before (v1.x - broken)
+import { HandlerExporter } from '@mcp-abap-adt/core/handlers';
+const exporter = new HandlerExporter({ includeReadOnly: true, includeHighLevel: true });
+const mcpServer = new McpServer({ name: 'mcp-abap-adt', version: '1.0.0' });
+exporter.registerOnServer(mcpServer, () => connection, logger);
+
+// After (v2.x)
+import { EmbeddableMcpServer } from '@mcp-abap-adt/core/server';
+const server = new EmbeddableMcpServer({
+  connection,
+  logger,
+  exposition: ['readonly', 'high'],
+});
+await server.connect(transport);
+```
+
+## [1.4.3] - 2025-12-29
+### Documentation
+- **CLI Help**: Extended `--help` output with comprehensive environment variables documentation
+  - Added MCP Server Configuration section (`MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_SSE_HOST`, `MCP_SSE_PORT`, `MCP_ENV_PATH`, `MCP_UNSAFE`, `MCP_USE_AUTH_BROKER`, `MCP_BROWSER`)
+  - Added Debug Options section (`DEBUG_HANDLERS`, `DEBUG_CONNECTORS`, `DEBUG_CONNECTION_MANAGER`, `HANDLER_LOG_SILENT`)
+  - Extended SAP Connection section with JWT/OAuth2 variables (`SAP_REFRESH_TOKEN`, `SAP_UAA_URL`, `SAP_UAA_CLIENT_ID`, `SAP_UAA_CLIENT_SECRET`, `SAP_LANGUAGE`)
+- **CLI_OPTIONS.md**: Added missing environment variables documentation
+  - Added `MCP_UNSAFE`, `MCP_USE_AUTH_BROKER`, `MCP_BROWSER` to General section
+  - Added JWT/OAuth2 authentication variables to SAP Connection section
+  - New Auth-Broker section with `AUTH_BROKER_PATH` and debug variables
+  - New Debug section with handler and connector logging options
+- **INSTALLATION.md**: Expanded Environment Variables section with full reference and link to CLI_OPTIONS.md
+
+## [1.4.2] - 2025-12-29
+### Fixed
+- **Version path**: Fixed incorrect path to package.json in `--version` command
+
+## [1.4.1] - 2025-12-29
+### Changed
+- **Package renamed**: Changed from `@fr0ster/mcp-abap-adt` to `@mcp-abap-adt/core` for npm publishing
+- **Package now public**: Removed `private: true` flag to allow npm publishing
+
+### Added
+- **Inspection-only mode**: Server can now start in stdio mode without connection parameters for tool inspection (used by glama.ai)
+- **MockAbapConnection**: Added mock connection class for inspection-only mode that returns descriptive error when tools are executed
+- **Docker inspection support**: Added `Dockerfile.inspect` and `docker-compose.inspect.yml` for local testing of inspection mode
+- **CLAUDE.md**: Added project documentation for Claude Code assistance
+
+## [1.3.0] - 2025-12-29
+### Added
+- **glama.json**: Added configuration for compatibility with the Glama platform.
+- **Node.js Debugging**: Added `--inspect` support to Docker container and exposed port 9229.
+- **MCP_TRANSPORT Environment Variable**: Added support for selecting transport mode via environment variable.
+
+### Changed
+- **@mcp-abap-adt/adt-clients Updated**: Upgraded to version 0.3.13, bringing fixes for recursion and 406 Accept errors.
+- **GetPackageTree Optimized**: Simplified implementation by using the library's `getPackageHierarchy` method, ensuring correct recursive traversal of subpackages.
+- **GetPackageContents Enhanced**: Added support for `include_subpackages`, `max_depth`, and `include_descriptions` parameters.
+- **Docker Defaults**: Changed default transport to `stdio` in Docker and updated healthcheck logic.
+
+## [1.2.9] - 2025-12-29
+### Changed
+- **v1 McpHandlers Refactoring**: Rewrote `McpHandlers` to use `HandlerExporter` internally. This ensures the legacy embeddable server (v1) stays in sync with all tools available in v2 while reducing code duplication.
+- **Shared Schema Utilities**: Replaced duplicated `jsonSchemaToZod` logic in `v1` with a central implementation from `src/lib/handlers/utils/schemaUtils.ts`.
+- **Documentation Generator**: Updated `tools/generate-tools-docs.js` category mapping to support the standardized `GetBehaviorDefinition` naming.
+
+### Removed
+- **GetBdef compatibility adapter**: Removed the manual adapter for `GetBdef` in v1 server. All tools now use standard names (e.g., `GetBehaviorDefinition`).
+
+### Added
+- **tsx** added to `devDependencies` for improved TypeScript execution and testing.
+
+## [1.2.8] - 2025-12-29
+### Added
+- **GetPackageContents** tool: New read-only tool to retrieve objects inside an ABAP package (moved from legacy `GetPackage`).
+
+### Changed
+- **GetPackage** tool: Migrated to high-level API (`AdtClient.getPackage().read()`). Now returns package metadata and supports `version` parameter (`active`/`inactive`).
+- **GetFunction** tool: Updated to support `version` parameter and migrated to new `adt-clients` signature.
+- **High-level handlers**: Improved parameter handling and consistency with new `adt-clients` versioning requirements.
+- Test cleanup documentation updated to clarify `afterEach` behavior and multi-object cleanup requirements.
+- Test runners (`LowTester`/`HighTester`) now emit step-level flow logs for validate/create/lock/update/unlock/activate.
+- Package cleanup can use a fresh connection with optional `connection_config` for locked session cases.
+
+### Fixed
+- Package create now treats ADT "import" 404 as success when the package is readable.
+- Function group/module low-level create handles transient 400/empty responses with read verification.
+- Table create now validates and creates with explicit descriptions to satisfy ADT requirements.
+- Package low-level tests avoid double-unlock during cleanup.
+
+## [1.2.7] - 2025-12-27
+### Changed
+- GetPackageTree now builds the tree from node-structure traversal to preserve package/subpackage hierarchy and ordering.
+- Package tree nodes now include `adtType`, normalized `type`, `codeFormat`, and `restoreStatus` for parity with backup tooling.
+- Migrated handler usage to `AdtClient` now that `CrudClient`/`ReadOnlyClient` are removed in `@mcp-abap-adt/adt-clients`.
+
+### Fixed
+- Updated handler typings to match `@mcp-abap-adt/adt-clients@0.3.2` (I* config/state interfaces).
+- SearchObject now uses `AdtUtils.searchObjects` instead of the removed `SharedBuilder` export.
+- Restored `encodeSapObjectName` helper in `utils` to avoid relying on unstable client exports.
+
+## [1.2.6] - 2025-12-23
+### Fixed
+- Fixed LICENSE file - corrected copyright attribution (removed incorrect fork author)
+- Fixed TypeScript compilation errors in test files:
+  - Updated `handlers.test.ts` to use high-level handlers instead of removed readonly handlers
+  - Removed non-existent `getAuthHeaders` import from `utils.test.ts`
+  - Fixed `sessionHelpers.ts` - added type assertions for connection methods not in `IAbapConnection` interface (`getConfig`, `connect`)
+  - Fixed `ClassCrudClientDirect.test.ts` - added type assertions for `connect()` and `reset()` methods
+  - Fixed `BehaviorImplementationLowHandlers.test.ts` - removed invalid `session_id` and `session_state` parameters from `UnlockClassArgs`
+
+## [1.2.5] - 2025-12-23
+### Removed
+- **Removed duplicate readonly handlers that duplicate high-level CRUD operations**
+  - Deleted `handleGetClass.ts` (replaced by high-level `GetClass`)
+  - Deleted `handleGetDomain.ts` (replaced by high-level `GetDomain`)
+  - Deleted `handleGetDataElement.ts` (replaced by high-level `GetDataElement`)
+  - Deleted `handleGetTable.ts` (replaced by high-level `GetTable`)
+  - Deleted `handleGetStructure.ts` (replaced by high-level `GetStructure`)
+  - Deleted `handleGetView.ts` (replaced by high-level `GetView`)
+  - Deleted `handleGetServiceDefinition.ts` (replaced by high-level `GetServiceDefinition`)
+  - Deleted `handleGetProgram.ts` (replaced by high-level `GetProgram`)
+  - Deleted `handleGetInterface.ts` (replaced by high-level `GetInterface`)
+  - Deleted `handleGetFunctionGroup.ts` (replaced by high-level `GetFunctionGroup`)
+  - Deleted `handleGetBdef.ts` (replaced by high-level `GetBehaviorDefinition`)
+
+### Changed
+- **v1 server now uses high-level handlers instead of readonly duplicates**
+  - `GetClass`, `GetDomain`, `GetDataElement`, `GetTable`, `GetStructure`, `GetView`, `GetServiceDefinition`, `GetProgram`, `GetInterface`, `GetFunctionGroup` now use high-level handlers internally
+  - `GetBdef` now uses `GetBehaviorDefinition` high-level handler with parameter adapter for backward compatibility
+  - All high-level handlers support `version` parameter (active/inactive) for better flexibility
+
+### Fixed
+- Fixed TypeScript type errors in `handleGetAbapSystemSymbols.ts`
+  - Added proper JSON parsing for `GetClass` and `GetInterface` responses
+  - Fixed type assertions for class and interface data
+- Fixed TypeScript type error in `utils.ts`
+  - Added type assertion for `makeAdtRequest` return type
+- Fixed documentation generator (`tools/generate-tools-docs.js`)
+  - Updated regex pattern to support multi-line imports in handler groups
+  - Now correctly detects all handlers including system and search handlers
+  - Documentation now includes all 219 tools (76 high-level, 116 low-level, 27 read-only)
+
+## [1.2.4] - 2025-12-22
+### Changed
+- **Migrated from ESLint+Prettier to Biome**
+  - Removed ESLint and Prettier dependencies
+  - Added @biomejs/biome for faster linting and formatting
+  - Configured Biome with strict rules for production code
+  - Relaxed rules for test files (noImplicitAnyLet, noExplicitAny)
+  - Updated package.json scripts: `lint`, `lint:check`, `format`
+  - Updated `npm run build` to include Biome check before TypeScript compilation
+
+### Fixed
+- Fixed TypeScript errors in production code:
+  - `handleGetAbapAST.ts` - Fixed regex match types and while loop patterns in 4 methods
+  - `handleGetObjectInfo.ts` - Added type annotation for `packageName`
+  - `handleDescribeByList.ts` - Added type annotation for `parsed`
+  - `handleValidateDataElement.ts` - Added type assertion for `AxiosResponse`
+  - `handleCreateClass.ts` - Added `ClassBuilderState` type import
+  - `handleDeleteObject.ts` - Changed `any` to `unknown` for response
+  - `handleGetEnhancementSpot.ts` - Fixed array types and while loops
+  - `handleGetProgFullCode.ts` - Fixed 3 while loops with regex.exec() pattern
+- All production code now passes strict Biome rules (no implicit any, no assignments in expressions)
+
+### Added
+- Added Biome check to CI workflow (`.github/workflows/ci.yml`)
+- Added Biome check to Release workflow (`.github/workflows/release.yml`)
+
+### Dependencies
+- Updated `@mcp-abap-adt/adt-clients` to ^0.2.6
+- Updated `@mcp-abap-adt/adt-interfaces` to ^0.2.6
+- Added `@biomejs/biome` ^2.3.10 as devDependency
+- Removed `eslint` and `prettier` dependencies
+
+## [1.2.3] - 2025-12-22
+### Fixed
+- Removed unused import of `IAbapConnectionExtended` from `@mcp-abap-adt/interfaces`
+  - Interface was removed in interfaces package v1.1.0
+
+## [1.2.2] - 2025-12-22
+### Changed
+- **BREAKING: Removed legacy-server.ts**
+  - Full removal of 3000+ line legacy server with CLI, AuthBroker, .env parsing, etc.
+  - v1 module now exports only lightweight `EmbeddableMcpServer` class
+
+### Added
+- **EmbeddableMcpServer** - lightweight MCP server for embedding
+  - Minimal class (~100 lines) for external HTTP server integration
+  - Constructor takes `context: HandlerContext` with connection and logger
+  - Handlers registered immediately in constructor - no `run()` method needed
+  - Access underlying `McpServer` via `.mcpServer` getter
+  - Configurable `exposition` levels: `readonly`, `high`, `low`, `system`
+  
+### Removed
+- `mcp_abap_adt_server` class (was 3000+ lines with CLI, transports, AuthBroker)
+- `setAbapConnectionOverride()` function
+- `ServerOptions` interface
+- All CLI argument parsing
+- All transport management (stdio, SSE, streamable-http)
+- AuthBroker integration
+- .env file loading logic
+
+### Migration Guide
+**For embedding in external servers (cloud-llm-hub, etc.):**
+```typescript
+// Before (1.2.x)
+import { mcp_abap_adt_server } from '@fr0ster/mcp-abap-adt/server/v1';
+const server = new mcp_abap_adt_server({ connection, allowProcessExit: false });
+server.registerHandlers({ connection, logger });
+
+// After (1.2.2)
+import { EmbeddableMcpServer } from '@fr0ster/mcp-abap-adt/server/v1';
+const server = new EmbeddableMcpServer({
+  context: { connection, logger },
+  exposition: ['readonly', 'high']
+});
+const mcpServer = server.mcpServer; // Use with transport
+```
+
+## [1.2.1] - 2025-12-22
+### Added
+- **Subpath export `./utils`** for internal utilities access
+  - `@fr0ster/mcp-abap-adt/utils` - exports `sessionContext`, `getManagedConnection`, and other utilities
+  - Required for cloud-llm-hub integration to access session context
+
+## [1.2.0] - 2025-12-21
+### Changed
+- **BREAKING: v2 is now the default server**
+  - `mcp-abap-adt` command now runs v2 server (was v1)
+  - v1 server moved to `legacy-server.ts`, accessible via `npm run start:legacy`
+  - Removed separate `mcp-abap-adt-v2` binary
+
+- **v1 becomes Handler Exporter**
+  - v1/index.ts now exports `HandlerExporter` class for external server integration
+  - Allows registering ABAP ADT handlers on any McpServer instance
+  - Designed for embedding into existing Express/CDS/CAP servers (e.g., cloud-llm-hub)
+
+### Added
+- **Subpath exports** for modular imports
+  - `@fr0ster/mcp-abap-adt` - main package (unchanged)
+  - `@fr0ster/mcp-abap-adt/handlers` - HandlerExporter and handler groups
+  - `@fr0ster/mcp-abap-adt/server/v1` - v1 module (exporter + legacy server)
+  - v2 server is internal, not exported as subpath
+
+- **HandlerExporter class** for programmatic handler registration
+  - `new HandlerExporter(options?)` - create exporter with configurable handler groups
+  - `registerOnServer(mcpServer, connectionProvider)` - register handlers with connection injection
+  - `getHandlerEntries()` - get raw handler entries for custom registration
+  - `getToolNames()` - list all available tool names
+  - `createRegistry()` - create IHandlersRegistry for v2 servers
+
+- **Handler Groups** - modular handler organization
+  - `ReadOnlyHandlersGroup` - read-only handlers (getProgram, getClass, etc.)
+  - `HighLevelHandlersGroup` - high-level operations
+  - `LowLevelHandlersGroup` - low-level operations
+  - `SystemHandlersGroup` - system handlers
+  - `SearchHandlersGroup` - search handlers
+
+### Migration Guide
+**For CLI users:**
+- No changes needed - `mcp-abap-adt` command works the same
+- To use legacy v1 server: `npm run start:legacy`
+
+**For library users (cloud-llm-hub, etc.):**
+```typescript
+// Old way (v1 server class) - still works via legacy import
+import { mcp_abap_adt_server } from '@fr0ster/mcp-abap-adt';
+
+// New way (handler exporter) - recommended
+import { HandlerExporter } from '@fr0ster/mcp-abap-adt/handlers';
+
+const exporter = new HandlerExporter();
+exporter.registerOnServer(mcpServer, () => getConnection());
+```
+
+**For CAP/CDS projects with file: dependency:**
+Add path mapping to tsconfig.json:
+```json
+{
+  "paths": {
+    "@fr0ster/mcp-abap-adt/handlers": ["./submodules/mcp-abap-adt/dist/lib/handlers/index"]
+  }
+}
+```
+
+## [1.1.32] - 2025-12-21
+### Added
+- **v2 HTTP Server Injection**: Added support for external HTTP application injection in v2 servers
+  - New `IHttpApplication` interface for Express-like HTTP applications
+  - `StreamableHttpServer` and `SseServer` now support `app` option in constructor
+  - New `registerRoutes(app, options?)` method for embedding into existing Express/CDS/CAP servers
+  - Enables integration with cloud-llm-hub and other CAP-based applications
+  - Helper methods: `getPath()`, `getSsePath()`, `getPostPath()`
+
+## [1.1.31] - 2025-12-21
+### Fixed
+- **CLI `--version` flag**: Fixed package.json path resolution for both v1 and v2 servers
+  - Path now correctly resolves from `dist/server/v1/` and `dist/server/v2/` to root `package.json`
+
+## [1.1.30] - 2025-12-21
+### Added
+- **MCP Server v2 Architecture**:
+  - New modular server architecture with `BaseMcpServer`, `StdioServer`, `StreamableHttpServer`
+  - Handler registration system with Dependency Injection pattern
+  - `HandlerContext` for unified connection and logging access in handlers
+  - `ServerConfigManager` for centralized configuration management
+  - `AuthBrokerConfig` for V2 server configuration
+  - `StdioLogger` for minimal logging in stdio transport
+  - Transport-specific server implementations (stdio, SSE, HTTP)
+
+- **Headless Browser Mode**: Added `--browser` CLI parameter for SSH and remote sessions
+  - `--browser=headless`: Logs authentication URL and waits for manual callback
+  - `--browser=none`: Logs URL and rejects immediately (for automated tests)
+  - `--browser=system`: Opens system default browser (default)
+  - `--browser=chrome|edge|firefox`: Opens specific browser
+  - Environment variable: `MCP_BROWSER`
+  - Ideal for SSH sessions, Docker containers, and CI/CD environments
+
+- **YAML Configuration Support**:
+  - Load server configuration from YAML files
+  - Enhanced command-line transport handling
+  - Improved configuration validation
+
+- **Structured Logging**:
+  - Handler logging with configurable options and integration
+  - Structured logging for handler functions
+  - Logger cleanup and enhanced handler implementations
+
+- **Testing Improvements**:
+  - Jest configuration and enhanced testing framework
+  - Unified test refactoring roadmap with base tester classes
+  - Integration tests for low-level view handlers
+  - Read-only handler tests for WhereUsed analysis
+  - `AuthBrokerFactory` for test configuration
+
+- **Infrastructure & Handlers**:
+  - Added `tabletypes` to integrated terminal profiles
+  - Handler migration to infrastructure module
+  - Basic auth support in MCP destination handling
+
+### Changed
+- **Token Refresh Architecture (Breaking)**:
+  - Removed legacy `createDestinationAwareConnection()` wrapper (~150 lines)
+  - Token refresh now handled internally by `JwtAbapConnection` via DI `ITokenRefresher`
+  - `getConnectionForSession()` creates `tokenRefresher` from `AuthBroker` and passes to `createAbapConnection()`
+  - Removed all `reset()` calls from 23+ handler files (no longer needed)
+  - Removed unused `disposeConnection()` and `getAuthHeaders()` functions
+  - Simplified `HandlerContext` to use `IAbapConnection` instead of deprecated `IAbapConnectionExtended`
+
+- **Handler Refactoring**:
+  - All handlers updated to utilize `HandlerContext` for connection and logging
+  - Standardized import statements across handlers
+  - Enhanced error handling and logging across all handlers
+  - Replaced direct connection creation with managed connection
+
+- **Configuration Module**:
+  - Extracted configuration logic into dedicated module
+  - Improved YAML configuration loading and command line parsing
+  - Enhanced connection handling and configuration validation
+
+### Fixed
+- Network error handling in `createDestinationAwareConnection`
+- Handler results properly awaited and errors handled in `BaseMcpServer`
+- Basic auth support in MCP destination handling
+### Removed
+- Legacy test files and deprecated test scripts (85 files)
+- Obsolete v2 components from earlier iterations
+- Deprecated tools: `update-crudclient-api.js`, `update-handlers-with-tool-definitions.js`, etc.
+
+### Documentation
+- Comprehensive documentation for various components and usage scenarios
+- MCP Server architecture and implementation roadmap
+- Handler refactoring roadmap
+- YAML configuration support documentation
+- Issue roadmap system for structured issue tracking
+- Updated development guidelines
+
+### Dependencies
+- `@mcp-abap-adt/interfaces`: `^0.2.3` → `^0.2.6`
+  - Removed deprecated `IAbapConnectionExtended` interface
+  - Added `ITokenRefresher` interface for DI
+- `@mcp-abap-adt/connection`: `^0.2.3` → `^0.2.5`
+  - `createAbapConnection()` now accepts 4th parameter `tokenRefresher`
+  - `JwtAbapConnection` handles token refresh internally
+- `@mcp-abap-adt/auth-providers`: `^0.2.1` → `^0.2.3` (headless mode, cross-platform fixes)
+- `@mcp-abap-adt/auth-broker`: `^0.2.4` → `^0.2.9`
+  - Added `createTokenRefresher()` factory method
+  - Headless mode passthrough
+- `@mcp-abap-adt/auth-stores`: `^0.2.5` → `^0.2.8` (EnvFileSessionStore with JWT persistence)
+- `@mcp-abap-adt/clients`: `^0.2.4` → `^0.2.5`
+
+## [1.1.29] - 2025-12-08
+
+### Added
+- **Parameter Passing Unit Tests Roadmap**: Added comprehensive roadmap for unit tests to verify parameter passing
+  - Created `doc/roadmaps/parameter_passing_unit_tests_roadmap.md`
+  - Detailed test strategy for verifying all parameters pass correctly from MCP handlers through CrudClient to Builder classes and finally to low-level functions
+  - Test implementation plan with 4 phases covering infrastructure, individual object types, and integration tests
+  - Test examples for ViewBuilder, CrudClient, and low-level functions
+  - Coverage goals (100% for parameter passing) and success criteria
+  - Addresses issue where parameters like `transportRequest` can be lost during the call chain
+
+### Documentation
+- **Roadmap Documentation**: Added roadmap for future unit test development
+  - Comprehensive plan for preventing parameter loss regression
+  - Test file structure and organization guidelines
+  - Maintenance and CI/CD integration recommendations
+
+## [1.1.28] - 2025-01-XX
+
+### Changed
+- **Header Constants Migration**: Replaced all hardcoded header strings with constants from `@mcp-abap-adt/interfaces`
+  - All header references now use constants (e.g., `HEADER_SAP_URL`, `HEADER_SAP_AUTH_TYPE`, `HEADER_MCP_DESTINATION`, etc.)
+  - Improved type safety and consistency across packages
+  - Updated error messages and hints to use header constants
+- **Updated dependencies**:
+  - `@mcp-abap-adt/header-validator`: `^0.1.6` → `^0.1.7`
+    - Added comprehensive header sets documentation
+    - Enhanced validation for Basic Auth and UAA refresh token sets
+    - All header references migrated to constants from `@mcp-abap-adt/interfaces`
+  - `@mcp-abap-adt/interfaces`: `^0.1.1` → `^0.1.2`
+    - Added HTTP header constants for all headers used across packages
+    - Added header groups and authentication type constants
+
+### Technical
+- **Code Quality**: Improved maintainability by centralizing header name definitions
+- **Type Safety**: Better compile-time checking for header names
+
+## [1.1.27] - 2025-12-07
+
+### Changed
+- **Updated dependencies**:
+  - `@mcp-abap-adt/auth-broker`: `^0.1.9` → `^0.1.10`
+    - Added constructor validation for stores and tokenProvider parameters
+    - Ensures required dependencies are present upon AuthBroker instantiation
+
+## [1.1.26] - 2025-12-06
+
+### Added
+- **Comprehensive usage documentation** – Added complete MCP function call documentation:
+  - Created `doc/user-guide/usage/` directory with structured documentation
+  - **Simple Objects** (22 files): High-level and low-level handlers for 11 object types:
+    - Classes, Interfaces, Programs, Function Groups, Function Modules
+    - Tables, Structures, CDS Views, Domains, Data Elements, Service Definitions
+    - Each object has separate `-high.md` and `-low.md` files with exact MCP call examples
+  - **RAP Business Objects** documentation:
+    - Complete workflow for creating RAP BO with all components
+    - Deferred group activation guide
+    - Step-by-step examples with exact MCP function calls
+  - All documentation uses compact, laconic format with only exact MCP calls and parameters
+  - No unnecessary descriptions, maximum clarity
+- **Test syntax checking** – Added `npm run test:check` command:
+  - Performs TypeScript syntax check on test files without running tests
+  - Uses `tsc --noEmit -p tsconfig.test.json`
+  - Helps catch type errors before running tests
+
+### Changed
+- **Updated dependencies to latest versions**:
+  - `@mcp-abap-adt/adt-clients`: `^0.1.35` → `^0.1.36`
+  - `@mcp-abap-adt/auth-broker`: `^0.1.8` → `^0.1.9`
+  - `@mcp-abap-adt/auth-providers`: `^0.1.1` → `^0.1.2`
+  - `@mcp-abap-adt/auth-stores`: `^0.1.3` → `^0.1.4`
+  - `@mcp-abap-adt/connection`: `^0.1.14` → `^0.1.15`
+  - `@mcp-abap-adt/header-validator`: `^0.1.4` → `^0.1.6`
+  - `@mcp-abap-adt/interfaces`: `^0.1.1` (unchanged)
+  - `@mcp-abap-adt/logger`: `^0.1.0` → `^0.1.1`
+
+### Fixed
+- **TypeScript type errors in TableLowHandlers.test.ts** – Fixed type inference issues:
+  - Corrected `lockSessionForCleanup` variable declaration and usage
+  - Fixed type narrowing in catch and finally blocks
+
+## [1.1.25] - 2025-12-12
+
+### Added
+- **`--mcp=<destination>` parameter** – Default MCP destination name for auth-broker:
+  - Allows using auth-broker (service keys) with stdio and SSE transports
+  - When specified, this destination is used when `x-mcp-destination` header is not provided in requests
+  - For stdio transport: Server initializes auth-broker with the specified destination at startup
+  - For SSE transport: Server uses the specified destination as fallback when header is missing
+  - For HTTP transport: Server uses the specified destination as fallback when header is missing
+  - Example: `mcp-abap-adt --transport=stdio --mcp=TRIAL`
+  - This enables auth-broker usage with stdio and SSE transports, which previously required `.env` file configuration
+
+### Changed
+- **Auth-broker support for stdio and SSE transports** – Extended `getOrCreateAuthBroker()` to support stdio and SSE transports:
+  - Previously, auth-broker was only available for HTTP/streamable-http transport
+  - Now works with all transport types when `--mcp` parameter is specified
+  - For stdio: Auth-broker is initialized at server startup with the destination from `--mcp` parameter
+  - For SSE: Auth-broker works the same way as HTTP transport (via headers or `--mcp` fallback)
+
+### Fixed
+- **`--mcp` parameter now skips `.env` file loading** – When `--mcp` is specified:
+  - `.env` file is not automatically loaded (even if it exists in current directory)
+  - `.env` file is not considered mandatory for stdio and SSE transports
+  - Auth-broker configuration takes precedence over `.env` file
+  - This ensures that `--mcp` parameter works correctly without conflicts from `.env` file settings
+- **SSE transport with `--mcp` parameter** – Fixed issue where SSE transport was using `.env` configuration instead of auth-broker when `--mcp` was specified:
+  - Server now initializes auth-broker at startup for SSE transport when `--mcp` is provided
+  - `applyAuthHeaders()` now handles empty headers correctly when `defaultMcpDestination` is set
+  - Configuration from auth-broker takes precedence over `.env` file
+
+### Documentation
+- Updated `CLI_OPTIONS.md` with `--mcp` parameter documentation and examples
+- Updated `CLIENT_CONFIGURATION.md` with information about using `--mcp` parameter for stdio and SSE transports
+- Added examples for Cline configuration with stdio transport and `--mcp` parameter
+- Updated help text in both `src/index.ts` and `bin/mcp-abap-adt.js` with `--mcp` parameter information
+
+## [1.1.24] - 2025-12-02
+
+### Changed
+- **Safe session storage by default** – Session data is now stored in-memory using `SafeSessionStore` by default:
+  - Session tokens are no longer persisted to disk by default (secure by default)
+  - Session data is lost after server restart (requires re-authentication)
+  - Use `--unsafe` flag to enable file-based session storage (legacy behavior)
+  - File-based storage (`UnixFileSessionStore`/`WindowsFileSessionStore`) is only used when `--unsafe` is specified
+
+### Added
+- **`--unsafe` flag** – Enables file-based session storage (persists tokens to disk):
+  - When specified, session data is saved to platform-specific locations:
+    - Unix: `~/.config/mcp-abap-adt/sessions/{destination}.env`
+    - Windows: `%USERPROFILE%\Documents\mcp-abap-adt\sessions\{destination}.env`
+  - Can be set via environment variable: `MCP_UNSAFE=true`
+  - Use this flag if you need session persistence across server restarts
+
+### Dependencies
+- Updated `@mcp-abap-adt/auth-broker` to `^0.1.5`:
+  - Benefits from new `SafeSessionStore` implementation (in-memory, secure)
+  - Updated to use new `ISessionStore` interface (replaces `SessionStore`)
+
+## [1.1.23] - 2025-12-02
+
+### Fixed
+- **Help text correction** – fixed incorrect help message for `x-mcp-destination` header:
+  - Removed incorrect statement that `x-mcp-destination` requires `x-sap-url` header
+  - Updated help text to correctly state that URL is automatically derived from service key (same as `x-sap-destination`)
+  - Help text now accurately reflects that `x-sap-url` is not required and will be ignored if provided
+
+## [1.1.22] - 2025-12-01
+
+### Dependencies
+- Updated `@mcp-abap-adt/adt-clients` to `^0.1.33`:
+  - Benefits from optimized CSRF token endpoint (`/sap/bc/adt/core/discovery`)
+  - Faster connection initialization for all CRUD operations
+- Updated `@mcp-abap-adt/auth-broker` to `^0.1.4`:
+  - Benefits from optimized CSRF token endpoint in connection layer
+  - Faster authentication flows when managing JWT tokens
+
+### Added
+- **ABAP Unit class test tools**: Added `[low-level]` handlers to cover the new CrudClient APIs for class test includes and ABAP Unit orchestration:
+  - `LockClassTestClassesLow`, `UpdateClassTestClassesLow`, `UnlockClassTestClassesLow`, `ActivateClassTestClassesLow`
+  - `RunClassUnitTestsLow`, `GetClassUnitTestStatusLow`, `GetClassUnitTestResultLow`
+  - All new tools live in `class/low/` and are registered with the server and documentation generator.
+- **Package creation options**: `CreatePackage` (high- and low-level) now accepts optional `package_type`, `software_component`, `transport_layer`, `application_component`, and `responsible` parameters and forwards them directly to `CrudClient`, enabling Cloud systems to pass values such as `ZLOCAL` while keeping the transport layer empty.
+
+## [1.1.21] - 2025-12-01
+
+### Fixed
+- **x-mcp-destination validation** – fixed issue where `x-mcp-destination` header was incorrectly requiring `x-sap-url`:
+  - `x-mcp-destination` now works identically to `x-sap-destination` - URL is automatically derived from service key
+  - `x-sap-url` is now optional for `x-mcp-destination` (and will be ignored with a warning if provided)
+  - Fixed issue on Windows where `x-mcp-destination` was being ignored
+  - Updated header validator to check headers in both lowercase and original case for better compatibility
+
+### Added
+- **Custom auth-broker path** – added `--auth-broker-path` command-line option:
+  - Allows specifying custom base path for service keys and sessions
+  - Automatically creates `service-keys` and `sessions` subdirectories in the specified path
+  - Example: `--auth-broker-path=~/prj/tmp/` uses `~/prj/tmp/service-keys/` and `~/prj/tmp/sessions/`
+  - Directories are created automatically if they don't exist
+  - Can be used together with `--auth-broker` flag
+
+- **Automatic directory creation** – service keys and sessions directories are now created automatically:
+  - Directories are created at server startup if they don't exist
+  - Prevents errors when saving sessions for the first time
+  - Works for both default platform paths and custom `--auth-broker-path`
+
+- **Enhanced startup information** – improved auth-broker path display at server startup:
+  - Shows all search paths for service keys (in order of priority)
+  - Shows all save paths for sessions
+  - Formatted with clear visual separators for better readability
+  - Only displayed when `--auth-broker` flag is used
+
+- **Diagnostic logging** – added platform-aware logging for better debugging:
+  - Logs platform information when processing authentication headers
+  - Logs all header keys that start with `x-sap` or `x-mcp`
+  - Logs search paths when creating AuthBroker instances
+  - Helps diagnose issues on different platforms (especially Windows)
+
+### Changed
+- **Header validation logic** – improved validation order and case handling:
+  - `x-mcp-destination` is now checked immediately after `x-sap-destination`, regardless of `x-sap-url` presence
+  - Added case-insensitive header checking for better compatibility
+  - Both `x-sap-destination` and `x-mcp-destination` now check headers in both lowercase and original case
+
+- **Documentation updates** – comprehensive documentation improvements:
+  - Added `--auth-broker-path` parameter documentation in help text
+  - Updated `CLIENT_CONFIGURATION.md` with custom path examples
+  - Updated `INSTALLATION.md` with new command-line option
+  - Updated `SERVICE_KEY_SETUP.md` with custom path usage examples
+  - Added Cline configuration example in help text
+
+### Dependencies
+- **Updated `@mcp-abap-adt/auth-broker` to `^0.1.3`** – upgraded to latest version
+- **Updated `@mcp-abap-adt/header-validator` to `^0.1.3`** – upgraded to latest version
+
+## [1.1.20] - 2025-12-01
+
+### Changed
+- **Help documentation improvements** – updated help messages with detailed instructions for saving service keys:
+  - Added platform-specific instructions for Linux, macOS, and Windows
+  - Replaced example JSON structure with instructions to copy service key from SAP BTP
+  - Fixed backslash escaping in Windows PowerShell commands
+  - Updated both launcher help (`bin/mcp-abap-adt.js`) and server help (`src/index.ts`)
+  - Updated documentation files: `SERVICE_KEY_SETUP.md` and `CLIENT_CONFIGURATION.md`
+
+## [1.1.19] - 2025-11-30
+
+### Changed
+- **Handler refactoring** – migrated handlers to use `CrudClient` and `SharedBuilder` from `@mcp-abap-adt/adt-clients`:
+  - `handleSearchObject` now uses `SharedBuilder.search()` instead of manual URL construction
+  - Eliminates redundant URL concatenation and potential duplication errors
+  - Better code reuse and consistency across handlers
+
+- **URL handling simplification** – removed unnecessary URL cleaning logic:
+  - URLs from `.env` files and service keys are expected to be clean
+  - Removed aggressive URL cleaning that was causing issues
+  - Only basic trimming is performed where needed
+
+- **Transport-specific auth-broker handling** – `auth-broker` is now ignored for `stdio` and `sse` transports:
+  - AuthBroker initialization is skipped for non-HTTP transports
+  - Prevents unnecessary errors and resource usage
+  - `.env` file is used directly for `stdio` and `sse` transports
+
+### Fixed
+- **URL duplication in stdio transport** – fixed incorrect URL formation when using `stdio` transport:
+  - Resolved `getaddrinfo ENOTFOUND ...comhttps` errors
+  - Proper URL handling in connection initialization
+  - Correct `.env` file parsing for `stdio` mode
+
+### Added
+- **Lazy AuthBroker initialization** – AuthBroker instances are now created on-demand per destination:
+  - AuthBroker is only created when a destination is actually needed (not at server startup)
+  - Each destination gets its own AuthBroker instance, cached in a map for reuse
+  - Reduces memory usage and startup time when auth-broker is not needed
+  - Default AuthBroker instance for non-destination requests
+
+- **Improved method filtering** – only `tools/call` requires SAP configuration:
+  - All other MCP methods (`tools/list`, `tools/get`, `initialize`, `ping`, `notifications/initialized`, etc.) work without SAP config
+  - Prevents unnecessary authentication errors for metadata requests
+  - Better separation between metadata operations and actual tool execution
+
+### Changed
+- **AuthBroker instance management** – switched from single instance to per-destination map:
+  - `authBrokers` map stores AuthBroker instances keyed by destination name
+  - `defaultAuthBroker` for requests without specific destination
+  - Lazy initialization via `getOrCreateAuthBroker()` method
+  - Better isolation between different destinations
+
+- **Platform store imports** – fixed ES module compatibility:
+  - Replaced `require()` with static imports in `getPlatformStores()`
+  - Fixes "UnixFileSessionStore is not a constructor" error
+  - Proper ES module support for platform-specific stores
+
+### Fixed
+- **ES module compatibility** – fixed "UnixFileSessionStore is not a constructor" error:
+  - Changed `getPlatformStores()` to use static imports instead of `require()`
+  - Properly handles ES module exports for Unix/Windows store implementations
+  - AuthBroker now correctly initializes on Unix systems
+
+- **Request processing logic** – improved handling of requests that don't require SAP connection:
+  - Only `tools/call` method triggers SAP configuration validation
+  - All other methods bypass authentication checks
+  - Prevents false errors for metadata and initialization requests
+
+## [1.1.17] - 2025-11-28
+
+### Added
+- **Cross-platform session storage** – optional persistent session management:
+  - Session storage now disabled by default (stateless mode)
+  - Enable via `MCP_ENABLE_SESSION_STORAGE=true` environment variable
+  - Custom session directory via `MCP_SESSION_DIR=/path/to/sessions`
+  - Platform-specific defaults: Windows temp dir, `/tmp` on Linux, `/var/folders` on macOS
+  - Prevents `ENOENT` errors when running from different working directories
+
+- **Cline configuration documentation** – comprehensive setup guide:
+  - Created `doc/installation/CLINE_CONFIGURATION.md` with detailed configuration for all transport types
+  - Added example configs in `doc/installation/examples/` for NPX, global install, and local development
+  - Platform-specific notes for macOS, Linux, and Windows
+  - Session storage configuration examples and best practices
+  - Troubleshooting guide for common connection issues
+
+- **Cross-platform fixes documentation** – created `doc/development/CROSS_PLATFORM_FIXES.md`:
+  - Documented dotenv removal and stdio transport fixes
+  - Cross-platform path handling with `os.tmpdir()` and `path.join()`
+  - Platform-specific session storage locations
+  - Testing instructions for all three transports (stdio, HTTP, SSE)
+
+### Changed
+- **Session storage architecture** – improved reliability and cross-platform support:
+  - Moved from relative `.sessions` path to absolute paths using `os.tmpdir()`
+  - Session storage now optional and controlled by environment variables
+  - Removed `FileSessionStorage` usage from individual handlers (e.g., `handleDeletePackage`)
+  - All session management now centralized in connection manager (`utils.ts`)
+
+- **Environment variable documentation** – comprehensive env var reference:
+  - Added table of all available environment variables in Cline configuration docs
+  - Documented `MCP_ENABLE_SESSION_STORAGE` and `MCP_SESSION_DIR` usage
+  - Platform-specific default values and examples
+  - Guidance on when to enable/disable session storage
+
+### Fixed
+- **Session directory creation errors** – fixed `ENOENT: no such file or directory, mkdir '/.sessions'`:
+  - Replaced relative `.sessions` path with absolute paths
+  - Session directory now uses OS-specific temp directory by default
+  - Works correctly when running as global npm package or via npx
+  - No longer depends on current working directory
+
+- **Handler session management** – simplified connection handling:
+  - Removed custom `FileSessionStorage` creation in `handleDeletePackage`
+  - Deprecated `force_new_connection` parameter (now ignored)
+  - All connections use centralized session management
+  - Restart server to force new session instead of per-handler sessions
+
+### Dependencies
+- No dependency changes in this release
+
+## [1.1.16] - 2025-01-XX
+
+### Removed
+- **dotenv dependency** – completely removed `dotenv` package from dependencies:
+  - Eliminated `dotenv` as a dependency to prevent stdout pollution in stdio mode
+  - Resolved `"[dotenv@17."... is not valid JSON` error that was breaking stdio transport
+  - Server now uses manual `.env` file parsing for all transport modes
+
+### Changed
+- **.env file parsing** – replaced `dotenv` library with manual parsing:
+  - Manual `.env` file parsing for all transport modes (stdio, http, sse)
+  - Supports both Unix (`\n`) and Windows (`\r\n`) line endings
+  - Handles comments, quoted values, and empty lines correctly
+  - Cross-platform compatible (works on Linux, Windows, macOS)
+  - No external dependencies for environment variable loading
+
+- **stdio mode auto-detection** – improved stdio mode detection:
+  - Auto-detects stdio mode when `stdin` is not a TTY (piped by MCP Inspector or other tools)
+  - Checks `!process.stdin.isTTY` in addition to command-line arguments and environment variables
+  - Allows seamless connection from MCP Inspector and other stdio-based clients without explicit `--transport=stdio` flag
+
+- **stderr handling in stdio mode** – restored stderr for error logging:
+  - Following reference implementation pattern, stderr is now available for error logging in stdio mode
+  - stdout remains reserved exclusively for MCP JSON-RPC protocol
+  - console.error() and console.warn() now work correctly in stdio mode (write to stderr)
+
+### Fixed
+- **stdio transport connection** – fixed issue where server was not connecting properly in stdio mode:
+  - Server now correctly detects stdio mode when launched by MCP Inspector
+  - Tools are properly registered and available when connecting via stdio
+  - Resolved connection issues that prevented tools from being listed
+
+### Dependencies
+- Updated `@mcp-abap-adt/connection` to `^0.1.12`:
+  - Connection package no longer reads `.env` files or depends on `dotenv`
+  - Consumers must pass `SapConfig` directly to connection constructors
+- Updated `@mcp-abap-adt/adt-clients` to `^0.1.27`:
+  - Updated to work with connection@0.1.12
+  - Fixed example scripts to use manual `.env` parsing
+
+## [1.1.15] - 2025-01-27
+
+### Fixed
+- **Git tag management** – fixed issues with release tag creation and management:
+  - Corrected tag placement on the latest commit with CHANGELOG updates
+  - Ensured proper tag synchronization between local and remote repositories
+  - Fixed tag deletion and recreation workflow for release management
+
+## [1.1.14] - 2025-01-27
+
+### Added
+- **Command-line flags --version/-v and --help/-h** – added support for standard command-line flags:
+  - `--version` or `-v` – displays package version and exits
+  - `--help` or `-h` – displays help message and exits
+  - Flags are processed before any other initialization, allowing quick version/help checks
+
+### Changed
+- **.env file search logic** – improved .env file discovery and loading:
+  - **Search location:** Now searches for `.env` file only in the current working directory (where the command is executed)
+  - **No recursive search:** Removed fallback searches in parent directories or project root
+  - **Explicit path support:** Still supports `--env=/path/to/.env` or `MCP_ENV_PATH` environment variable for custom locations
+  - **Cross-platform paths:** Uses `path.resolve()` and `path.join()` for proper path handling on Windows, Linux, and macOS
+
+- **Transport mode and .env file relationship** – refined logic for transport mode selection and .env file requirements:
+  - **Default behavior:** If transport is not explicitly specified and no `.env` file is found, server starts in HTTP mode (no .env required)
+  - **Explicit transport with .env:** If transport is explicitly set to `stdio` or `sse` but `.env` file is missing, server exits with clear error message
+  - **Explicit transport without .env:** If transport is explicitly set to `http` or `streamable-http`, server starts without .env file (as expected)
+  - **Error messages:** Improved error messages that clearly indicate what transport mode requires .env file and how to specify custom .env location
+
+### Fixed
+- **Cross-platform compatibility** – ensured all file path operations work correctly on Windows, Linux, and macOS:
+  - All path operations use Node.js `path` module methods (`path.join()`, `path.resolve()`, `path.isAbsolute()`)
+  - Proper handling of Windows path separators (`\`) vs Unix path separators (`/`)
+  - Version reading from `package.json` uses cross-platform path resolution
+
+## [1.1.13] - 2025-01-27
+
+### Fixed
+- **Handler parameter schemas alignment with CrudClient** – comprehensive fix to ensure all handler input schemas match actual CrudClient method parameters:
+  - **Data Element handlers:**
+    - Added `type_name` parameter to `handleCreateDataElement` schema (was missing but used in code)
+    - Added `search_help`, `search_help_parameter`, `set_get_parameter` to `handleUpdateDataElement` schema (now properly passed to builder)
+    - Updated field label descriptions to clarify they are applied during update step after creation
+  - **Domain handlers:**
+    - Removed unsupported parameters from `handleCreateDomain` low-level handler: `domain_type`, `application`, `master_system`, `responsible`
+  - **Program handlers:**
+    - Removed `master_system` and `responsible` from both high and low-level handlers (these are set automatically by system)
+  - **Class handlers:**
+    - Removed `master_system` and `responsible` from high-level handler schema (set automatically by system)
+    - Removed `master_system` and `responsible` from low-level handler schema and code
+  - **Interface handlers:**
+    - Removed `master_system` and `responsible` from both high and low-level handlers (set automatically by system)
+  - **Structure, View, Table handlers:**
+    - Removed `master_system` and `responsible` from low-level create handlers (set automatically by system)
+  - **Behavior Definition, Metadata Extension handlers:**
+    - Removed `master_system` and `responsible` from low-level create handlers (set automatically by system)
+  - **Impact:** All handler schemas now accurately reflect what parameters are actually supported and used by CrudClient methods, preventing confusion and ensuring correct API usage
+
+### Changed
+- **Data Element handlers – search help support** – enhanced data element handlers to support search help configuration:
+  - `handleCreateDataElement` now accepts `search_help`, `search_help_parameter`, `set_get_parameter` parameters
+  - `handleUpdateDataElement` now accepts `search_help`, `search_help_parameter`, `set_get_parameter` parameters
+  - These parameters are properly passed through to `DataElementBuilder` and included in update operations
+  - Enables full configuration of search help and parameter settings for data elements
+
+### Dependencies
+- **Updated `@mcp-abap-adt/adt-clients` to `^0.1.26`** – upgraded to latest version which includes:
+  - Added `searchHelp`, `searchHelpParameter`, `setGetParameter` to `DataElementBuilderConfig`
+  - Updated `DataElementBuilder.update()` to pass search help parameters to `UpdateDataElementParams`
+  - Full support for search help configuration in data element operations
+
+## [1.1.11] - 2025-11-28
+
+### Fixed
+- **DomainHighHandlers - Update workflow detection bug** – fixed critical issue where domain update operations were incorrectly using CREATE workflow instead of UPDATE workflow:
+  - **Root cause:** `DomainBuilder.update()` method determines which workflow to use (CREATE vs UPDATE) by checking if `this.state.createResult` exists. When `CrudClient.getDomainBuilder()` reuses a builder instance from a previous `createDomain()` call, the builder still has `createResult` in its state, causing `update()` to incorrectly use CREATE workflow (`upload()` function) instead of UPDATE workflow (`updateDomain()` function).
+  - **Solution:** Modified `handleUpdateDomain` to pass `packageName` directly to `lockDomain()` call, ensuring the builder is created with correct configuration from the start. This prevents builder reuse issues and ensures proper workflow detection.
+  - **Additional fix:** Removed redundant validation step from `handleUpdateDomain` handler. The validation was checking if domain exists, but `lockDomain()` will fail if domain doesn't exist anyway, making the validation step unnecessary and potentially causing confusion.
+  - **Impact:** Domain update operations now correctly use UPDATE workflow for existing domains, preventing "Domain already exists" errors that were occurring when the system tried to create an already-existing domain.
+
+### Changed
+- **DomainHighHandlers test logging** – completely refactored test logging system for better information density and clarity:
+  - **Removed verbose `debugLog()` system** – eliminated all `debugLog()` calls that were cluttering test output with verbose JSON structures and nested data objects
+  - **Introduced concise logging** – replaced with simple, informative `console.log()` statements that provide clear, actionable information:
+    - Clear operation names (e.g., "High Create: Creating domain...", "High Update: Updating domain...")
+    - Success/failure status with object names
+    - Skip reasons when tests are skipped
+    - Visual infographics (emojis) for quick visual scanning of test output
+  - **Simplified error handling** – removed redundant try-catch blocks and verbose error logging, now relies on Jest's native error handling which provides better stack traces
+  - **More informative output** – each log statement now provides essential information (operation type, object name, status) without JSON noise
+  - **Consistent with other tests** – matches logging patterns used in BehaviorDefinitionHighHandlers, PackageHighHandlers, and other high-level handler tests
+  - **Better maintainability** – removed ~50 lines of verbose debug logging code, making tests easier to read and maintain
+  - **Improved debugging** – concise logs make it easier to identify which operation failed and why, without scrolling through JSON dumps
+
+### Dependencies
+- **Updated `@mcp-abap-adt/adt-clients` to `^0.1.25`** – upgraded to latest version which includes:
+  - Improved `DomainBuilder.update()` workflow detection logic
+  - Better handling of CREATE vs UPDATE workflow selection based on builder state
+  - Enhanced error messages for domain operations
+
+### Documentation
+- **Test Issues Roadmap** – comprehensive update to development roadmap:
+  - **Issue #10 (DomainHighHandlers)** – changed status from "Expected Skip" to "Fixed" with detailed explanation
+  - **Updated statistics:** 8 fixed issues (was 7), 1 expected skip (was 3)
+  - **Added detailed problem analysis:** Documented root cause, solution approach, and code changes
+  - **Improved issue tracking:** Better categorization of issues vs expected skips vs cloud limitations
+
+### Development Process
+- **Issue Roadmap System** – introduced systematic problem analysis and resolution tracking:
+  - **New workflow:** Test failures are now systematically analyzed and documented in `doc/development/TEST_ISSUES_ROADMAP_*.md`
+  - **Issue classification:** Problems are categorized as Simple (⚡) or Complex (🔍), with clear distinction between real issues and expected skips
+  - **Problem analysis:** Each issue includes detailed error messages, root cause analysis, solution approach, and code references
+  - **Progress tracking:** Roadmap maintains statistics on fixed vs pending vs expected issues, providing clear visibility into test suite health
+  - **Solution documentation:** All fixes are documented with code references, making it easier to understand what was changed and why
+  - **Continuous improvement:** Roadmap is updated after each test run, ensuring it reflects current state and helps prioritize future work
+  - **Benefits:** Enables faster problem resolution, prevents duplicate work, and provides historical context for similar issues
+
+## [1.1.10] - 2025-11-27
+
+### Added
+- **Behavior Implementation integration tests** – added comprehensive integration tests for Behavior Implementation handlers:
+  - `BehaviorImplementationLowHandlers.test.ts` – full workflow test: Validate → Create → Check → Lock → Update → Unlock → Activate
+  - `BehaviorImplementationHighHandlers.test.ts` – high-level handler test: CreateClass → Update implementations include → DeleteClass
+  - Both tests include detailed step-by-step logging for better visibility and debugging
+  - Tests use `implementationCode` parameter for custom implementations include code
+  - Proper cleanup logic ensures test objects are deleted only if successfully created
+- **Test configuration parameter for Behavior Implementation** – added `implementation_code` parameter:
+  - Separate parameter for updating implementations include (local handler class) in low-level handler tests
+  - `update_source_code` parameter for high-level handler tests
+  - Updated test templates with correct implementation code structure
+  - Improved test configuration clarity and maintainability
+
+### Changed
+- **Behavior Implementation HighHandlers test** – simplified test implementation:
+  - Removed manual session state management (save/restore) – CrudClient now manages session internally
+  - Removed low-level handler imports (`handleLockClass`, `handleUnlockClass`, `handleActivateClass`)
+  - Test now uses only CrudClient methods for lock → update → unlock → activate workflow
+  - Aligns with high-level handler pattern where each handler manages its own session and lock/unlock operations
+- **Behavior Implementation handlers** – updated to use types from `@mcp-abap-adt/adt-clients`:
+  - All handler parameter types now imported from `adt-clients` package
+  - Ensures type consistency across handlers and client library
+  - `handleCreateBehaviorImplementation` now correctly uses `BehaviorImplementationBuilderConfig` type
+
+### Fixed
+- **Behavior Implementation test configuration** – fixed test configuration for managed behavior definitions:
+  - Removed `read FOR READ` method from implementation code examples in `test-config.yaml` and `test-config.yaml.template`
+  - For managed behavior definitions, `read` method is auto-generated and should not be included in custom implementation code
+  - Updated both low-level and high-level test configurations with correct implementation code structure
+  - Tests now correctly handle managed behavior implementation classes without superfluous `read` method errors
+
+## [1.1.10] - 2025-11-26
+
+### Added
+- **Client Connection Isolation**: Implemented per-session connection isolation to prevent data mixing between different clients
+  - Each client session now maintains its own isolated SAP connection based on `sessionId` and configuration hash
+  - Connections are cached per unique combination of `sessionId` + `sapUrl` + authentication parameters
+  - Uses `AsyncLocalStorage` to pass session context to handlers, ensuring each request uses the correct connection
+  - Prevents race conditions where concurrent requests from different clients could overwrite each other's connection settings
+  - Backward compatible: falls back to global connection cache for non-HTTP transports (stdio)
+
+- **Non-Local Connection Restrictions**: Added security restrictions for non-local connections
+  - **SSE Transport**: Always restricted to localhost connections only (127.0.0.1, ::1, localhost)
+  - **HTTP Transport**: Non-local connections are restricted when:
+    - `.env` file exists (was found at startup)
+    - AND request does not include SAP connection headers (`x-sap-url`, `x-sap-auth-type`)
+  - Non-local connections with SAP headers are allowed (enables multi-tenant scenarios)
+  - Local connections are always allowed regardless of `.env` file presence
+  - Clear error messages guide users when connections are rejected
+
+### Changed
+- **Connection Management**: Refactored `getManagedConnection()` to support session-based connection caching
+  - Added `generateConnectionCacheKey()` function to create unique cache keys from sessionId and config signature
+  - Implemented `getConnectionForSession()` to retrieve or create session-specific connections
+  - Added automatic cleanup of old connection cache entries (older than 1 hour)
+  - Each session uses unique `sessionId` for its `AbapConnection` to prevent session mixing
+
+- **Session Tracking**: Enhanced `streamableHttpSessions` to store SAP configuration per session
+  - Added `sapConfig` field to session objects to track configuration per client
+  - `applyAuthHeaders()` now stores configuration in session object
+  - Session cleanup automatically removes associated connection from cache
+
+### Security
+- **Connection Isolation**: Prevents one client from receiving another client's data when multiple clients connect to different SAP systems
+- **Access Control**: Restricts non-local access when `.env` file is present, requiring explicit SAP headers for remote connections
+
+## [1.1.9] - 2025-11-24
+
+### Added
+- **DDLX (Metadata Extension) Management Tools**:
+  - `CreateMetadataExtension`: Create new ABAP Metadata Extensions (DDLX) with automatic activation
+  - `UpdateMetadataExtension`: Update source code of existing Metadata Extensions
+  - Full CRUD workflow: Create → Lock → Check → Unlock → Activate
+  - Support for transport request validation
+  - Integrated with CrudClient API for consistent behavior
+
+- **BDEF (Behavior Definition) Management Tools**:
+  - `CreateBehaviorDefinition`: Create new ABAP Behavior Definitions (BDEF) with support for Managed, Unmanaged, Abstract, and Projection implementation types
+  - `UpdateBehaviorDefinition`: Update source code of existing Behavior Definitions
+  - Full CRUD workflow: Create → Lock → Check → Unlock → Activate
+  - Support for root entity specification and implementation type selection
+  - Transport request validation integrated
+- **Full Low-Level CRUD Coverage**:
+  - Added dedicated `create`, `lock`, `unlock`, `check`, `validate`, `delete`, and `update` handlers for classes, programs, interfaces, function groups/modules, domains, data elements, packages, tables, views, structures, transports, and more to cover every `CrudClient` method.
+  - Each handler now has a consistent naming scheme (`CreateX`, `UpdateX`, etc.) to match the high-level counterparts.
+
+- **System Management Tools**:
+  - `GetInactiveObjects`: Retrieve list of inactive ABAP objects (objects that have been modified but not activated)
+  - Provides count and detailed list of objects waiting for activation
+  - Useful for monitoring development progress and identifying objects requiring attention
+
+### Changed
+- **Handler Organization Refactoring**: All handlers reorganized into categorized subdirectories with explicit `high/`, `low/`, and `readonly/` layers for better maintainability. Each low-level handler description now starts with `[low-level]`, and every read handler was moved to the new `readonly/` folders and tagged `[read-only]`. This improves discoverability, enforces single-responsibility boundaries, and makes it clear which tools mutate SAP data.
+  - `bdef/` - Behavior Definition handlers (GetBdef, CreateBehaviorDefinition, UpdateBehaviorDefinition)
+  - `class/` - Class handlers (GetClass, CreateClass, UpdateClass, ValidateClass, CheckClass)
+  - `common/` - Common handlers (ActivateObject, DeleteObject, CheckObject, LockObject, UnlockObject, ValidateObject)
+  - `data_element/` - Data Element handlers (GetDataElement, CreateDataElement, UpdateDataElement)
+  - `ddlx/` - Metadata Extension handlers (CreateMetadataExtension, UpdateMetadataExtension)
+  - `domain/` - Domain handlers (GetDomain, CreateDomain, UpdateDomain)
+  - `enhancement/` - Enhancement handlers (GetEnhancements, GetEnhancementImpl, GetEnhancementSpot)
+  - `function/` - Function handlers (GetFunction, GetFunctionGroup, CreateFunctionGroup, CreateFunctionModule, UpdateFunctionModule, ValidateFunctionModule, CheckFunctionModule)
+  - `include/` - Include handlers (GetInclude, GetIncludesList)
+  - `interface/` - Interface handlers (GetInterface, CreateInterface, UpdateInterface)
+  - `package/` - Package handlers (GetPackage, CreatePackage)
+  - `program/` - Program handlers (GetProgram, CreateProgram, UpdateProgram)
+  - `search/` - Search handlers (SearchObject, GetObjectsByType, GetObjectsList)
+  - `structure/` - Structure handlers (GetStructure, CreateStructure)
+  - `system/` - System handlers (GetTypeInfo, GetTransaction, GetSqlQuery, GetWhereUsed, GetObjectInfo, GetSession, GetAbapAST, GetAbapSemanticAnalysis, GetAbapSystemSymbols, GetAllTypes, GetObjectStructure, GetObjectNodeFromCache, GetInactiveObjects)
+  - `table/` - Table handlers (GetTable, GetTableContents, CreateTable, ValidateTable, CheckTable)
+  - `transport/` - Transport handlers (GetTransport, CreateTransport)
+  - `view/` - View handlers (GetView, CreateView, UpdateView)
+  - This reorganization improves code navigation, reduces merge conflicts, and makes the codebase more maintainable
+
+- **Dependencies Updated**:
+  - `@mcp-abap-adt/adt-clients`: ^0.1.9 → ^0.1.12
+  - `@mcp-abap-adt/connection`: ^0.1.4 → ^0.1.9
+  - Updated to leverage new CrudClient methods for DDLX and BDEF operations
+
+- **Index and Tools Registry Updates**:
+  - `src/index.ts`: Updated all handler imports to reflect new subdirectory structure
+  - `src/lib/toolsRegistry.ts`: Updated tool definitions imports to match new handler locations
+  - All 81 handler files moved and imports updated consistently
+- **Tooling Improvements**:
+  - `tools/generate-tools-docs.js` now outputs a navigation tree that mirrors the document structure, separates high-/low-/read-only tools, and adds summary counts for each level.
+  - `doc/user-guide/AVAILABLE_TOOLS.md` regenerated to include the new navigation, level-specific anchors, and the `[read-only]` marker.
+  - Test suite, configs, and helper scripts updated to follow the new directory layout and renamed high-level handlers (`UpdateClass`, `UpdateProgram`, etc.).
+- **Low-Level Tool Names**:
+  - Every low-level handler now advertises a unique MCP tool name suffixed with `Low` (e.g., `CreateClassLow`, `UpdateDomainLow`, `LockPackageLow`). This prevents `Tool <name> is already registered` errors when both low/high versions exist and keeps the server compatible with clients that look up tools by name.
+
+### Documentation
+- Added `implementation_plan.md`: Plan for future refactoring of read handlers to `src/readers` directory
+- Removed `roadmap.md`: Work items are complete, so the standalone roadmap is no longer required
+
+## [1.1.8] - 2025-11-24
+
+_Documentation for this tag is intentionally minimal; see the Git tag `v1.1.8` for its exact contents._
+
+## [1.1.6] - 2025-11-21
+
+### Documentation
+- **Comprehensive CLI documentation**: Added detailed documentation for all command line options and configuration
+  - Updated README.md with global installation guide and CLI usage examples
+  - Enhanced INSTALLATION.md with complete CLI options reference
+  - Created new CLI_OPTIONS.md with comprehensive command line reference
+  - Documented environment file priority and auto-discovery behavior
+  - Added troubleshooting section for common CLI issues
+
+## [1.1.5] - 2025-11-21
+
+### Added
+- **--help flag**: Added comprehensive help message showing all CLI options, environment variables, and usage examples
+  - Shows transport options (stdio, http, sse)
+  - Lists all HTTP and SSE configuration options
+  - Documents SAP connection environment variables
+  - Includes practical usage examples
+
+### Fixed
+- **Global installation .env loading**: Fixed .env file discovery for globally installed packages
+  - Now correctly prioritizes `process.cwd()/.env` (user's working directory) over package directory
+  - Works correctly when installed via `npm install -g`
+  - Better error messages showing current directory and suggesting --env flag
+- **--env argument parsing**: Fixed custom .env file path support
+  - Both `--env=/path/to/.env` and `--env /path/to/.env` formats now work correctly
+  - Relative paths are resolved from current working directory
+  - Clear feedback messages showing which .env file is being used
+- **Runtime dependencies**: Moved `dotenv` from devDependencies to dependencies
+  - Fixes "Cannot find module 'dotenv'" error when installed globally
+  - Ensures all runtime dependencies are available in production
+
+### Changed
+- **All handlers refactored to use CrudClient** – replaced Builder pattern with unified CrudClient API
+  - **18 handlers converted**: Create (Program, DataElement, Domain, FunctionGroup, FunctionModule, Package, Structure, Table, Transport, View), Update (ClassSource, DataElement, InterfaceSource), Check (Class, FunctionModule, Table, Object), Validate (Class, Object), Lock/Unlock (Object)
+  - Removed direct Builder instantiation from all handlers
+  - All CRUD operations now use CrudClient methods (createProgram, lockClass, updateInterface, etc.)
+  - Session ID no longer exposed - internal to CrudClient implementation
+  - Simplified error handling with try-catch around lock/update/unlock sequences
+
+### Fixed
+- **utils.ts deprecated methods** – added TODO comments for missing ReadOnlyClient methods
+  - `fetchNodeStructure()` - marked for future implementation
+  - `getSystemInformation()` - marked for future implementation
+  - Both throw errors with clear TODO messages instead of attempting non-existent method calls
+
+## [1.1.3] - 2025-11-21
+
+### Added
+- **Parameter Optionality Sync Tool**: Created `tools/sync-optional-from-interfaces.js` to extract optional parameter information from TypeScript interfaces
+  - Extracts required vs optional fields from `@mcp-abap-adt/adt-clients` builder interfaces
+  - Provides single source of truth for parameter optionality
+  - Prevents drift between TypeScript interfaces and MCP tool definitions
+  - Documentation added in `doc/development/SYNC_OPTIONAL_PARAMS.md`
+
+### Changed
+- **CreateDomain Handler**: Synced parameter optionality with `DomainBuilderConfig` interface
+  - Only `domain_name` is required (was incorrectly requiring `package_name`)
+  - Marked all optional parameters with `(optional)` prefix in descriptions
+  - Ensures consistency with TypeScript interface definitions
+
+## [1.1.2] - 2025-11-21
+
+### Fixed
+- **STDIO Transport**: Fixed STDIO transport broken by mixing old `Server` and new `McpServer` APIs
+  - Removed legacy `Server` class and `setupHandlers()` method
+  - Unified all transports (STDIO, HTTP, SSE) to use single `McpServer` instance
+  - Fixed STDIO connection to use `mcpServer.server.connect(transport)` pattern
+  - Removed unused imports: `Server`, `CallToolRequestSchema`, `ListToolsRequestSchema`
+
+### Added
+- **SSE Development Tool**: Created `tools/dev-sse.js` for proper SSE server development workflow
+  - Launches SSE server on port 3001 (default)
+  - Automatically starts MCP Inspector with correct SSE endpoint (`http://localhost:3001/sse`)
+  - Mirrors `dev-http.js` functionality for consistent development experience
+  - Updated `npm run dev:sse` to use new development script
+
+## Legacy history (pre-fork upstream: mario-andreschak/mcp-abap-adt)
+
+> The entries below predate this fork's version renumbering and were never assigned release numbers under `fr0ster/mcp-abap-adt`. They are retained verbatim for provenance. Version numbers here (1.4.0 and below) belong to the original project and intentionally overlap with the renumbered releases above.
+
+> Package-specific changes (e.g., `@mcp-abap-adt/adt-clients`) are tracked in their respective repositories and npm packages.
+
+### Changed
+- **Dependencies**: Project now uses published npm packages instead of local workspace dependencies:
+  - `@mcp-abap-adt/adt-clients` and `@mcp-abap-adt/connection` are now installed from npm
+  - Removed workspace configuration and git submodules
+  - Updated documentation to reflect npm package usage
+
+### Added
+- **Documentation Restructure**:
+  - New platform-specific installation guides: `INSTALL_WINDOWS.md`, `INSTALL_MACOS.md`, `INSTALL_LINUX.md`
+  - Main entry point: `INSTALLATION.md` with quick links to platform guides
+  - SSE/HTTP transport mode documentation for web-based clients
+  - nvm (Node Version Manager) as recommended installation method for all platforms
+  - Server transport modes documentation: stdio (default for Cline/Cursor) and SSE/HTTP (for web interfaces)
+  - SSE server options: `--sse-port`, `--sse-host`, `--sse-allowed-origins`, `--sse-enable-dns-protection`
+  - Examples for running server in SSE mode: `npm run start:sse`, `npm run start:http`
+- **Transport Request Validation**:
+  - New utility function `validateTransportRequest()` for consistent validation across all Create handlers
+  - Transport request is now optional for `$TMP` (local) package only
+  - Transport request is required for all transportable (non-`$TMP`) packages
+  - Clear error messages guide users to use `package_name: "$TMP"` for local development
+  - Test configuration updated with `$TMP` example in `test-config.yaml.template`
+  - Note: `$TMP` is the only local package in SAP - each user has their own `$TMP`
+- **Domain Management Tools**:
+  - `GetDomain`: Retrieve ABAP domain structure and properties
+  - `CreateDomain`: Create new ABAP domains with automatic activation
+  - Simplified workflow: POST with all properties + Activate + Verify
+  - SAP handles locking automatically on transport
+  - Full test coverage with `test-create-domain.js` and `test-get-domain.js`
+- **Data Element Management Tools**:
+  - `GetDataElement`: Retrieve ABAP data element information including type definition, field labels, and metadata
+  - `CreateDataElement`: Create new ABAP data elements with domain references and field labels
+  - Simplified workflow: POST with full body + Activate + Verify (similar to CreateDomain)
+  - Support for all field labels: short (10), medium (20), long (40), heading (55)
+  - Support for search help, change document, and other data element properties
+  - Full test coverage with `test-create-data-element.js` and `test-get-data-element.js`
+- **Transport Management Tools**:
+  - `CreateTransport`: Create new ABAP transport requests with automatic task creation
+  - `GetTransport`: Retrieve comprehensive transport information with objects and tasks
+  - Eclipse-compatible XML structure with proper Content-Type headers
+  - Support for workbench (K) and customizing (T) transport types
+  - Complete transport metadata parsing and validation
+  - Full test coverage with `test-create-transport.js` and `test-get-transport.js`
+- **Dictionary Objects Management Tools**:
+  - `CreateTable`: Create new ABAP tables with fields, keys, and technical settings
+  - `CreateStructure`: Create new ABAP structures with fields and type references
+  - `GetView`: Retrieve ABAP database view definition including tables, fields, joins, and selection conditions
+  - Comprehensive field definitions with data types, lengths, decimals, key flags, NOT NULL constraints
+  - Support for domain and data element references in field definitions
+  - Table delivery classes (A/C/L/G) and data categories (APPL0/APPL1/APPL2) configuration
+  - Structure includes and field type references (domains, data elements, structures, tables)
+  - View analysis with tables, joins, selection conditions, and optional data retrieval
+  - Full test coverage with `test-create-table.js`, `test-create-structure.js`, and `test-get-view.js`
+- Domain creation creates and activates domain in one operation (3 steps vs Eclipse's 7 steps)
+- Data element creation follows same simplified approach (3 steps vs Eclipse's multiple LOCK/UNLOCK operations)
+- All domain properties (datatype, length, decimals, lowercase, sign, conversion exit, value table) supported
+- All data element properties (domain reference, field labels, type info, search help) supported
+
+### Changed
+- `CreateTable` handler now mirrors Eclipse ADT workflow: status check, `abapCheckRun`, lock cleanup, activation retry, and post-activation ident checks matching SAP behaviour.
+- `BaseAbapConnection` merges session cookies across responses to keep SAP ADT sequences authenticated and clears them on reset.
+- Added dedicated `jest.setup.js` to skip automatic MCP server bootstrap during Jest runs, eliminating TDZ errors in the test environment.
+- Narrowed Jest `testMatch` patterns to `*.test.[tj]s` and removed legacy CLI scripts from the suite to prevent false negatives.
+- Updated `tests/integration/handleGetFunction.int.test.js` to accept either JSON or plain-text payloads and perform case-insensitive source assertions.
+- Translated legacy inline comments and documentation references to English for consistency with project guidelines.
+- MCP protocol compliance: All handler responses now strictly follow the MCP protocol.
+- Removed all `mimeType` and `data` fields from handler responses.
+- For type `"text"` in `content`, only the `text` field is used.
+- For type `"json"` in `content`, only the `json` field is used.
+- Unified response format for all handlers: `{ isError, content: [{ type: "text", text: ... }] }` or `{ isError, content: [{ type: "json", json: ... }] }`.
+- Fixed all MCP client errors related to invalid response format.
+- Updated documentation and handler tables to reflect new response format.
+- Added two new tools for batch ABAP object type detection:
+  - DetectObjectTypeListArray: accepts array of objects via 'objects' parameter.
+  - DetectObjectTypeListJson: accepts JSON payload with 'objects' array via 'payload' parameter.
+- Added documentation for both tools: see [DetectObjectTypeListTools.md](docs/development/DetectObjectTypeListTools.md).
+- Repository URL changed from `mario-andreschak/mcp-abap-adt` to `fr0ster/mcp-abap-adt`
+- Added acknowledgment to original project in README.md
+- **All Create handlers updated**:
+  - `CreateDomain`, `CreateDataElement`, `CreateClass`, `CreateProgram`, `CreateInterface`
+  - `CreateFunctionGroup`, `CreateTable`, `CreateStructure`, `CreateView`
+  - All now validate transport_request based on package type ($TMP vs transportable)
+  - `transport_request` parameter removed from `required` fields in tool schemas where applicable
+
+### Removed
+- **Deprecated Documentation Files**:
+  - Removed `INSTALLATION_GUIDE_EN.md`, `INSTALLATION_GUIDE_UA.md`, `INSTALLATION_GUIDE_BY.md` (replaced by platform-specific guides)
+  - Removed Smithery automatic installation instructions (not supported)
+  - Removed Smithery badge from README.md
+  - Removed all references to `@mario-andreschak/mcp-abap-adt` package
+
+### Added
+- New MCP tool: `DetectObjectTypeList`
+  - Batch detection of ABAP object types by a list of names.
+  - Input: `{ global: [{ name: string, type?: string }] }`
+  - Output: `{ isError: boolean, content: Array<{ name, detectedType, description, shortText, longText, text, package, uri }> }`
+  - Available via MCP API and web interface.
+  - All comments and documentation in English.
+
+### Changed
+- All handler modules now use a unified in-memory caching mechanism via `objectsListCache`. This provides consistent, easily swappable cache logic across the codebase.
+- The `filePath` parameter and all file write logic have been removed from all handlers. Handler results are now only cached in memory, not written to disk.
+- This refactor improves maintainability, testability, and performance by eliminating redundant file operations and centralizing cache management.
+
+## [1.4.0] - 2025-07-08
+
+### Added
+- All MCP handler functions now support an optional `filePath` parameter. If provided, the handler will save the result to the specified file path (any absolute or relative path, with any extension).
+- All CLI test scripts now accept the `--filePath=...` argument to save the result to a file.
+- The result written to file is exactly what is returned to the user (no extra formatting or caching).
+- Improved error logging and debug output for file writing operations.
+- Updated documentation and usage examples in README.md to reflect new file output support.
+- Implemented utility `writeResultToFile` for safe file writing with directory restriction and logging.
+
+## [1.3.0] - 2025-07-08
+
+### Added
+- Added integration test `tests/integration/handleGetFunction.int.test.js` for handleGetFunction.
+- Significantly expanded integration test coverage in `src/index.test.ts` for all main tools (GetProgram, GetClass, GetFunctionGroup, GetFunction, GetTable, GetStructure, GetTableContents, GetPackage, GetInclude, GetTypeInfo, GetInterface, GetTransaction, GetEnhancements, GetSqlQuery, SearchObject).
+- Added new checks for advanced scenarios (e.g., SQL generation, error handling, enhancement XML parsing).
+
+### Changed
+- Updated documentation regarding testing and integration scenarios.
+
+## [1.2.0] - 2025-07-02
+
+### Changed
+- `GetWhereUsed` now supports any ADT object type (e.g. table/TABL, bdef/BDEF, etc.), not just class, program, include, function, interface, package.
+- Updated documentation in README.md and jsdoc for supported object types and usage examples.
+
+## [1.1.0] - 2025-02-19
+
+### Added
+- New `GetTransaction` tool to retrieve ABAP transaction details.
+  - Allows fetching transaction details using the ADT endpoint `/sap/bc/adt/repository/informationsystem/objectproperties/values`.
+  - Added documentation in README.md.
+
+## [0.1.2] - 2025-02-18
+
+### Changed
+- Added Jest Test Script `index.test.ts` available through `npm test`
+- Enhanced `makeAdtRequest` method to support:
+  - Custom headers through an optional parameter
+  - Query parameters through an optional `params` parameter
+- Improved `handleGetPackage` method to use ADT's nodeContent API
+  - Now uses POST request with proper XML payload
+  - Added specific content type headers for nodeContent endpoint
+  - Added filtering to return only objects with URI 
+- Improved CSRF token handling in utils.ts
+  - Added automatic CSRF token fetching for POST/PUT requests
+  - Enhanced token extraction to work with error responses
+  - Added cookie management for better session handling
+  - Implemented singleton axios instance for consistent state
+  - Added proper cleanup for test environments
+
+## [0.1.1] - 2025-02-13
+
+### Added
+- New `GetInterface` tool to retrieve ABAP interface source code
+  - Allows fetching source code of ABAP interfaces using the ADT endpoint `/sap/bc/adt/oo/interfaces/`
+  - Similar functionality to GetClass but for interfaces
+  - Added documentation in README.md
+
+## [0.1.0] - Initial Release
+
+### Added
+- Initial release of the MCP ABAP ADT server
+- Basic ABAP object retrieval functionality
+- Support for programs, classes, function modules, and more
+- Documentation and setup instructions

@@ -1,0 +1,107 @@
+import { DiagnosticSeverity, TextDocument, Range } from "vscode-languageserver"
+import { ADTClient } from "abap-adt-api"
+import { AbapObjectDetail } from "vscode-abap-remote-fs-sharedapi"
+import { clientKeyFromUrl, clientFromKey } from "./clientManager"
+import { getObject } from "./objectManager"
+import { getEditorObjectSource } from "./clientapis"
+import { toInt, parts } from "./functions"
+
+const startIdent = /^((<?[\w]+>?)|(\/\w+\/\w+))/
+const endIdent = /((<?[\w]+>?)|(\/\w+\/\w+))$/
+
+/**
+ * Return true when the range points to a single cursor position.
+ */
+export const rangeIsEmpty = (r: Range) =>
+  r.start.line === r.end.line && r.start.character === r.end.character
+
+/**
+ * Map the ABAP severity letter to the LSP diagnostic severity used by the client.
+ */
+export function decodeSeverity(severity: string) {
+  switch (severity) {
+    case "E":
+    case "A":
+    case "X":
+      return DiagnosticSeverity.Error
+    case "W":
+      return DiagnosticSeverity.Warning
+    case "I":
+    case "S":
+      return DiagnosticSeverity.Information
+  }
+  return DiagnosticSeverity.Warning
+}
+
+/**
+ * Narrow an unknown value to a string for document and URI handling.
+ */
+export const isString = (s: unknown): s is string => typeof s === "string"
+
+/**
+ * Build a diagnostic range that spans the identifier under the given cursor or line position.
+ */
+export function sourceRange(
+  document: TextDocument | string,
+  oline: number,
+  character: number
+): Range {
+  const line = oline === 0 ? 0 : oline - 1
+  if (isString(document)) {
+    const lineText = document.split("\n")[line]
+    const lastwordm = lineText.substr(0, character).match(endIdent)
+    const start = { line, character }
+    if (lastwordm) start.character -= lastwordm[1].length
+    const end = { line, character: character + 1000 }
+    const match = lineText.substr(start.character).match(startIdent)
+    end.character = start.character + (match ? match[1].length : 1)
+    return { start, end }
+  } else {
+    const start = { line, character }
+    const end = { line, character: character + 1000 }
+    const match = document.getText({ start, end }).match(startIdent)
+    end.character = start.character + (match ? match[1].length : 1)
+    return { start, end }
+  }
+}
+
+/**
+ * Decode a VS Code URI fragment that contains the start and end positions of a selection.
+ */
+export function rangeFromUri(uri: string): Range | undefined {
+  const [startl, startc, endl, endc] = parts(uri, /\#(?:.*;)?start=(\d+),(\d+);end=(\d+),(\d+)/)
+  if (endc)
+    return {
+      start: { line: toInt(startl) - 1, character: toInt(startc) },
+      end: { line: toInt(endl) - 1, character: toInt(endc) }
+    }
+  return
+}
+
+/**
+ * Shape of the client, object, and source payload used by the server when resolving ABAP content.
+ */
+export interface ClientAndObject {
+  confKey: string
+  client: ADTClient
+  obj: AbapObjectDetail
+  source: string
+}
+
+/**
+ * Resolve the active ADT client, object metadata, and optionally the source text for a given URI.
+ */
+export async function clientAndObjfromUrl(
+  uri: string,
+  withSource: boolean = true
+): Promise<ClientAndObject | undefined> {
+  const confKey = clientKeyFromUrl(uri)
+  if (!confKey) return
+  const client = await clientFromKey(confKey)
+  if (!client) return
+  const obj = await getObject(uri)
+  if (!obj) return
+  const source = withSource ? await getEditorObjectSource(uri) : ""
+
+  return { confKey, client, obj, source }
+}

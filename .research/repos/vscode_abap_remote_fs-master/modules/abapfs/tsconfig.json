@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "experimentalDecorators": true,
+    "module": "commonjs",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "target": "ES2019",
+    "rootDir": "src",
+    "outDir": "out",
+    "lib": [
+      "es2019"
+    ],
+    "types": [
+      "node"
+    ],
+    "sourceMap": true,
+    "strict": true,
+    "noUnusedLocals": false,
+    "composite": true,
+    /* Incremental Compilation */
+    "incremental": true,
+    "tsBuildInfoFile": ".tsbuildinfo",
+    "skipLibCheck": true
+  },
+  "include": [
+    "src",
+    "./src/testdata/*.json",
+    "../abapObject/out/**/*"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

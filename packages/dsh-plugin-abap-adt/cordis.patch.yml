@@ -1,0 +1,19 @@
+# @abap-adt/dsh-plugin bundle patch.
+#
+# Installed into a dsh profile as a bundle layer: registers the ABAP ADT
+# plugin, which exposes the `adt_*` tool family to the agent. Override the
+# `destinations` config in the profile's own cordis.patch.yml (same id) to
+# point at real SAP systems; passwords are read from config or environment
+# variables (ADT_<DESTINATION_NAME>_PASSWORD / ADT_PASSWORD), never stored
+# in this file.
+
+- insert:
+    - id: abap-adt
+      name: '@abap-adt/dsh-plugin'
+      config:
+        # Demo mode starts an in-process mock ADT server ("demo" destination)
+        # so the tool family works end-to-end without any SAP system.
+        demo: true
+        demoPort: 8123
+        defaultDestination: demo
+        destinations: []

@@ -1,0 +1,125 @@
+/**
+ * UpdateCdsUnitTest Handler - Update CDS unit test class via AdtClient
+ *
+ * Uses AdtClient.getCdsUnitTest().update() for CDS-specific update operation.
+ */
+
+import { createAdtClient } from '../../../lib/clients';
+import type { HandlerContext } from '../../../lib/handlers/interfaces';
+import {
+  type AxiosResponse,
+  extractAdtErrorMessage,
+  return_error,
+  return_response,
+} from '../../../lib/utils';
+import type { CdsUnitTestWrites } from './cdsUnitTestWrites';
+
+export const TOOL_DEFINITION = {
+  name: 'UpdateCdsUnitTest',
+  available_in: ['onprem', 'cloud', 'legacy'] as const,
+  description: 'Update a CDS unit test class local test class source code.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      class_name: {
+        type: 'string',
+        description: 'Global test class name (e.g., ZCL_CDS_TEST).',
+      },
+      test_class_source: {
+        type: 'string',
+        description: 'Updated local test class ABAP source code.',
+      },
+      transport_request: {
+        type: 'string',
+        description:
+          'Transport request number (required for transportable packages).',
+      },
+    },
+    required: ['class_name', 'test_class_source'],
+  },
+} as const;
+
+interface UpdateCdsUnitTestArgs {
+  class_name: string;
+  test_class_source: string;
+  transport_request?: string;
+}
+
+/**
+ * Main handler for UpdateCdsUnitTest MCP tool
+ *
+ * Uses AdtClient.getCdsUnitTest().update() - CDS-specific update operation
+ */
+export async function handleUpdateCdsUnitTest(
+  context: HandlerContext,
+  args: UpdateCdsUnitTestArgs,
+) {
+  const { connection, logger } = context;
+  try {
+    const { class_name, test_class_source, transport_request } =
+      args as UpdateCdsUnitTestArgs;
+
+    if (!class_name || !test_class_source) {
+      return return_error(
+        new Error('Missing required parameters: class_name, test_class_source'),
+      );
+    }
+
+    const className = class_name.toUpperCase();
+
+    const client = createAdtClient(connection, logger);
+    // See CdsUnitTestWrites: the accessor's declared type omits update/delete,
+    // which AdtCdsUnitTest implements.
+    const cdsUnitTest = client.getCdsUnitTest() as unknown as CdsUnitTestWrites;
+
+    logger?.info(`Updating CDS unit test class source: ${className}`);
+
+    try {
+      const updateResult = await cdsUnitTest.update({
+        className,
+        testClassSource: test_class_source,
+        transportRequest: transport_request,
+      });
+
+      if (!updateResult?.testClassState) {
+        throw new Error(
+          `Update did not return a response for CDS unit test class ${className}`,
+        );
+      }
+
+      logger?.info(`✅ UpdateCdsUnitTest completed successfully: ${className}`);
+
+      // Extract safe fields — testClassState contains AxiosResponse objects
+      // with circular references that cannot be JSON.stringified
+      const safeState = {
+        testClassCode: updateResult.testClassState?.testClassCode,
+        lockHandle: updateResult.testClassState?.lockHandle,
+        errors: updateResult.testClassState?.errors,
+      };
+
+      return return_response({
+        data: JSON.stringify(
+          {
+            success: true,
+            class_name: className,
+            test_class_state: safeState,
+            message: `CDS unit test class ${className} updated successfully.`,
+          },
+          null,
+          2,
+        ),
+      } as AxiosResponse);
+    } catch (error: any) {
+      const detailedError = extractAdtErrorMessage(
+        error,
+        `Failed to update CDS unit test class ${className}`,
+      );
+      logger?.error(
+        `Error updating CDS unit test class ${className}: ${detailedError}`,
+      );
+      return return_error(new Error(detailedError));
+    }
+  } catch (error: any) {
+    return return_error(error);
+  }
+}

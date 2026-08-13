@@ -1,0 +1,153 @@
+import { connection, log } from "./clientManager"
+import { objectIsValid } from "vscode-abap-remote-fs-sharedapi"
+import { TextDocument, Diagnostic } from "vscode-languageserver"
+import { getObject, vscUrl } from "./objectManager"
+import { documents } from "./server"
+import { sourceRange, decodeSeverity, clientAndObjfromUrl } from "./utilities"
+import { callThrottler, caughtToString } from "./functions"
+import { memoize, debounce } from "lodash"
+
+const oldDiagKeys = new Map<string, string[]>()
+
+const throttler = callThrottler<void>()
+
+// Debounce timers per document to avoid hammering SAP during rapid typing
+const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const DEBOUNCE_DELAY = 500 // Wait 500ms after last keystroke before checking
+
+// Normalize URI encoding to avoid %24 vs $ mismatch
+const normalizeUri = (uri: string) => decodeURIComponent(uri)
+
+// Debounced syntax check - waits for user to stop typing before making API call.
+/**
+ * Trigger a syntax validation request after a short pause so rapid typing does not flood the backend.
+ */
+export function syntaxCheck(document: TextDocument) {
+  const { uri } = document
+
+  // Clear any existing timer for this document
+  const existingTimer = debounceTimers.get(uri)
+  if (existingTimer) {
+    clearTimeout(existingTimer)
+  }
+
+  // Set new timer - will execute after user stops typing
+  const timer = setTimeout(() => {
+    debounceTimers.delete(uri)
+    // IMPORTANT: Get the CURRENT document at execution time, not the stale captured reference
+    // The user may have typed more since syntaxCheck was called
+    const currentDoc = documents.get(uri)
+    if (currentDoc) {
+      throttler(uri, () => runSyntaxCheck(currentDoc))
+    }
+  }, DEBOUNCE_DELAY)
+
+  debounceTimers.set(uri, timer)
+}
+
+async function runSyntaxCheck(document: TextDocument) {
+  const normalizedDocUri = normalizeUri(document.uri)
+  const diagmap = new Map<string, Diagnostic[]>()
+  const oldKeys = oldDiagKeys.get(normalizedDocUri)
+  if (oldKeys) {
+    for (const k of oldKeys) diagmap.set(k, [])
+  }
+  diagmap.set(normalizedDocUri, [])
+  try {
+    const co = await clientAndObjfromUrl(normalizedDocUri, false)
+    if (!co) return
+
+    const obj = await getObject(normalizedDocUri)
+    if (!obj) return
+
+    // If this is an include without a main program, try to discover one BEFORE validation
+    if (obj.type === "PROG/I" && !obj.mainProgram) {
+      try {
+        const mainProgs = await co.client.statelessClone.mainPrograms(obj.url)
+        if (mainProgs && mainProgs.length > 0) {
+          obj.mainProgram = mainProgs[0]["adtcore:uri"]
+        } else {
+          return
+        }
+      } catch (error) {
+        return
+      }
+    }
+
+    // Now check validity after potentially adding main program
+    if (!objectIsValid(obj)) return
+
+    // Get inactive (working) version of source code for related files
+    const getSource = memoize((c: string) =>
+      co.client.statelessClone.getObjectSource(c, { version: "inactive" })
+    )
+    // For secondary URIs (includes, related objects), always treat as main to normalize contextual paths
+    const getUri = memoize((uri: string) => vscUrl(co.confKey, uri, true))
+    const getdiag = (key: string) => {
+      let diag = diagmap.get(key)
+      if (!diag) {
+        diag = []
+        diagmap.set(key, diag)
+      }
+      return diag
+    }
+
+    const source = document.getText()
+    const checks = await co.client.statelessClone.syntaxCheck(
+      obj.url,
+      obj.mainUrl,
+      source,
+      obj.mainProgram
+    )
+
+    // Continue even if no checks - this means code is valid and we should clear old diagnostics
+    // Only abort if checks is null/undefined (which indicates an error in the API call)
+
+    for (const c of checks || []) {
+      let diagnostics
+      let range
+      if (c.uri === obj.mainUrl) {
+        diagnostics = getdiag(normalizedDocUri)
+        range = sourceRange(document, c.line, c.offset)
+      } else {
+        const uri = await getUri(c.uri)
+        if (!uri) continue
+
+        const normalizedUri = normalizeUri(uri)
+
+        // Try to find the open document first (use editor's text for accurate line numbers)
+        const openDoc = documents.all().find(d => normalizeUri(d.uri) === normalizedUri)
+        if (openDoc) {
+          diagnostics = getdiag(normalizedUri)
+          range = sourceRange(openDoc.getText(), c.line, c.offset)
+        } else {
+          const chsrc = await getSource(c.uri)
+          diagnostics = getdiag(normalizedUri)
+          range = sourceRange(chsrc, c.line, c.offset)
+        }
+      }
+      diagnostics.push({
+        message: c.text,
+        range,
+        source: "ABAPfs",
+        severity: decodeSeverity(c.severity)
+      })
+    }
+  } catch (e) {
+    log("Exception in syntax check:", caughtToString(e))
+    return
+  }
+
+  for (const diag of diagmap) {
+    connection.sendDiagnostics({ uri: diag[0], diagnostics: diag[1] })
+  }
+
+  // store a list of the sources with diagnostics generated by this URL
+  // so I will clean them later
+  const newKeys = [...diagmap].filter(e => e[1].length).map(e => e[0])
+  if (newKeys.length) {
+    oldDiagKeys.set(normalizedDocUri, newKeys)
+  } else {
+    oldDiagKeys.delete(normalizedDocUri)
+  }
+}

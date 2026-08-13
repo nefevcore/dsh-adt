@@ -1,0 +1,91 @@
+# Dependency directories
+node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+.smithery/
+*.mcpb
+
+# NPM packages (local builds, releases are on GitHub)
+*.tgz
+!*.tgz  # But allow in releases
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+.mcpregistry_github_token
+.mcpregistry_registry_token
+
+# Test configuration (contains real transport requests and sensitive data)
+tests/test-config.yaml
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+doc/development/logs/*.log
+.getobjectslist.cache.json
+
+# Editor directories and files
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Lock state files (persistent lock handles)
+.locks/
+*.locks.json
+
+# Session state files (cookies, CSRF tokens)
+.sessions/
+*.sessions.json
+
+# Data directory (created by Docker containers)
+data/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Backup files
+*.bak
+
+*sk.json
+*.env
+
+# ANTLR4 generated files
+src/generated/
+tools/antlr/
+fr0ster-mcp-abap-adt-*.tgz
+
+
+
+*.d.ts
+*.d.ts.map
+mdd.json
+package.json
+.npm-cache/**
+SAP_ADT.json
+dev.json
+desktop.ini
+.vscode/mcp.json
+.claude/settings.local.json
+.codex
+.worktrees/

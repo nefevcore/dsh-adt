@@ -1,0 +1,134 @@
+import {
+  SERVICE_BINDING_VARIANT_MAP,
+  type ServiceBindingVariant,
+} from '@mcp-abap-adt/interfaces';
+import { createAdtClient } from '../../../lib/clients';
+import type { HandlerContext } from '../../../lib/handlers/interfaces';
+import { return_error, return_response } from '../../../lib/utils';
+import {
+  parseServiceBindingPayload,
+  type ServiceBindingResponseFormat,
+} from './serviceBindingPayloadUtils';
+
+type DesiredPublicationStateInput = 'published' | 'unpublished' | 'unchanged';
+
+export const TOOL_DEFINITION = {
+  name: 'UpdateServiceBinding',
+  available_in: ['onprem', 'cloud'] as const,
+  description:
+    'Operation: Update, Create. Subject: ServiceBinding. Will be useful for updating or creating service binding. Update publication state of an existing ABAP service binding.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      service_binding_name: {
+        type: 'string',
+        description: 'Service binding name to update.',
+      },
+      desired_publication_state: {
+        type: 'string',
+        enum: ['published', 'unpublished', 'unchanged'],
+        description: 'Target publication state.',
+      },
+      binding_variant: {
+        type: 'string',
+        enum: [
+          'ODATA_V2_UI',
+          'ODATA_V2_WEB_API',
+          'ODATA_V4_UI',
+          'ODATA_V4_WEB_API',
+        ],
+        description:
+          'Service binding variant. Determines OData version for publish/unpublish routing.',
+        default: 'ODATA_V4_UI',
+      },
+      service_name: {
+        type: 'string',
+        description: 'Published service name.',
+      },
+      service_version: {
+        type: 'string',
+        description: 'Published service version. Optional.',
+      },
+      response_format: {
+        type: 'string',
+        enum: ['xml', 'json', 'plain'],
+        default: 'xml',
+      },
+    },
+    required: [
+      'service_binding_name',
+      'desired_publication_state',
+      'binding_variant',
+      'service_name',
+    ],
+  },
+} as const;
+
+interface UpdateServiceBindingArgs {
+  service_binding_name: string;
+  desired_publication_state: DesiredPublicationStateInput;
+  binding_variant?: ServiceBindingVariant;
+  service_name: string;
+  service_version?: string;
+  response_format?: ServiceBindingResponseFormat;
+}
+
+export async function handleUpdateServiceBinding(
+  context: HandlerContext,
+  args: UpdateServiceBindingArgs,
+) {
+  const { connection, logger } = context;
+
+  try {
+    if (!args?.service_binding_name) {
+      throw new Error('service_binding_name is required');
+    }
+    if (!args?.desired_publication_state) {
+      throw new Error('desired_publication_state is required');
+    }
+    if (!args?.service_name) {
+      throw new Error('service_name is required');
+    }
+
+    const serviceBindingName = args.service_binding_name.trim().toUpperCase();
+    const responseFormat = args.response_format ?? 'xml';
+    const bindingVariant: ServiceBindingVariant =
+      args.binding_variant ?? 'ODATA_V4_UI';
+    const { serviceType } = SERVICE_BINDING_VARIANT_MAP[bindingVariant];
+    const serviceName = args.service_name.trim().toUpperCase();
+
+    const client = createAdtClient(connection, logger);
+    const response = await client.getServiceBinding().updateServiceBinding({
+      bindingName: serviceBindingName,
+      desiredPublicationState: args.desired_publication_state,
+      serviceType,
+      serviceName,
+      serviceVersion: args.service_version?.trim() || undefined,
+    });
+
+    return return_response({
+      data: JSON.stringify(
+        {
+          success: true,
+          service_binding_name: serviceBindingName,
+          desired_publication_state: args.desired_publication_state,
+          binding_variant: bindingVariant,
+          service_name: serviceName,
+          service_version: args.service_version || null,
+          response_format: responseFormat,
+          status: response.status,
+          payload: parseServiceBindingPayload(response.data, responseFormat),
+        },
+        null,
+        2,
+      ),
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      config: response.config,
+    });
+  } catch (error: unknown) {
+    logger?.error('Error updating service binding:', error);
+    return return_error(error);
+  }
+}

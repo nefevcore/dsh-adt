@@ -1,0 +1,806 @@
+/**
+ * Configuration helpers for low-level handler integration tests
+ * Loads test configuration from test-config.yaml (shared with adt-clients)
+ */
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { SapConfig } from '@mcp-abap-adt/connection';
+import * as dotenv from 'dotenv';
+import * as yaml from 'js-yaml';
+import { applyCertKerberosFields } from '../../../lib/config/applyAuthFields';
+import { parseAuthType } from '../../../lib/config/parseAuthType';
+import { invalidateConnectionCache } from '../../../lib/utils';
+import { setupAuthBrokerForTests } from './authHelpers';
+import { createTestLogger } from './loggerHelpers';
+
+const configLogger = createTestLogger('config');
+
+let cachedConfig: any = null;
+let envLoaded = false;
+let envLoadError: Error | null = null;
+let brokerAttempted = false;
+let brokerSucceeded = false;
+
+function resolveUseAuthBrokerFlag(): boolean {
+  try {
+    const cfg = loadTestConfig();
+    // If destination is specified, always use auth-broker (ignore .env)
+    const hasDestination =
+      !!cfg?.auth_broker?.abap?.destination ||
+      !!cfg?.abap?.destination ||
+      !!cfg?.environment?.destination ||
+      !!cfg?.abap?.service_keys?.destination ||
+      !!cfg?.abap?.sessions?.destination;
+
+    return (
+      process.env.MCP_USE_AUTH_BROKER === 'true' ||
+      cfg?.auth_broker?.use_auth_broker === true ||
+      cfg?.environment?.use_auth_broker === true ||
+      !!cfg?.auth_broker || // prefer auth-broker if config section exists
+      hasDestination // if destination is specified, always use auth-broker
+    );
+  } catch {
+    return process.env.MCP_USE_AUTH_BROKER === 'true';
+  }
+}
+
+function resolveUnsafeFlag(): boolean {
+  try {
+    const cfg = loadTestConfig();
+    return (
+      process.env.MCP_UNSAFE === 'true' ||
+      cfg?.auth_broker?.unsafe === true ||
+      cfg?.auth_broker?.unsafe_session_store === true
+    );
+  } catch {
+    return process.env.MCP_UNSAFE === 'true';
+  }
+}
+
+/**
+ * Load environment variables from .env file
+ * Priority:
+ * 1. Check if already loaded (SAP_URL exists)
+ * 2. Use MCP_ENV_PATH if set
+ * 3. Try current working directory (where test was run from)
+ * 4. Fallback to project root (for tests run from project root)
+ *
+ * Also attempts to refresh tokens using AuthBroker if destination is available
+ */
+export async function loadTestEnv(): Promise<void> {
+  if (envLoaded) {
+    return;
+  }
+  if (envLoadError) {
+    throw envLoadError;
+  }
+
+  const useUnsafe = resolveUnsafeFlag();
+  if (useUnsafe) {
+    process.env.MCP_UNSAFE = 'true';
+  }
+
+  let envPath: string | null = null;
+
+  // Priority 0: Use environment.env from test-config.yaml (e.g., "e77.env")
+  // Path is resolved relative to project root (tests/../)
+  try {
+    const cfg = loadTestConfig();
+    const envFile = cfg?.environment?.env;
+    if (envFile) {
+      const projectRoot = path.resolve(__dirname, '../../../..');
+      const resolved = path.resolve(projectRoot, envFile);
+      if (fs.existsSync(resolved)) {
+        envPath = resolved;
+        configLogger?.debug(
+          `[loadTestEnv] Resolved environment.env="${envFile}" → ${envPath}`,
+        );
+      } else {
+        configLogger?.warn(
+          `⚠️ environment.env="${envFile}" specified but file not found at: ${resolved}`,
+        );
+      }
+    }
+  } catch {
+    // no config
+  }
+
+  // If environment.env is not set, try auth broker or fallback .env chain
+  if (!envPath) {
+    const useAuthBroker = resolveUseAuthBrokerFlag();
+    let brokerOk = brokerSucceeded;
+
+    if (useAuthBroker) {
+      try {
+        brokerAttempted = true;
+        await setupAuthBrokerForTests({ force: true });
+        brokerOk = !!process.env.SAP_URL;
+        brokerSucceeded = brokerOk;
+      } catch (error: any) {
+        configLogger?.warn(
+          `[loadTestEnv] Auth-broker failed: ${error?.message || String(error)}`,
+        );
+      }
+
+      if (brokerOk && process.env.SAP_URL) {
+        envLoaded = true;
+        return;
+      }
+
+      if (useAuthBroker) {
+        configLogger?.warn(
+          `[loadTestEnv] Auth-broker failed but destination is configured. Not loading .env file.`,
+        );
+        envLoaded = true;
+        return;
+      }
+    }
+  }
+
+  // Priority 1: Use MCP_ENV_PATH if explicitly set
+  if (!envPath && process.env.MCP_ENV_PATH) {
+    const resolvedPath = path.resolve(process.env.MCP_ENV_PATH);
+    if (fs.existsSync(resolvedPath)) {
+      envPath = resolvedPath;
+    }
+  }
+
+  // Priority 2: Try current working directory (where test was run from)
+  if (!envPath) {
+    const cwdEnvPath = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(cwdEnvPath)) {
+      envPath = cwdEnvPath;
+    }
+  }
+
+  // Priority 3: Fallback to project root (for tests run from project root)
+  if (!envPath) {
+    const projectRootEnvPath = path.resolve(__dirname, '../../../../.env');
+    if (fs.existsSync(projectRootEnvPath)) {
+      envPath = projectRootEnvPath;
+    }
+  }
+
+  // Load .env file if found
+  if (envPath) {
+    const result = dotenv.config({
+      path: envPath,
+      quiet: true,
+      override: true,
+    });
+    if (result.error) {
+      configLogger?.warn(`⚠️ Failed to load .env file: ${result.error.message}`);
+    } else {
+      logEnvLoaded(envPath);
+      try {
+        invalidateConnectionCache();
+      } catch {
+        // ignore
+      }
+    }
+  } else {
+    configLogger?.warn(
+      '⚠️ No .env file found. Set environment.env in test-config.yaml.',
+    );
+  }
+
+  // Apply explicit overrides from test-config.yaml
+  try {
+    const cfg = loadTestConfig();
+    if (cfg?.environment?.connection_type) {
+      process.env.SAP_CONNECTION_TYPE = cfg.environment.connection_type;
+    }
+    if (cfg?.environment?.system_type) {
+      process.env.SAP_SYSTEM_TYPE = cfg.environment.system_type;
+    }
+  } catch {
+    // ignore
+  }
+
+  // Final guard: require SAP_URL
+  if (!process.env.SAP_URL) {
+    envLoadError = new Error(
+      'SAP_URL is not set. Set environment.env in test-config.yaml pointing to a valid .env file.',
+    );
+    throw envLoadError;
+  }
+
+  envLoaded = true;
+}
+
+/**
+ * Log environment loaded status
+ */
+function logEnvLoaded(envPath: string): void {
+  // Log refresh token availability for debugging
+  const hasRefreshToken = !!process.env.SAP_REFRESH_TOKEN?.trim();
+  const hasUaaUrl = !!process.env.SAP_UAA_URL;
+  const hasUaaClientId = !!process.env.SAP_UAA_CLIENT_ID;
+  const hasUaaClientSecret = !!process.env.SAP_UAA_CLIENT_SECRET;
+  configLogger?.debug(`[DEBUG] loadTestEnv - Loaded .env from: ${envPath}`);
+  configLogger?.debug(
+    `[DEBUG] loadTestEnv - Refresh token config: ${JSON.stringify({
+      hasRefreshToken,
+      hasUaaUrl,
+      hasUaaClientId,
+      hasUaaClientSecret,
+      canRefresh:
+        hasRefreshToken && hasUaaUrl && hasUaaClientId && hasUaaClientSecret,
+    })}`,
+  );
+}
+
+/**
+ * Load test configuration from YAML
+ * Uses test-config.yaml from mcp-abap-adt/tests
+ */
+export function loadTestConfig(): any {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+
+  // Load from mcp-abap-adt/tests/test-config.yaml
+  const configPath = path.resolve(
+    __dirname,
+    '../../../../tests/test-config.yaml',
+  );
+  const templatePath = path.resolve(
+    __dirname,
+    '../../../../tests/test-config.yaml.template',
+  );
+
+  if (fs.existsSync(configPath)) {
+    const configContent = fs.readFileSync(configPath, 'utf8');
+    cachedConfig = (yaml.load(configContent) as Record<string, unknown>) || {};
+    return cachedConfig;
+  }
+
+  if (fs.existsSync(templatePath)) {
+    configLogger?.warn(
+      '⚠️ tests/test-config.yaml not found. Using template (all integration tests will be disabled).',
+    );
+    const templateContent = fs.readFileSync(templatePath, 'utf8');
+    cachedConfig =
+      (yaml.load(templateContent) as Record<string, unknown>) || {};
+    return cachedConfig;
+  }
+
+  configLogger?.error('❌ Test configuration files not found.');
+  configLogger?.error(
+    'Please create tests/test-config.yaml with test parameters.',
+  );
+  return {};
+}
+
+/**
+ * Get enabled test case for a handler
+ * @param handlerName - Handler name (e.g., 'create_class_low', 'lock_class_low')
+ * @param testCaseName - Optional: specific test case name
+ */
+export function getEnabledTestCase(
+  handlerName: string,
+  testCaseName?: string,
+): any {
+  const config = loadTestConfig();
+  const handlerTests = config[handlerName]?.test_cases || [];
+
+  if (handlerTests.length === 0) {
+    configLogger?.debug(
+      `[DEBUG] No test cases found for handler: ${handlerName}`,
+    );
+    return null;
+  }
+
+  let enabledTest;
+  if (testCaseName) {
+    const testCase = handlerTests.find((tc: any) => tc.name === testCaseName);
+    if (!testCase) {
+      configLogger?.debug(
+        `[DEBUG] Test case "${testCaseName}" not found for handler: ${handlerName}`,
+      );
+      return null;
+    }
+    if (testCase.enabled !== true) {
+      configLogger?.info(
+        `⏭️  Test case "${testCaseName}" for handler "${handlerName}" is disabled (enabled: ${testCase.enabled})`,
+      );
+      return null;
+    }
+    enabledTest = testCase;
+  } else {
+    enabledTest = handlerTests.find((tc: any) => tc.enabled === true);
+    if (!enabledTest) {
+      const disabledTests = handlerTests.filter(
+        (tc: any) => tc.enabled === false,
+      );
+      if (disabledTests.length > 0) {
+        configLogger?.info(
+          `⏭️  All test cases for handler "${handlerName}" are disabled (${disabledTests.length} test case(s) found, all disabled)`,
+        );
+      } else {
+        configLogger?.debug(
+          `[DEBUG] No enabled test cases found for handler: ${handlerName}`,
+        );
+      }
+      return null;
+    }
+  }
+
+  return enabledTest;
+}
+
+/**
+ * Get shared object configuration from shared_objects section.
+ * Shared objects are prerequisites used by multiple tests (e.g., BDEF for BehaviorImplementation).
+ */
+export function getSharedObject(key: string): any {
+  const config = loadTestConfig();
+  return config?.shared_objects?.[key] ?? null;
+}
+
+/**
+ * Get shared_dependencies configuration section.
+ * Shared dependencies are persistent prerequisite objects (tables, views, BDEFs)
+ * created once and reused across all tests.
+ */
+export function getSharedDependenciesConfig(): any {
+  const config = loadTestConfig();
+  return config?.shared_dependencies ?? null;
+}
+
+/**
+ * Resolve a shared dependency by type and name.
+ * @param type - 'tables' | 'views' | 'behavior_definitions'
+ * @param name - Object name (e.g., "ZMCP_SHR_TABLE01")
+ */
+export function resolveSharedDependency(
+  type: string,
+  name: string,
+): any | null {
+  const sharedConfig = getSharedDependenciesConfig();
+  if (!sharedConfig) return null;
+  const collection = sharedConfig[type];
+  if (!Array.isArray(collection)) return null;
+  return (
+    collection.find(
+      (item: any) =>
+        String(item.name).toUpperCase() === String(name).toUpperCase(),
+    ) ?? null
+  );
+}
+
+/**
+ * Get test case definition
+ */
+export function getTestCaseDefinition(
+  handlerName: string,
+  testCaseName: string,
+): any {
+  const config = loadTestConfig();
+  const handlerTests = config[handlerName]?.test_cases || [];
+  return handlerTests.find((tc: any) => tc.name === testCaseName) || null;
+}
+
+/**
+ * Get timeout for operation type
+ */
+export function getTimeout(operationType: string = 'default'): number {
+  const config = loadTestConfig();
+  const timeouts = config.test_settings?.timeouts || {};
+  return timeouts[operationType] || timeouts.default || 60000;
+}
+
+/**
+ * Build SAP config for tests from environment variables (auth-broker or .env)
+ */
+export function getSapConfigFromEnv(): SapConfig {
+  const urlRaw = process.env.SAP_URL?.trim();
+  if (!urlRaw) {
+    throw new Error(
+      'SAP_URL is not set. Ensure auth-broker or .env provided credentials.',
+    );
+  }
+
+  let url: string;
+  try {
+    const normalized = new URL(urlRaw);
+    url = normalized.href.replace(/\/$/, '');
+  } catch (err) {
+    throw new Error(`Invalid SAP_URL: ${urlRaw}`);
+  }
+
+  const authType: SapConfig['authType'] = parseAuthType(process.env);
+
+  const connectionType: SapConfig['connectionType'] =
+    process.env.SAP_CONNECTION_TYPE?.trim().toLowerCase() === 'rfc'
+      ? 'rfc'
+      : undefined;
+
+  const config: SapConfig = {
+    url,
+    authType,
+    ...(connectionType && { connectionType }),
+  };
+
+  if (authType === 'jwt') {
+    config.jwtToken = process.env.SAP_JWT_TOKEN || '';
+    if (process.env.SAP_REFRESH_TOKEN) {
+      config.refreshToken = process.env.SAP_REFRESH_TOKEN;
+    }
+    if (process.env.SAP_UAA_URL) {
+      config.uaaUrl = process.env.SAP_UAA_URL;
+    }
+    if (process.env.SAP_UAA_CLIENT_ID) {
+      config.uaaClientId = process.env.SAP_UAA_CLIENT_ID;
+    }
+    if (process.env.SAP_UAA_CLIENT_SECRET) {
+      config.uaaClientSecret = process.env.SAP_UAA_CLIENT_SECRET;
+    }
+  } else if (applyCertKerberosFields(config, process.env)) {
+    // certificate / kerberos: no username/password required
+  } else {
+    config.username = process.env.SAP_USERNAME || '';
+    config.password = process.env.SAP_PASSWORD || '';
+  }
+
+  if (process.env.SAP_CLIENT) {
+    config.client = process.env.SAP_CLIENT.trim();
+  }
+  if (process.env.SAP_LANGUAGE) {
+    (config as any).language = process.env.SAP_LANGUAGE.trim();
+  }
+
+  return config;
+}
+
+/**
+ * Resolve system context (masterSystem + responsible) from YAML config and env vars.
+ * Used by test infrastructure to populate system context before creating AdtClient.
+ */
+export function resolveTestSystemContext(): {
+  masterSystem?: string;
+  responsible?: string;
+} {
+  const config = loadTestConfig();
+  return {
+    masterSystem:
+      config.environment?.default_master_system ||
+      process.env.SAP_MASTER_SYSTEM,
+    responsible:
+      config.environment?.default_responsible ||
+      process.env.SAP_RESPONSIBLE ||
+      process.env.SAP_USERNAME,
+  };
+}
+
+/**
+ * Get operation delay
+ */
+export function getOperationDelay(operation: string, testCase?: any): number {
+  // Check test case specific delay first
+  if (testCase?.params?.operation_delays?.[operation]) {
+    return testCase.params.operation_delays[operation];
+  }
+
+  // Check global config
+  const config = loadTestConfig();
+  const delays = config.test_settings?.operation_delays || {};
+  return delays[operation] || delays.default || 3000;
+}
+
+/**
+ * Resolve package name (from test case or default)
+ */
+export function resolvePackageName(testCase?: any): string {
+  let packageName: string;
+
+  if (testCase?.params?.package_name) {
+    packageName = String(testCase.params.package_name).trim();
+  } else {
+    const config = loadTestConfig();
+    packageName = (config.environment?.default_package || 'ZOK_LOCAL').trim();
+  }
+
+  // Validate for placeholders
+  const placeholderPattern = /<[A-Z_]+>/i;
+  if (placeholderPattern.test(packageName)) {
+    throw new Error(
+      `❌ Package name contains placeholder value: "${packageName}"\n` +
+        `Please update tests/test-config.yaml and replace with actual package name.`,
+    );
+  }
+
+  return packageName;
+}
+
+/**
+ * Resolve transport request (from test case or default)
+ */
+export function resolveTransportRequest(testCase?: any): string | undefined {
+  let transportRequest: string | undefined;
+
+  // Check if transport_request key explicitly exists in test case params
+  // This allows overriding to "no transport" by setting transport_request: "" or null in YAML
+  // (e.g., for $TMP package which does not require a transport request)
+  const hasExplicitTransport =
+    testCase?.params != null &&
+    'transport_request' in (testCase.params as Record<string, unknown>);
+
+  if (hasExplicitTransport) {
+    const raw = testCase.params.transport_request;
+    transportRequest = raw ? String(raw).trim() : undefined;
+  } else {
+    const config = loadTestConfig();
+    const defaultTransport = config.environment?.default_transport;
+    transportRequest = defaultTransport
+      ? String(defaultTransport).trim()
+      : undefined;
+  }
+
+  // Validate for placeholders (only if value is provided)
+  if (transportRequest) {
+    const placeholderPattern = /<[A-Z_]+>/i;
+    if (placeholderPattern.test(transportRequest)) {
+      throw new Error(
+        `❌ Transport request contains placeholder value: "${transportRequest}"\n` +
+          `Please update tests/test-config.yaml and replace with actual transport request or leave empty.`,
+      );
+    }
+  }
+
+  return transportRequest || undefined;
+}
+
+/**
+ * Get cleanup_after setting from configuration
+ * Checks test case specific setting first, then falls back to global environment.cleanup_after
+ * Priority:
+ * 1. Global skip_cleanup flag (environment.skip_cleanup)
+ * 2. Test case skip_cleanup flag (testCase.params.skip_cleanup)
+ * 3. Test case cleanup_after flag (testCase.params.cleanup_after)
+ * 4. Global cleanup_after flag (environment.cleanup_after)
+ * 5. Default: true (cleanup enabled by default)
+ * @param testCase - Optional test case object (may have params.cleanup_after or params.skip_cleanup)
+ * @returns true if cleanup should be performed, false otherwise
+ */
+export function getCleanupAfter(testCase?: any): boolean {
+  const config = loadTestConfig();
+
+  // Global skip flag has highest priority
+  if (config.environment?.skip_cleanup === true) {
+    return false;
+  }
+
+  // Test case specific skip flag (overrides global cleanup_after)
+  if (testCase?.params?.skip_cleanup === true) {
+    return false;
+  }
+
+  // Check test case specific setting (overrides global)
+  if (testCase?.params?.cleanup_after !== undefined) {
+    return testCase.params.cleanup_after === true;
+  }
+
+  // Fallback to global environment.cleanup_after
+  const globalCleanupAfter = config.environment?.cleanup_after;
+
+  // Default to true if not specified (backward compatibility)
+  return globalCleanupAfter !== false;
+}
+
+/**
+ * Check if current connection is cloud (JWT auth) or on-premise (basic auth).
+ * Programs/FunctionGroups are not available on cloud, so tests should be skipped.
+ *
+ * Detection order:
+ * 1. lib/utils sessionContext (when MCP server is running in-process)
+ * 2. process.env.SAP_JWT_TOKEN (set by test globalSetup from auth broker)
+ * 3. test-config.yaml auth_type field
+ */
+export function isCloudConnection(): boolean {
+  try {
+    const { isCloudConnection: utilsIsCloud } = require('../../../lib/utils');
+    if (utilsIsCloud()) return true;
+  } catch {
+    // lib/utils not available or sessionContext not set
+  }
+
+  // Fallback: check env vars set by loadTestEnv / auth broker
+  if (process.env.SAP_JWT_TOKEN) {
+    return true;
+  }
+
+  // Fallback: check session file for hard mode destination (JWT = cloud)
+  try {
+    const config = loadTestConfig();
+    const destination =
+      config?.hard_mode?.mcp_destination ||
+      config?.auth_broker?.abap?.destination ||
+      config?.environment?.destination;
+    if (destination) {
+      const os = require('node:os');
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const sessionFile = path.join(
+        os.homedir(),
+        '.config',
+        'mcp-abap-adt',
+        'sessions',
+        `${destination}.env`,
+      );
+      if (fs.existsSync(sessionFile)) {
+        const content = fs.readFileSync(sessionFile, 'utf8');
+        if (content.includes('SAP_JWT_TOKEN=')) return true;
+      }
+    }
+  } catch {
+    // no config or session file
+  }
+
+  return false;
+}
+
+/**
+ * Get current system type based on connection detection.
+ *
+ * Returns 'cloud', 'onprem', or 'legacy'.
+ * Detection: JWT auth → cloud, otherwise onprem.
+ * Legacy can be set via test-config.yaml `environment.system_type: legacy`.
+ */
+export function getSystemType(): 'cloud' | 'onprem' | 'legacy' {
+  // Check explicit override in test config
+  try {
+    const config = loadTestConfig();
+    const explicitType = config?.environment?.system_type;
+    if (
+      explicitType === 'cloud' ||
+      explicitType === 'onprem' ||
+      explicitType === 'legacy'
+    ) {
+      return explicitType;
+    }
+  } catch {
+    // no config
+  }
+
+  return isCloudConnection() ? 'cloud' : 'onprem';
+}
+
+/**
+ * Check if a test case is available for the current system type.
+ * Compares test case `available_in` array against `getSystemType()`.
+ *
+ * @returns true if test should run, false if it should be skipped
+ */
+export function isTestAvailableForSystem(availableIn?: string[]): boolean {
+  if (!availableIn || availableIn.length === 0) return true;
+  return availableIn.includes(getSystemType());
+}
+
+/**
+ * Pre-check test parameters before running test
+ * Verifies package existence and logs transport request if specified
+ * @param client - AdtClient instance (optional, if not provided, checks are skipped)
+ * @param packageName - Package name to verify (optional)
+ * @param transportRequest - Transport request (optional, only logged)
+ * @param superPackage - Super package (parent package) to verify (optional, for package tests)
+ * @param testLabel - Label for test (for error messages)
+ * @returns Object with success flag and optional reason for skipping
+ */
+export async function preCheckTestParameters(
+  client: any,
+  packageName?: string,
+  transportRequest?: string,
+  superPackage?: string,
+  testLabel: string = 'test',
+): Promise<{ success: boolean; reason?: string }> {
+  const extractStatus = (checkState: any): number | undefined => {
+    return checkState?.checkResult?.status ?? checkState?.status;
+  };
+
+  // Pre-check: Verify super package exists (if specified - for package tests)
+  if (superPackage && client) {
+    try {
+      configLogger?.debug(
+        `[PRE_CHECK] Checking super package (parent) existence: ${superPackage}`,
+      );
+      const superPackageCheck = await client.getPackage().check({
+        packageName: superPackage,
+        superPackage: undefined,
+      });
+      const superPackageStatus = extractStatus(superPackageCheck);
+      if (
+        superPackageStatus !== undefined &&
+        superPackageStatus !== null &&
+        superPackageStatus !== 200
+      ) {
+        const reason = `Super package (parent) ${superPackage} check returned status ${superPackageStatus}. Parent package must exist before creating child package.`;
+        configLogger?.error(`❌ ${reason}`);
+        return { success: false, reason };
+      } else {
+        configLogger?.debug(
+          `[PRE_CHECK] ✓ Super package (parent) ${superPackage} exists and is accessible`,
+        );
+      }
+    } catch (superPackageError: any) {
+      const status = superPackageError.response?.status;
+      if (status === 404) {
+        const reason = `Super package (parent) ${superPackage} does not exist! Please create it before running the ${testLabel}.`;
+        configLogger?.error(`❌ ${reason}`);
+        return { success: false, reason };
+      } else {
+        const reason = `Cannot verify super package (parent) ${superPackage} (HTTP ${status}): ${superPackageError.message}`;
+        configLogger?.warn(`⚠️  ${reason}`);
+        configLogger?.warn(
+          `⚠️  Continuing ${testLabel}, but it may fail if parent package is not accessible.`,
+        );
+        // Don't fail test, just warn
+      }
+    }
+  }
+
+  // Pre-check: Verify package exists (if specified)
+  // Note: For package creation tests, if superPackage is provided, we skip checking packageName
+  // because it's expected that the package doesn't exist yet (we're creating it)
+  if (packageName && client && !superPackage) {
+    // Only check package if we're not creating a child package (no superPackage)
+    try {
+      configLogger?.debug(
+        `[PRE_CHECK] Checking package existence: ${packageName}`,
+      );
+      const packageCheck = await client.getPackage().check({
+        packageName,
+        superPackage: undefined,
+      });
+      const packageStatus = extractStatus(packageCheck);
+      if (
+        packageStatus !== undefined &&
+        packageStatus !== null &&
+        packageStatus !== 200
+      ) {
+        const reason = `Package ${packageName} check returned status ${packageStatus}. Test may fail.`;
+        configLogger?.warn(`⚠️  ${reason}`);
+        return { success: false, reason };
+      } else {
+        configLogger?.debug(
+          `[PRE_CHECK] ✓ Package ${packageName} exists and is accessible`,
+        );
+      }
+    } catch (packageError: any) {
+      const status = packageError.response?.status;
+      if (status === 404) {
+        // For package creation tests, 404 is expected (package doesn't exist yet)
+        configLogger?.debug(
+          `[PRE_CHECK] ✓ Package ${packageName} does not exist (expected for creation test)`,
+        );
+      } else {
+        const reason = `Cannot verify package ${packageName} (HTTP ${status}): ${packageError.message}`;
+        configLogger?.warn(`⚠️  ${reason}`);
+        configLogger?.warn(
+          `⚠️  Continuing ${testLabel}, but it may fail if package is not accessible.`,
+        );
+        // Don't fail test, just warn
+      }
+    }
+  } else if (packageName && superPackage) {
+    // For package creation tests with superPackage, we skip checking packageName
+    configLogger?.debug(
+      `[PRE_CHECK] Skipping package ${packageName} check (will be created as child of ${superPackage})`,
+    );
+  }
+
+  // Pre-check: Log transport request if specified
+  if (transportRequest?.trim()) {
+    configLogger?.debug(
+      `[PRE_CHECK] Transport request specified: ${transportRequest}`,
+    );
+    // Note: Transport request validation would require additional API call
+    // For now, we just log that it's specified
+    configLogger?.info(
+      `ℹ️  Transport request specified: ${transportRequest} (not validated - ensure it exists)`,
+    );
+  }
+
+  return { success: true };
+}

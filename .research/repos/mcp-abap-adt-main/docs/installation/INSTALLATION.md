@@ -1,0 +1,580 @@
+# MCP ABAP ADT Server - Installation Guide
+
+Complete installation guide for MCP ABAP ADT Server across different platforms.
+
+## 📋 Quick Links
+
+- **[Windows Installation](./platforms/INSTALL_WINDOWS.md)** - Using PowerShell and winget
+- **[macOS Installation](./platforms/INSTALL_MACOS.md)** - Using Homebrew
+- **[Linux Installation](./platforms/INSTALL_LINUX.md)** - Using package managers
+
+## 🎯 What You'll Get
+
+After installation, you'll be able to:
+- Work with SAP ABAP systems through MCP protocol
+- Integrate ABAP development with AI tools (Cline, Cursor, GitHub Copilot)
+- Use 50+ ABAP tools via natural language
+
+## 🔧 Prerequisites
+
+All platforms require:
+- **Node.js** 22 or later
+- **npm** (comes with Node.js)
+- **Git**
+- Access to SAP ABAP system (on-premise or BTP)
+
+## � Installation Methods
+
+There are two main ways to install MCP ABAP ADT Server:
+
+### Method 1: Install from Pre-built Package (Recommended for Production)
+
+Download and install from a pre-built `.tgz` package:
+
+```bash
+# Download the package (replace URL with actual location)
+# Or receive it from your administrator
+
+# Install globally (recommended)
+npm install -g ./mcp-abap-adt-core-<version>.tgz
+
+# Or install locally in your project
+npm install ./mcp-abap-adt-core-<version>.tgz
+```
+
+After installation, you'll have access to:
+- `mcp-abap-adt` - MCP ABAP ADT Server (default: stdio mode)
+- `mcp-abap-adt --transport=stdio` - stdio transport (for MCP clients)
+- `mcp-abap-adt --transport=http` - HTTP server transport
+- `mcp-abap-adt --transport=sse` - SSE transport
+
+**For JWT authentication with service keys**, install the connection package separately:
+```bash
+npm install -g @mcp-abap-adt/connection
+mcp-auth auth -k path/to/service-key.json
+```
+
+**Get help on available options:**
+```bash
+mcp-abap-adt --help
+```
+
+**Setup .env file:**
+
+For basic authentication:
+```bash
+# The server automatically looks for .env in your current directory
+cd ~/my-project
+cat > .env << EOF
+SAP_URL=https://your-sap-system.com
+SAP_CLIENT=100
+SAP_AUTH_TYPE=basic
+SAP_USERNAME=your-username
+SAP_PASSWORD=your-password
+# System type: cloud (default), onprem, or legacy
+# Controls tool availability (e.g. Programs require onprem)
+SAP_SYSTEM_TYPE=onprem
+EOF
+```
+
+For JWT authentication (SAP BTP) with service key:
+```bash
+# Install the connection package globally (one-time setup)
+npm install -g @mcp-abap-adt/connection
+
+# Generate .env file from service key JSON
+mcp-auth auth -k path/to/service-key.json
+
+# This automatically creates/updates .env file with JWT tokens
+```
+
+**Run the server:**
+```bash
+# Default stdio mode (bare command starts stdio; HTTP/SSE require --transport=http/--transport=sse)
+# Note: auth-broker is available for stdio/SSE via `--mcp=<destination>` and for HTTP via destination headers
+mcp-abap-adt
+
+# Force use of auth-broker (service keys), ignore .env file
+# Note: Only works with HTTP/streamable-http transport
+mcp-abap-adt --auth-broker
+
+# stdio mode (for MCP clients, requires .env file or --mcp parameter)
+# Use --mcp parameter to enable auth-broker with stdio transport
+# Example: mcp-abap-adt --transport=stdio --mcp=TRIAL
+mcp-abap-adt --transport=stdio
+
+# Or specify env destination from sessions store
+mcp-abap-adt --env=trial
+
+# Or explicit .env location (uses .env instead of auth-broker)
+mcp-abap-adt --env-path=/path/to/my.env
+mcp-abap-adt --env-path ~/configs/sap-dev.env
+
+# Start HTTP server on custom port
+mcp-abap-adt --transport=http --port=8080
+```
+
+**Environment File Priority:**
+1. Path specified via `--env-path` (or `MCP_ENV_PATH`)  
+2. Destination file via `--env=<destination>`:
+   - Unix: `~/.config/mcp-abap-adt/sessions/<destination>.env`
+   - Windows: `%USERPROFILE%\\Documents\\mcp-abap-adt\\sessions\\<destination>.env`
+3. `.env` in current working directory (where you run the command)
+
+This means you can have different `.env` files for different projects and the server will automatically use the one in your current directory.
+
+See [Package Installation Guide](#package-installation-details) below for detailed instructions.
+
+### Method 2: Install from Source (Recommended for Development)
+
+Clone the repository and build from source:
+
+```bash
+# Clone with submodules
+git clone --recurse-submodules https://github.com/fr0ster/mcp-abap-adt.git
+cd mcp-abap-adt
+
+# Install dependencies and build
+npm install
+npm run build
+
+# Run the server
+npm start
+```
+
+This method is recommended if you want to:
+- Contribute to development
+- Customize the server
+- Build your own package
+
+---
+
+## �🚀 Quick Start
+
+Choose your platform:
+
+### Windows
+```powershell
+# Install Node.js via winget
+winget install OpenJS.NodeJS.LTS
+
+# Clone with submodules and build
+git clone --recurse-submodules https://github.com/fr0ster/mcp-abap-adt.git
+cd mcp-abap-adt
+npm install
+npm run build
+```
+
+### macOS
+```bash
+# Install Node.js via Homebrew
+brew install node
+
+# Clone with submodules and build
+git clone --recurse-submodules https://github.com/fr0ster/mcp-abap-adt.git
+cd mcp-abap-adt
+npm install
+npm run build
+```
+
+### Linux
+```bash
+# Install Node.js (Ubuntu/Debian)
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Clone with submodules and build
+git clone --recurse-submodules https://github.com/fr0ster/mcp-abap-adt.git
+cd mcp-abap-adt
+npm install
+npm run build
+```
+
+### 📦 Working with Git Submodules
+
+This project uses a git submodule for the `@mcp-abap-adt/connection` package. If you've already cloned the repository without submodules, initialize them:
+
+```bash
+# Initialize and update submodules
+git submodule update --init --recursive
+```
+
+To update submodules to their latest commits:
+
+```bash
+# Update all submodules
+# Dependencies are automatically installed via npm install
+# To update to latest versions, run:
+npm update @mcp-abap-adt/connection @mcp-abap-adt/adt-clients
+```
+
+## ⚠️ Important: Workspace Setup
+
+This project uses **npm workspaces** to manage multiple packages (`@mcp-abap-adt/connection`, `@mcp-abap-adt/adt-clients`). 
+
+**❌ DO NOT run `npm install` in individual package directories!**
+
+**✅ Correct installation process:**
+
+1. **Only run `npm install` in the root directory:**
+   ```bash
+   cd mcp-abap-adt
+   npm install
+   ```
+   This will automatically install dependencies for all workspace packages.
+
+2. **Build all packages from root:**
+   ```bash
+   npm run build
+   ```
+   This will build all workspace packages in the correct order, then build the main project.
+
+**Why?** 
+- npm workspaces automatically link packages together
+- Running `npm install` in root installs all dependencies for all packages
+- The build script ensures packages are built in the correct order (dependencies first)
+- Using `npx tsc` ensures TypeScript is found from `node_modules` without global installation
+
+**If you get errors:**
+- `tsc: command not found` → Make sure you ran `npm install` in the root directory (TypeScript is in `devDependencies`)
+- `Cannot find module '@mcp-abap-adt/connection'` → Run `npm install` in root, then `npm run build` (packages need to be built first)
+
+---
+
+## 📦 Package Installation Details
+
+### Installing from Pre-built Package
+
+The pre-built package (`mcp-abap-adt-core-<version>.tgz`) contains everything you need to run the server without building from source.
+
+#### Prerequisites
+- Node.js 22 or later
+- npm 9 or later
+
+#### Global Installation (Recommended)
+
+Install globally to use commands from anywhere:
+
+```bash
+# Install from local package file
+npm install -g ./mcp-abap-adt-core-<version>.tgz
+
+# Verify installation
+mcp-abap-adt --help
+mcp-abap-adt --transport=http --help
+mcp-abap-adt --transport=sse --help
+```
+
+**Available commands after global installation:**
+
+```bash
+# Default stdio mode (HTTP/SSE require --transport=http/--transport=sse)
+mcp-abap-adt
+
+# Force use of auth-broker (service keys), ignore .env file
+mcp-abap-adt --auth-broker
+
+# stdio mode (for MCP clients, requires .env file or --mcp parameter for auth-broker)
+mcp-abap-adt --transport=stdio
+
+# Use .env file instead of auth-broker
+mcp-abap-adt --env-path=/path/to/.env
+
+# HTTP server transport
+mcp-abap-adt --transport=http --port=3000
+
+# SSE transport
+mcp-abap-adt --transport=sse --port=3001
+```
+
+**For JWT authentication with service keys**, install separately:
+```bash
+npm install -g @mcp-abap-adt/connection
+mcp-auth auth -k path/to/service-key.json
+```
+
+#### Local Installation (Project-specific)
+
+Install in your project directory:
+
+```bash
+# Navigate to your project
+cd /path/to/your/project
+
+# Install the package
+npm install /path/to/mcp-abap-adt-core-<version>.tgz
+
+# Use via npx
+npx mcp-abap-adt --transport=http --port=3000
+```
+
+#### Configuration
+
+The server supports two authentication methods:
+
+1. **Service Keys (Auth-Broker)** - Recommended for multi-destination scenarios
+2. **.env File** - Traditional single-configuration approach
+
+##### Option 1: Service Keys (Auth-Broker) - Default
+
+By default, the server uses auth-broker (service keys) for authentication. This is the recommended approach when working with multiple destinations.
+
+**Setup:**
+```bash
+# Create service key directory (Unix)
+mkdir -p ~/.config/mcp-abap-adt/service-keys
+
+# Create service key file (e.g., TRIAL.json)
+cat > ~/.config/mcp-abap-adt/service-keys/TRIAL.json << 'EOF'
+{
+  "uaa": {
+    "url": "https://your-uaa-url.com",
+    "clientid": "your-client-id",
+    "clientsecret": "your-client-secret"
+  },
+  "url": "https://your-sap-url.com"
+}
+EOF
+
+# Run server (uses auth-broker by default)
+mcp-abap-adt
+
+# Or explicitly force auth-broker
+mcp-abap-adt --auth-broker
+```
+
+**Using destinations in HTTP headers:**
+```json
+{
+  "headers": {
+    "x-sap-destination": "TRIAL"
+  }
+}
+```
+
+See [Client Configuration Guide](../user-guide/CLIENT_CONFIGURATION.md#destination-based-authentication) for details.
+
+##### Option 2: .env File
+
+For single-configuration scenarios, you can use a `.env` file:
+
+After installation, create a `.env` file with your SAP connection details:
+
+```bash
+# Create .env file
+cat > .env << 'EOF'
+SAP_URL=https://your-sap-system.com
+SAP_CLIENT=100
+SAP_AUTH_TYPE=jwt
+SAP_JWT_TOKEN=your-jwt-token
+# System type: cloud (default), onprem, or legacy
+SAP_SYSTEM_TYPE=cloud
+EOF
+```
+
+Or use a custom environment file:
+
+```bash
+mcp-abap-adt --transport=http --env-path /path/to/custom/.env --port=3000
+```
+
+#### Usage Examples
+
+**Example 1: Start HTTP server on default port (3000)**
+```bash
+mcp-abap-adt --transport=http
+```
+
+**Example 2: Start HTTP server on custom port**
+```bash
+mcp-abap-adt --transport=http --port=8080
+```
+
+**Example 3: Start HTTP server accessible from network**
+```bash
+mcp-abap-adt --transport=http --host=0.0.0.0 --port=3000
+```
+
+**Example 4: Use custom environment file**
+```bash
+mcp-abap-adt --transport=http --env-path /opt/config/.env.production --port=8080
+```
+
+**Example 5: Start SSE server**
+```bash
+mcp-abap-adt --transport=sse --port=3000
+```
+
+#### Command Line Options
+
+All server commands (`mcp-abap-adt`, `mcp-abap-adt --transport=http`, `mcp-abap-adt --transport=sse`) support the following options:
+
+**General Options:**
+- `--help` - Show complete help message with all available options
+- `--auth-broker` - Force use of auth-broker (service keys), ignore .env file
+- `--auth-broker-path=<path>` - Custom path for auth-broker service keys and sessions
+  - Creates `service-keys` and `sessions` subdirectories in the specified path
+  - Directories are created automatically if they don't exist
+  - Example: `--auth-broker-path=~/prj/tmp/` uses `~/prj/tmp/service-keys/` and `~/prj/tmp/sessions/`
+  - Can be used together with `--auth-broker` flag
+- `--env=<destination>` - Destination env file from sessions store (`<destination>.env`)
+- `--env-path=<path|file>` - Explicit path to `.env` file (uses .env instead of auth-broker)
+
+**Note:** By default (when no flags are specified), the server checks for `.env` in the current directory first. If `.env` exists, it is used automatically. If not, auth-broker is used. Use `--auth-broker` to force auth-broker even when `.env` exists.
+
+**Transport Selection:**
+- `--transport=<type>` - Transport type: `stdio`, `http`, `streamable-http`, or `sse`
+
+**HTTP Server Options (for `mcp-abap-adt --transport=http`):**
+- `--host=<host>` - Server host (default: 127.0.0.1; use 0.0.0.0 for all interfaces)
+- `--port=<port>` - Server port (default: 3000 for http)
+- `--path=<path>` / `--http-path=<path>` (alias) - HTTP endpoint path (default: /mcp/stream/http)
+- `--http-json-response` - Enable JSON response format
+- `--http-allowed-hosts=<list>` - Comma-separated exact Host header values for DNS-rebinding protection (includes port, e.g. `localhost:3000`)
+- `--http-allowed-origins=<list>` - Comma-separated exact Origin header values for DNS-rebinding protection (includes scheme, e.g. `https://app.example.com`)
+- `--http-enable-dns-protection` - Enable Host/Origin allowlist validation (NOT browser CORS — no Access-Control-Allow-Origin headers are emitted); needs at least one list set; non-allowlisted Host/Origin → HTTP 403
+
+**SSE Server Options (for `mcp-abap-adt --transport=sse`):**
+- `--host=<host>` - Server host (default: 127.0.0.1; use 0.0.0.0 for all interfaces)
+- `--port=<port>` - Server port (default: 3001 for sse)
+- `--sse-path=<path>` - SSE connection path (default: /sse)
+- `--post-path=<path>` - SSE message post path (default: /messages)
+- `--sse-allowed-hosts=<list>` - Comma-separated exact Host header values for DNS-rebinding protection (includes port, e.g. `localhost:3001`)
+- `--sse-allowed-origins=<list>` - Comma-separated exact Origin header values for DNS-rebinding protection (includes scheme, e.g. `https://app.example.com`)
+- `--sse-enable-dns-protection` - Enable Host/Origin allowlist validation (NOT browser CORS — no Access-Control-Allow-Origin headers are emitted); needs at least one list set; non-allowlisted Host/Origin → HTTP 403
+
+**Environment Variables:**
+
+You can also configure the server using environment variables.
+
+*MCP Server Configuration:*
+- `MCP_ENV_PATH` - Explicit path to `.env` file (same as `--env-path`)
+- `MCP_SKIP_ENV_LOAD` - Skip automatic .env loading (true|false)
+- `MCP_TRANSPORT` - Default transport type (stdio|http|sse)
+- `MCP_HTTP_PORT` - Default HTTP port
+- `MCP_HTTP_HOST` - Default HTTP host (default: 127.0.0.1)
+- `MCP_HTTP_ALLOWED_HOSTS` - Comma-separated exact Host header values (DNS-rebinding protection; includes port, e.g. `localhost:3000`)
+- `MCP_HTTP_ALLOWED_ORIGINS` - Comma-separated exact Origin header values (DNS-rebinding protection; includes scheme)
+- `MCP_HTTP_ENABLE_DNS_PROTECTION` - Enable HTTP Host/Origin allowlist validation (true|false; NOT browser CORS — no Access-Control-Allow-Origin headers are emitted)
+- `MCP_SSE_PORT` - Default SSE port
+- `MCP_SSE_HOST` - Default SSE host (default: 127.0.0.1)
+- `MCP_SSE_ALLOWED_HOSTS` - Comma-separated exact Host header values (DNS-rebinding protection; includes port, e.g. `localhost:3001`)
+- `MCP_SSE_ALLOWED_ORIGINS` - Comma-separated exact Origin header values (DNS-rebinding protection; includes scheme)
+- `MCP_SSE_ENABLE_DNS_PROTECTION` - Enable SSE Host/Origin allowlist validation (true|false; NOT browser CORS — no Access-Control-Allow-Origin headers are emitted)
+- `MCP_UNSAFE` - Disable connection validation (true|false)
+- `MCP_USE_AUTH_BROKER` - Force auth-broker usage (true|false)
+- `MCP_BROWSER` - Browser for OAuth2 flow (e.g., chrome, firefox)
+
+*Auth-Broker:*
+- `AUTH_BROKER_PATH` - Custom paths for service keys and sessions
+- `DEBUG_AUTH_LOG` - Enable auth-broker debug logging (true|false)
+
+*Debug Options:*
+- `DEBUG_HANDLERS` - Enable handler debug logging (true|false)
+- `DEBUG_CONNECTORS` - Enable connector debug logging (true|false)
+- `DEBUG_CONNECTION_MANAGER` - Enable connection manager debug logging (true|false)
+- `HANDLER_LOG_SILENT` - Disable all handler logs (true|false)
+
+*SAP Connection (in .env file):*
+- `SAP_URL` - SAP system URL (required)
+- `SAP_CLIENT` - SAP client number (required)
+- `SAP_AUTH_TYPE` - Authentication type: basic|jwt (default: basic)
+- `SAP_SYSTEM_TYPE` - System type: `cloud` (default), `onprem`, or `legacy`. Controls tool availability (e.g. Programs require `onprem`)
+- `SAP_USERNAME` - SAP username (for basic auth)
+- `SAP_PASSWORD` - SAP password (for basic auth)
+- `SAP_LANGUAGE` - SAP language (optional, e.g., EN, DE)
+- `SAP_JWT_TOKEN` - JWT token (for jwt auth)
+- `SAP_REFRESH_TOKEN` - Refresh token for token renewal
+- `SAP_UAA_URL` - UAA URL for OAuth2
+- `SAP_UAA_CLIENT_ID` - UAA Client ID
+- `SAP_UAA_CLIENT_SECRET` - UAA Client Secret
+
+For complete list see [CLI Options](../user-guide/CLI_OPTIONS.md#environment-variables)
+
+**Examples with Options:**
+
+```bash
+# Show help
+mcp-abap-adt --help
+
+# Use custom .env from different location
+mcp-abap-adt --env=~/configs/sap-production.env
+
+# Start HTTP server
+mcp-abap-adt --transport=http --port=8080
+
+# Start SSE server
+mcp-abap-adt --transport=sse --port=3001
+```
+
+**Example 6: Use stdio transport (for MCP clients)**
+```bash
+mcp-abap-adt
+```
+
+#### Updating the Package
+
+To update to a newer version:
+
+```bash
+# Uninstall old version
+npm uninstall -g @mcp-abap-adt/core
+
+# Install new version
+npm install -g ./mcp-abap-adt-core-<version>.tgz
+```
+
+#### Troubleshooting Package Installation
+
+**Issue: Command not found after global installation**
+
+Solution:
+```bash
+# Check npm global bin directory
+npm config get prefix
+
+# Add to PATH if needed (Linux/macOS)
+export PATH="$(npm config get prefix)/bin:$PATH"
+
+# Or on Windows (PowerShell)
+$env:PATH += ";$(npm config get prefix)"
+```
+
+**Issue: Permission denied (Linux/macOS)**
+
+Solution:
+```bash
+# Use sudo for global installation
+sudo npm install -g ./mcp-abap-adt-core-<version>.tgz
+
+# Or configure npm to use a different directory (recommended)
+mkdir ~/.npm-global
+npm config set prefix '~/.npm-global'
+echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
+
+# Then install without sudo
+npm install -g ./mcp-abap-adt-core-<version>.tgz
+```
+
+---
+
+## 📖 Detailed Guides
+
+For detailed platform-specific instructions, see:
+- [Windows Installation Guide](./platforms/INSTALL_WINDOWS.md)
+- [macOS Installation Guide](./platforms/INSTALL_MACOS.md)
+- [Linux Installation Guide](./platforms/INSTALL_LINUX.md)
+
+## 🔗 Next Steps
+
+After installation:
+1. [Configure SAP Connection](../user-guide/CLIENT_CONFIGURATION.md)
+2. [Review CLI Options](../user-guide/CLI_OPTIONS.md)
+3. [Explore Available Tools](../user-guide/AVAILABLE_TOOLS.md)
+
+## 💡 Need Help?
+
+- [Client Configuration Guide](../user-guide/CLIENT_CONFIGURATION.md)
+- [User Guide Overview](../user-guide/README.md)
+- [GitHub Issues](https://github.com/fr0ster/mcp-abap-adt/issues)

@@ -1,0 +1,146 @@
+/**
+ * CreateMetadataExtension Handler - ABAP Metadata Extension Creation via ADT API
+ */
+
+import { createAdtClient } from '../../../lib/clients';
+import type { HandlerContext } from '../../../lib/handlers/interfaces';
+import { return_error, return_response } from '../../../lib/utils';
+import { validateTransportRequest } from '../../../utils/transportValidation.js';
+export const TOOL_DEFINITION = {
+  name: 'CreateMetadataExtension',
+  available_in: ['onprem', 'cloud'] as const,
+  description:
+    'Operation: Create. Subject: MetadataExtension. Will be useful for creating metadata extension. Create a new ABAP Metadata Extension (DDLX) in SAP system. Creates the metadata extension object in initial state.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: {
+        type: 'string',
+        description: 'Metadata Extension name',
+      },
+      description: {
+        type: 'string',
+        description: 'Description',
+      },
+      package_name: {
+        type: 'string',
+        description: 'Package name',
+      },
+      transport_request: {
+        type: 'string',
+        description: 'Transport request number',
+      },
+      activate: {
+        type: 'boolean',
+        description: 'Activate after creation. Default: true',
+      },
+      master_language: {
+        type: 'string',
+        description:
+          'Optional master/original language for the created object (e.g. "EN", "DE", "ZH"). Defaults to the session language (SAP_LANGUAGE) or EN.',
+      },
+    },
+    required: ['name', 'package_name'],
+  },
+} as const;
+
+interface CreateMetadataExtensionArgs {
+  name: string;
+  description?: string;
+  package_name: string;
+  transport_request?: string;
+  activate?: boolean;
+  master_language?: string;
+}
+
+export async function handleCreateMetadataExtension(
+  context: HandlerContext,
+  params: any,
+) {
+  const { connection, logger } = context;
+  const args: CreateMetadataExtensionArgs = params;
+  if (!args.name || !args.package_name) {
+    return return_error(new Error('Missing required parameters'));
+  }
+
+  try {
+    validateTransportRequest(args.package_name, args.transport_request);
+  } catch (error) {
+    return return_error(error as Error);
+  }
+
+  const name = args.name.toUpperCase();
+
+  logger?.info(`Starting DDLX creation: ${name}`);
+
+  try {
+    const client = createAdtClient(connection, logger);
+    const shouldActivate = args.activate !== false;
+
+    // Create
+    await client.getMetadataExtension().create({
+      name,
+      description: args.description || name,
+      packageName: args.package_name,
+      transportRequest: args.transport_request || '',
+      masterLanguage: args.master_language,
+    });
+
+    // Lock
+    const lockHandle = await client.getMetadataExtension().lock({ name: name });
+
+    try {
+      // Check
+      await client.getMetadataExtension().check({ name: name });
+
+      // Unlock
+      await client.getMetadataExtension().unlock({ name: name }, lockHandle);
+
+      // Wait for object to be ready after update (long polling)
+      try {
+        await client
+          .getMetadataExtension()
+          .read({ name }, 'inactive', { withLongPolling: true });
+      } catch {
+        // Continue anyway — activation will fail explicitly if object isn't ready
+      }
+
+      // Activate if requested
+      if (shouldActivate) {
+        await client.getMetadataExtension().activate({ name: name });
+      }
+    } catch (error) {
+      // Unlock on error (principle 1: if lock was done, unlock is mandatory)
+      try {
+        await client.getMetadataExtension().unlock({ name: name }, lockHandle);
+      } catch (unlockError) {
+        logger?.error(
+          `Failed to unlock metadata extension after error: ${unlockError instanceof Error ? unlockError.message : String(unlockError)}`,
+        );
+      }
+      // Principle 2: first error and exit
+      throw error;
+    }
+
+    const result = {
+      success: true,
+      name: name,
+      package_name: args.package_name,
+      type: 'DDLX',
+      message: shouldActivate
+        ? `Metadata Extension ${name} created and activated successfully`
+        : `Metadata Extension ${name} created successfully`,
+    };
+
+    return return_response({
+      data: JSON.stringify(result, null, 2),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config: {} as any,
+    });
+  } catch (error: any) {
+    logger?.error(`Error creating DDLX ${name}: ${error?.message || error}`);
+    return return_error(error);
+  }
+}
