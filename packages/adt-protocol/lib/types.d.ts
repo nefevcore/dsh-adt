@@ -200,16 +200,35 @@ export type AdtAtcSeverity = 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL' | 'CATAST
 export interface AdtAtcRunSummary {
     /** Result display id (usable with {@link getAtcResult}). */
     displayId: string;
-    /** User who created/triggered the run, when reported. */
-    createdBy?: string;
+    /** Run title, e.g. `External Request 14.08.2026 07:28:28`. */
+    title?: string;
+    /** ATC check variant used for the run. */
+    checkVariant?: string;
     /** Creation timestamp, when reported. */
     createdAt?: string;
+    /** User who created/triggered the run, when reported. */
+    createdBy?: string;
     /** Run state, when reported. */
     status?: string;
-    /** Kind: `active` (local) vs `central` (central check), when reported. */
+    /** Kind: `central` (central check) vs local, when reported. */
     kind?: string;
+    /** Finding aggregates (priorities 1-4 + failures), when reported. */
+    aggregates?: AdtAtcAggregates;
     /** Any additional attributes the backend reports. */
     attributes: Record<string, string>;
+}
+/** ATC finding severity counts for one run. */
+export interface AdtAtcAggregates {
+    /** Priority 1 (very critical) findings. */
+    priority1: number;
+    /** Priority 2 (critical) findings. */
+    priority2: number;
+    /** Priority 3 (warning) findings. */
+    priority3: number;
+    /** Priority 4 (info) findings. */
+    priority4: number;
+    /** Failed checks. */
+    failures: number;
 }
 /** One ATC finding. */
 export interface AdtAtcFinding {
@@ -244,6 +263,12 @@ export interface AdtAtcResult {
     async?: boolean;
     /** Result display id this result belongs to (when fetched by id). */
     displayId?: string;
+    /** Run title, when the result body reports it. */
+    title?: string;
+    /** Check variant the run used. */
+    checkVariant?: string;
+    /** Aggregated finding counts for the run. */
+    aggregates?: AdtAtcAggregates;
     /** Raw response body, kept when the format is not checkstyle XML. */
     rawXml?: string;
 }

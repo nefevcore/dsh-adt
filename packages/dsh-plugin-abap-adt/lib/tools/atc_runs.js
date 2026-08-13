@@ -52,10 +52,23 @@ export function atcRunTools(deps) {
                             additionalProperties: false,
                             properties: {
                                 displayId: { type: 'string', required: true },
-                                createdBy: { type: 'string' },
+                                title: { type: 'string' },
+                                checkVariant: { type: 'string' },
                                 createdAt: { type: 'string' },
+                                createdBy: { type: 'string' },
                                 status: { type: 'string' },
                                 kind: { type: 'string' },
+                                aggregates: {
+                                    type: 'object',
+                                    additionalProperties: false,
+                                    properties: {
+                                        priority1: { type: 'integer', required: true },
+                                        priority2: { type: 'integer', required: true },
+                                        priority3: { type: 'integer', required: true },
+                                        priority4: { type: 'integer', required: true },
+                                        failures: { type: 'integer', required: true },
+                                    },
+                                },
                                 attributes: { type: 'object', additionalProperties: true },
                             },
                         },
@@ -64,8 +77,14 @@ export function atcRunTools(deps) {
             },
             render: (_args, value) => text([
                 `ATC runs: ${value.count}`,
-                ...value.runs.map((r) => `- ${r.displayId}${r.kind ? ` [${r.kind}]` : ''}${r.status ? ` ${r.status}` : ''}` +
-                    `${r.createdBy ? ` by ${r.createdBy}` : ''}${r.createdAt ? ` at ${r.createdAt}` : ''}`),
+                ...value.runs.map((r) => {
+                    const agg = r.aggregates
+                        ? ` — P1 ${r.aggregates.priority1}, P2 ${r.aggregates.priority2}, P3 ${r.aggregates.priority3}, P4 ${r.aggregates.priority4}`
+                        : '';
+                    return (`- ${r.displayId}${r.title ? ` "${r.title}"` : ''}${r.checkVariant ? ` [${r.checkVariant}]` : ''}` +
+                        `${r.status ? ` ${r.status}` : ''}${r.createdBy ? ` by ${r.createdBy}` : ''}` +
+                        `${r.createdAt ? ` at ${r.createdAt}` : ''}${agg}`);
+                }),
             ].join('\n')),
         },
         execute: async (args) => {
@@ -82,10 +101,13 @@ export function atcRunTools(deps) {
                 count: runs.length,
                 runs: runs.map((r) => ({
                     displayId: r.displayId,
-                    createdBy: r.createdBy,
+                    title: r.title,
+                    checkVariant: r.checkVariant,
                     createdAt: r.createdAt,
+                    createdBy: r.createdBy,
                     status: r.status,
                     kind: r.kind,
+                    aggregates: r.aggregates,
                     attributes: r.attributes,
                 })),
             };
@@ -113,6 +135,8 @@ export function atcRunTools(deps) {
                 additionalProperties: false,
                 properties: {
                     displayId: { type: 'string', required: true },
+                    title: { type: 'string' },
+                    checkVariant: { type: 'string' },
                     clean: { type: 'boolean', required: true },
                     findings: {
                         type: 'array',
@@ -142,15 +166,30 @@ export function atcRunTools(deps) {
                             CATASTROPHIC: { type: 'integer', required: true },
                         },
                     },
+                    aggregates: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                            priority1: { type: 'integer', required: true },
+                            priority2: { type: 'integer', required: true },
+                            priority3: { type: 'integer', required: true },
+                            priority4: { type: 'integer', required: true },
+                            failures: { type: 'integer', required: true },
+                        },
+                    },
                     durationMs: { type: 'integer', required: true },
                     rawXml: { type: 'string' },
                 },
             },
             render: (_args, value) => {
+                const agg = value.aggregates
+                    ? ` (P1 ${value.aggregates.priority1}, P2 ${value.aggregates.priority2}, P3 ${value.aggregates.priority3}, P4 ${value.aggregates.priority4})`
+                    : '';
                 const lines = [
-                    `ATC result ${value.displayId}: ${value.clean ? 'CLEAN' : 'findings'} — ` +
+                    `ATC result ${value.displayId}${value.title ? ` "${value.title}"` : ''}${value.checkVariant ? ` [${value.checkVariant}]` : ''}: ` +
+                        `${value.clean ? 'CLEAN' : 'findings'} — ` +
                         `INFO ${value.counts.INFO}, WARNING ${value.counts.WARNING}, ERROR ${value.counts.ERROR}, ` +
-                        `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC}`,
+                        `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC}${agg}`,
                 ];
                 for (const f of value.findings) {
                     lines.push(`- [${f.severity}] ${f.objectName}${f.line ? `:${f.line}` : ''} — ${f.checkTitle}: ${f.message}`);
@@ -170,6 +209,8 @@ export function atcRunTools(deps) {
             });
             return {
                 displayId: String(args.displayId),
+                title: result.title,
+                checkVariant: result.checkVariant,
                 clean: result.clean,
                 findings: result.findings.map((f) => ({
                     checkTitle: f.checkTitle,
@@ -180,6 +221,7 @@ export function atcRunTools(deps) {
                     check: f.check,
                 })),
                 counts: result.counts,
+                aggregates: result.aggregates,
                 durationMs: result.durationMs,
                 rawXml: result.rawXml,
             };

@@ -718,25 +718,50 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
     const targets = scope
       ? state.objects.filter((o) => scope.includes(o.name.toUpperCase()))
       : state.objects.filter((o) => o.atcFindings && o.atcFindings.length > 0);
-    res.setHeader('Content-Type', 'application/vnd.sap.atc.checkstyle.v1+xml');
-    const files = targets
+    // Real-backend shape: resultList → result → objects → object → findings.
+    res.setHeader('Content-Type', 'application/xml');
+    const objectsXml = targets
       .map((o) => {
-        const errors = (o.atcFindings ?? [])
-          .map(
-            (f) =>
-              `<error message="${xmlEscape(f.message)}" source="${f.check}" line="${f.line ?? 1}" severity="${f.severity === 'CRITICAL' ? 'error' : f.severity.toLowerCase()}"/>`,
-          )
-          .join('\n    ');
-        return `<file name="${o.name}.${o.category}">
-    ${errors}
-  </file>`;
+        const findings = (o.atcFindings ?? [])
+          .map((f, i) => {
+            const priority = f.severity === 'CRITICAL' ? 1 : f.severity === 'ERROR' ? 2 : f.severity === 'WARNING' ? 3 : 4;
+            return `<atcfinding:finding adtcore:uri="/sap/bc/adt/atc/findings/itemid/${displayId}/index/${i + 1}" atcfinding:location="/sap/bc/adt/oo/classes/${o.name.toLowerCase()}/source/main#start=${f.line ?? 1},0" atcfinding:priority="${priority}" atcfinding:checkId="${f.check}" atcfinding:checkTitle="${xmlEscape(f.checkTitle)}" atcfinding:messageId="${f.check}" atcfinding:messageTitle="${xmlEscape(f.message)}" xmlns:atcfinding="http://www.sap.com/adt/atc/finding" xmlns:adtcore="http://www.sap.com/adt/core"/>`;
+          })
+          .join('\n      ');
+        return `<atcobject:object adtcore:uri="/sap/bc/adt/oo/classes/${o.name.toLowerCase()}/source/main" adtcore:type="${o.category}" adtcore:name="${o.name}" adtcore:packageName="${o.packageName}" atcobject:author="DEMO" xmlns:atcobject="http://www.sap.com/adt/atc/object" xmlns:adtcore="http://www.sap.com/adt/core">
+      <atcobject:findings>${findings}</atcobject:findings>
+    </atcobject:object>`;
       })
       .join('\n  ');
+    const counts = { p1: 0, p2: 0, p3: 0, p4: 0 };
+    for (const o of targets) {
+      for (const f of o.atcFindings ?? []) {
+        if (f.severity === 'CRITICAL') counts.p1++;
+        else if (f.severity === 'ERROR') counts.p2++;
+        else if (f.severity === 'WARNING') counts.p3++;
+        else counts.p4++;
+      }
+    }
     res.end(
       adtXml(
-        `<checkstyle version="1.0">
-  ${files}
-</checkstyle>`,
+        `<atcresult:resultList xmlns:atcresult="http://www.sap.com/adt/atc/result" xmlns:adtcore="http://www.sap.com/adt/core">
+  <atcresult:result>
+    <atcresult:displayId>${displayId}</atcresult:displayId>
+    <atcresult:title>Mock ATC run ${displayId.slice(0, 8)}</atcresult:title>
+    <atcresult:checkVariant>DEFAULT</atcresult:checkVariant>
+    <atcresult:createdAt>2026-08-13T12:00:00Z</atcresult:createdAt>
+    <atcresult:aggregates>
+      <atcresult:numPrio1>${counts.p1}</atcresult:numPrio1>
+      <atcresult:numPrio2>${counts.p2}</atcresult:numPrio2>
+      <atcresult:numPrio3>${counts.p3}</atcresult:numPrio3>
+      <atcresult:numPrio4>${counts.p4}</atcresult:numPrio4>
+      <atcresult:numFailure>0</atcresult:numFailure>
+    </atcresult:aggregates>
+    <atcresult:objects>
+  ${objectsXml}
+    </atcresult:objects>
+  </atcresult:result>
+</atcresult:resultList>`,
       ),
     );
     return;
