@@ -1,0 +1,762 @@
+/**
+ * Mock ADT server — implements the subset of the `/sap/bc/adt` REST protocol
+ * needed to exercise the protocol client end-to-end without a real ABAP
+ * system: discovery (AtomPub), search, source read/write on `/source/main`,
+ * `_action=LOCK/UNLOCK` lock protocol, activation with in-body messages,
+ * check runs, async ABAP Unit + ATC runs with JUnit / checkstyle results,
+ * transport requests and object creation via type-specific collections.
+ *
+ * Behaviors mirror the real protocol (verified against open-source clients):
+ * Basic auth, session cookies, CSRF tokens on state-changing requests, and
+ * the correct `application/vnd.sap.*` media types in responses.
+ */
+
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { ADT_BASE } from '@abap-adt/protocol';
+import { OBJECTS, PACKAGES, type MockObject } from './data.js';
+
+export interface MockAdtOptions {
+  port?: number;
+  host?: string;
+  /** Username/password required by Basic auth (default: any). */
+  username?: string;
+  password?: string;
+  systemId?: string;
+  release?: string;
+}
+
+const NS_ADT = 'http://www.sap.com/adt/core';
+const NS_ASX = 'http://www.sap.com/abapxml';
+const NS_EXC = 'http://www.sap.com/adt/xml/exception';
+const NS_CHKL = 'http://www.sap.com/adt/checkresult';
+const NS_CHKRUN = 'http://www.sap.com/adt/checkrun';
+const NS_AUNIT = 'http://www.sap.com/adt/api/aunit';
+const NS_ATC = 'http://www.sap.com/adt/atc';
+
+function xmlEscape(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function adtXml(body: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${body}`;
+}
+
+function errorXml(text: string, type = 'E'): string {
+  return adtXml(
+    `<exc:exception xmlns:exc="${NS_EXC}" exc:type="${type}"><exc:message>${xmlEscape(text)}</exc:message><exc:localizedMessage>${xmlEscape(text)}</exc:localizedMessage></exc:exception>`,
+  );
+}
+
+function sourceXml(obj: MockObject): string {
+  return adtXml(
+    `<adt:object xmlns:adt="${NS_ADT}" uri="${obj.uri}" type="${obj.type}" name="${obj.name}" description="${xmlEscape(obj.description)}" changedAt="${obj.changedAt}" changedBy="${obj.changedBy}" masterLanguage="${obj.masterLanguage}">
+  <adt:code>${xmlEscape(obj.source)}</adt:code>
+</adt:object>`,
+  );
+}
+
+function objectRefXml(obj: MockObject): string {
+  return `<adtcore:objectReference adtcore:uri="${obj.uri}" adtcore:type="${obj.type}" adtcore:name="${obj.name}" adtcore:description="${xmlEscape(obj.description)}" adtcore:packageName="${obj.packageName}"/>`;
+}
+
+function lockResultXml(handle: string, corrnr: string): string {
+  return adtXml(
+    `<asx:abap xmlns:asx="${NS_ASX}" version="1.0">
+  <asx:values>
+    <DATA>
+      <LOCK_HANDLE>${handle}</LOCK_HANDLE>
+      <CORRNR>${corrnr}</CORRNR>
+    </DATA>
+  </asx:values>
+</asx:abap>`,
+  );
+}
+
+interface MockState {
+  objects: MockObject[];
+  locked: Map<string, { handle: string; corrnr: string }>;
+  csrfToken: string;
+  sessions: Set<string>;
+  /** ABAP Unit run id → requested object names (uppercased). */
+  unitRuns: Map<string, string[] | undefined>;
+}
+
+export function createMockAdtServer(options: MockAdtOptions = {}) {
+  const state: MockState = {
+    objects: OBJECTS.map((o) => ({ ...o })),
+    locked: new Map(),
+    csrfToken: randomUUID(),
+    sessions: new Set(),
+    unitRuns: new Map(),
+  };
+
+  const systemId = options.systemId ?? 'MOCK';
+  const release = options.release ?? '757';
+
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      await handle(req, res, state, {
+        state,
+        systemId,
+        release,
+        username: options.username,
+        password: options.password,
+      });
+    } catch (error) {
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`Internal mock error: ${(error as Error).message}`));
+    }
+  });
+
+  return {
+    server,
+    state,
+    async listen(port = options.port ?? 8123): Promise<number> {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, options.host ?? '127.0.0.1', () => resolve());
+      });
+      const address = server.address();
+      return typeof address === 'object' && address ? address.port : port;
+    },
+    close(): Promise<void> {
+      return new Promise((resolve) => server.close(() => resolve()));
+    },
+    /** Access the in-memory object store (tests). */
+    get objects() {
+      return state.objects;
+    },
+  };
+}
+
+async function readBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function parseBasicAuth(req: IncomingMessage): { username: string; password: string } | undefined {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Basic ')) return undefined;
+  const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+  const idx = decoded.indexOf(':');
+  if (idx < 0) return undefined;
+  return { username: decoded.slice(0, idx), password: decoded.slice(idx + 1) };
+}
+
+function setSession(req: IncomingMessage, res: ServerResponse, state: MockState): void {
+  const cookie = req.headers.cookie ?? '';
+  if (cookie.includes('SAP_SESSIONID_MOCK')) return;
+  const id = randomUUID().replace(/-/g, '').toUpperCase();
+  state.sessions.add(id);
+  res.setHeader('Set-Cookie', `SAP_SESSIONID_MOCK_000=${id}; Path=/; HttpOnly`);
+}
+
+function isStateChanging(method: string): boolean {
+  return method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+}
+
+function checkCsrf(req: IncomingMessage, res: ServerResponse, state: MockState): boolean {
+  const header = req.headers['x-csrf-token'];
+  if (!header) {
+    res.statusCode = 403;
+    res.setHeader('X-CSRF-Token', 'Required');
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(errorXml('CSRF token required — fetch it with X-CSRF-Token: fetch first'));
+    return false;
+  }
+  if (header !== state.csrfToken) {
+    res.statusCode = 403;
+    res.setHeader('X-CSRF-Token', 'Required');
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(errorXml('CSRF token invalid'));
+    return false;
+  }
+  return true;
+}
+
+function findObject(state: MockState, uri: string): MockObject | undefined {
+  const candidates = [uri, uri.startsWith(ADT_BASE) ? uri : `${ADT_BASE}${uri}`];
+  return state.objects.find((o) => candidates.includes(o.uri));
+}
+
+function findObjectByName(state: MockState, name: string): MockObject | undefined {
+  const upper = name.toUpperCase();
+  return state.objects.find((o) => o.name.toUpperCase() === upper);
+}
+
+interface Ctx {
+  state: MockState;
+  systemId: string;
+  release: string;
+  username?: string;
+  password?: string;
+}
+
+async function handle(req: IncomingMessage, res: ServerResponse, state: MockState, opts: Ctx): Promise<void> {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, X-CSRF-Token, sap-adt-connection-id, x-sap-adt-sessiontype');
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
+  if (opts.username !== undefined || opts.password !== undefined) {
+    const creds = parseBasicAuth(req);
+    if (!creds || creds.username !== (opts.username ?? '') || creds.password !== (opts.password ?? '')) {
+      res.statusCode = 401;
+      res.setHeader('WWW-Authenticate', 'Basic realm="mock-adt"');
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml('Unauthorized'));
+      return;
+    }
+  }
+
+  setSession(req, res, state);
+
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  let path = url.pathname;
+  if (path.startsWith(ADT_BASE)) path = path.slice(ADT_BASE.length) || '/';
+
+  if (req.headers['x-csrf-token'] === 'fetch') {
+    res.setHeader('X-CSRF-Token', state.csrfToken);
+  }
+
+  // ---- Discovery (AtomPub service doc) ----
+  if (path === '/core/discovery' || path === '/discovery') {
+    res.setHeader('Content-Type', 'application/atomsvc+xml');
+    const collections = [
+      ['/sap/bc/adt/repository/informationsystem', 'application/xml', 'Repository Information System'],
+      ['/sap/bc/adt/repository/activation', 'application/vnd.sap.adt.activation+xml', 'Object Activation'],
+      ['/sap/bc/adt/abapunit/runs', 'application/vnd.sap.adt.api.abapunit.run.v1+xml', 'ABAP Unit'],
+      ['/sap/bc/adt/atc/runs', 'application/vnd.sap.atc.run.parameters.v1+xml', 'ABAP Test Cockpit'],
+      ['/sap/bc/adt/cts/transportrequests', 'application/vnd.sap.adt.transportorganizertree.v1+xml', 'Transport Requests'],
+      ['/sap/bc/adt/packages', 'application/vnd.sap.adt.packages.v2+xml', 'Packages'],
+      ['/sap/bc/adt/oo/classes', 'application/vnd.sap.adt.oo.classes.v4+xml', 'Classes'],
+      ['/sap/bc/adt/oo/interfaces', 'application/vnd.sap.adt.oo.interfaces.v5+xml', 'Interfaces'],
+      ['/sap/bc/adt/programs/programs', 'application/vnd.sap.adt.programs.programs.v2+xml', 'Programs'],
+      ['/sap/bc/adt/ddls/sources', 'application/vnd.sap.adt.ddlSource.v2+xml', 'CDS Data Definitions'],
+      ['/sap/bc/adt/core/system/time', 'application/xml', 'System Time'],
+    ]
+      .map(
+        ([href, accept, title]) =>
+          `<app:collection href="${href}"><atom:title>${title}</atom:title><app:accept>${accept}</app:accept></app:collection>`,
+      )
+      .join('\n    ');
+    res.end(
+      adtXml(
+        `<app:service xmlns:app="http://www.w3.org/2007/app" xmlns:atom="http://www.w3.org/2005/Atom">
+  <app:workspace>
+    <atom:title>${opts.systemId}</atom:title>
+    ${collections}
+  </app:workspace>
+  <feature id="systemId">${opts.systemId}</feature>
+  <feature id="release">${opts.release}</feature>
+  <feature id="SAP_SYSTEM_NAME">${opts.systemId}</feature>
+</app:service>`,
+      ),
+    );
+    return;
+  }
+
+  // ---- Search ----
+  if (path === '/repository/informationsystem/search') {
+    const query = (url.searchParams.get('query') ?? '').toLowerCase();
+    const operation = url.searchParams.get('operation') ?? 'quickSearch';
+    const maxResults = Number(url.searchParams.get('maxResults') ?? 25);
+    res.setHeader('Content-Type', 'application/xml');
+    // Wildcard-aware matching: `Z*` / `*DEMO*` behave like the real ADT search.
+    const matcher = wildcardMatcher(query);
+    const objectHits = state.objects
+      .filter((o) => matcher(o.name) || matcher(o.description))
+      .slice(0, maxResults);
+    const sourceHits =
+      operation === 'quickSearchSource' || operation === 'quickSearch'
+        ? state.objects.filter((o) => o.source.toLowerCase().includes(query)).slice(0, maxResults)
+        : [];
+    const objectXml = objectHits.map(objectRefXml).join('\n  ');
+    const sourceXmlHits = sourceHits
+      .map((o) => {
+        const idx = o.source.toLowerCase().indexOf(query);
+        const from = Math.max(0, idx - 40);
+        const excerpt = o.source.slice(from, idx + query.length + 60).replace(/\n/g, ' ');
+        return `<adtcore:sourceReference adtcore:uri="${o.uri}" adtcore:type="${o.type}" adtcore:name="${o.name}"><adtcore:excerpt>${xmlEscape(excerpt)}</adtcore:excerpt></adtcore:sourceReference>`;
+      })
+      .join('\n  ');
+    res.end(
+      adtXml(
+        `<adtcore:objectReferences xmlns:adtcore="${NS_ADT}">
+  ${objectXml}
+  ${sourceXmlHits}
+</adtcore:objectReferences>`,
+      ),
+    );
+    return;
+  }
+
+  // ---- Node structure (package content) ----
+  if (path === '/repository/nodestructure') {
+    const parentName = (url.searchParams.get('parent_name') ?? '').toUpperCase();
+    const parentType = url.searchParams.get('parent_type') ?? '';
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.repository.nodestructure.v1+xml');
+    if (parentType === 'DEVC/K' || parentName === 'DEVC/K') {
+      const members = state.objects
+        .filter((o) => o.packageName === parentName)
+        .map(
+          (o) =>
+            `<repo:node repo:name="${o.name}" repo:type="${o.type}" repo:description="${xmlEscape(o.description)}" repo:uri="${o.uri}"/>`,
+        )
+        .join('\n  ');
+      res.end(
+        adtXml(
+          `<repo:nodeStructure xmlns:repo="http://www.sap.com/adt/repository" parent_name="${parentName}" parent_type="DEVC/K">
+  ${members}
+</repo:nodeStructure>`,
+        ),
+      );
+      return;
+    }
+    res.end(adtXml(`<repo:nodeStructure xmlns:repo="http://www.sap.com/adt/repository"/>`));
+    return;
+  }
+
+  // ---- Transports ----
+  if (path === '/cts/transportrequests') {
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.transportorganizertree.v1+xml');
+    res.end(
+      adtXml(
+        `<trs:transportRequests xmlns:trs="http://www.sap.com/adt/cts">
+  <trs:request trs:number="S4HK900001" trs:description="Demo request 1" trs:status="M" trs:type="K" trs:user="DEMO" trs:system="${opts.systemId}" trs:client="000"/>
+  <trs:request trs:number="S4HK900002" trs:description="Demo request 2 (released)" trs:status="R" trs:type="K" trs:user="DEMO" trs:system="${opts.systemId}" trs:client="000" trs:target="QAS"/>
+</trs:transportRequests>`,
+      ),
+    );
+    return;
+  }
+  const transportMatch = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/.exec(path);
+  if (transportMatch) {
+    const number = decodeURIComponent(transportMatch[1]!);
+    const action = transportMatch[2];
+    if (action === 'release') {
+      if (!checkCsrf(req, res, state)) return;
+      res.setHeader('Content-Type', 'application/vnd.sap.adt.transportorganizer.v1+xml');
+      res.end(
+        adtXml(
+          `<trs:request xmlns:trs="http://www.sap.com/adt/cts" trs:number="${number}" trs:description="Released by mock" trs:status="R" trs:type="K" trs:user="DEMO" trs:system="${opts.systemId}" trs:client="000" trs:target="QAS"/>`,
+        ),
+      );
+      return;
+    }
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.transportorganizer.v1+xml');
+    const items = state.objects
+      .slice(0, 3)
+      .map(
+        (o) =>
+          `<trs:item trs:uri="${o.uri}" trs:type="${o.type}" trs:name="${o.name}" trs:description="${xmlEscape(o.description)}" trs:action="I"/>`,
+      )
+      .join('\n  ');
+    res.end(
+      adtXml(
+        `<trs:request xmlns:trs="http://www.sap.com/adt/cts" trs:number="${number}" trs:description="Demo request" trs:status="${number.endsWith('002') ? 'R' : 'M'}" trs:type="K" trs:user="DEMO" trs:system="${opts.systemId}" trs:client="000">
+  ${items}
+</trs:request>`,
+      ),
+    );
+    return;
+  }
+
+  // ---- Object creation (type-specific collections) ----
+  const createMatch = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|msgclass|packages)$/.exec(path);
+  if (createMatch && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const body = await readBody(req);
+    const nameMatch = /(?:class|intf|prog|ddls|adtcore):name="([^"]+)"/.exec(body) ?? /adtcore:name="([^"]+)"/.exec(body);
+    const descMatch = /adtcore:description="([^"]+)"/.exec(body);
+    const pkgMatch = /<adtcore:packageRef adtcore:name="([^"]+)"/.exec(body);
+    if (!nameMatch) {
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml('Create request missing name'));
+      return;
+    }
+    const name = nameMatch[1]!.toUpperCase();
+    const type = typeForCollection(createMatch[1]!);
+    const category = type.split('/')[0]!;
+    if (findObjectByName(state, name)) {
+      res.statusCode = 409;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`Object ${name} already exists`));
+      return;
+    }
+    const obj: MockObject = {
+      uri: uriFor(type, name),
+      type,
+      category,
+      name,
+      description: unescapeXml(descMatch?.[1] ?? ''),
+      packageName: (pkgMatch?.[1] ?? url.searchParams.get('package') ?? '$TMP').toUpperCase(),
+      masterLanguage: 'EN',
+      changedAt: new Date().toISOString(),
+      changedBy: 'DEMO',
+      source: initialSourceFor(type, name),
+    };
+    state.objects.push(obj);
+    res.statusCode = 201;
+    res.setHeader('Location', obj.uri);
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(objectRefXml(obj));
+    return;
+  }
+
+  // ---- Lock / unlock (_action=LOCK / _action=UNLOCK) ----
+  const action = url.searchParams.get('_action');
+  const lockHandleParam = url.searchParams.get('lockHandle');
+  const objByUri = findObject(state, path);
+  if (objByUri && action === 'LOCK' && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const corrnr = `MOCKK${String(900000 + Math.floor(Math.random() * 99999))}`;
+    const handle = randomUUID();
+    state.locked.set(objByUri.uri, { handle, corrnr });
+    res.setHeader('X-ADT-Lock-Handle', handle);
+    res.setHeader('Content-Type', 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result');
+    res.end(lockResultXml(handle, corrnr));
+    return;
+  }
+  if (objByUri && action === 'UNLOCK' && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    state.locked.delete(objByUri.uri);
+    void lockHandleParam;
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result');
+    res.end(lockResultXml('', ''));
+    return;
+  }
+
+  // ---- Object delete (_action=DELETE) ----
+  if (objByUri && action === 'DELETE' && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    state.objects = state.objects.filter((o) => o.uri !== objByUri.uri);
+    state.locked.delete(objByUri.uri);
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(adtXml(`<adtcore:objectReferences xmlns:adtcore="${NS_ADT}"/>`));
+    return;
+  }
+
+  // ---- Object read / write (base URI or /source/main) ----
+  const sourcePath = path.endsWith('/source/main') ? path.slice(0, -'/source/main'.length) : path;
+  const srcObj = findObject(state, sourcePath);
+  if (srcObj) {
+    if (req.method === 'GET') {
+      if (path.endsWith('/source/main')) {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end(srcObj.source);
+        return;
+      }
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(sourceXml(srcObj));
+      return;
+    }
+    if (req.method === 'PUT' && path.endsWith('/source/main')) {
+      if (!checkCsrf(req, res, state)) return;
+      const body = await readBody(req);
+      const codeMatch = /<[a-z]+:code[^>]*>([\s\S]*?)<\/[a-z]+:code>/.exec(body);
+      const source = codeMatch ? unescapeXml(codeMatch[1]!) : body;
+      srcObj.source = source;
+      srcObj.changedAt = new Date().toISOString();
+      srcObj.changedBy = 'DEMO';
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(adtXml(`<adtcore:objectReferences xmlns:adtcore="${NS_ADT}"/>`));
+      return;
+    }
+  }
+
+  // ---- Activation ----
+  if (path === '/repository/activation' && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const body = await readBody(req);
+    const method = url.searchParams.get('method') ?? 'activate';
+    const refs = [...body.matchAll(/adtcore:uri="([^"]+)"[^>]*adtcore:name="([^"]+)"/g)].map((m) => [m[1]!, m[2]!] as const);
+    const items = refs.map(([uri, name]) => {
+      const obj = findObject(state, uri) ?? findObjectByName(state, name);
+      if (!obj) {
+        return `<adtcore:objectReference adtcore:uri="${uri}" adtcore:name="${name}"/>`;
+      }
+      if (obj.source.includes('ZBROKEN')) {
+        return `<adtcore:objectReference adtcore:uri="${uri}" adtcore:name="${name}">
+    <chkl:messages><chkl:msg type="E"><chkl:shortText><chkl:txt>Syntax error: ZBROKEN is not defined</chkl:txt></chkl:shortText></chkl:msg></chkl:messages>
+  </adtcore:objectReference>`;
+      }
+      return `<adtcore:objectReference adtcore:uri="${uri}" adtcore:name="${name}" adtcore:status="${method === 'check' ? 'CHECKED' : 'ACTIVATED'}"/>`;
+    });
+    const hasError = refs.some(([uri, name]) => {
+      const obj = findObject(state, uri) ?? findObjectByName(state, name);
+      return obj?.source.includes('ZBROKEN') || !obj;
+    });
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/xml');
+    const messages = hasError
+      ? `<chkl:messages xmlns:chkl="${NS_CHKL}"><chkl:msg type="E"><chkl:shortText><chkl:txt>Activation failed for one or more objects</chkl:txt></chkl:shortText></chkl:msg></chkl:messages>`
+      : '';
+    res.end(
+      adtXml(
+        `<adtcore:objectReferences xmlns:adtcore="${NS_ADT}">
+  ${items.join('\n  ')}
+</adtcore:objectReferences>${messages}`,
+      ),
+    );
+    return;
+  }
+
+  // ---- Check run ----
+  if (path === '/checkruns' && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const body = await readBody(req);
+    const refs = [...body.matchAll(/adtcore:uri="([^"]+)"/g)].map((m) => m[1]!);
+    const msgs: string[] = [];
+    for (const uri of refs) {
+      const obj = findObject(state, uri);
+      if (obj?.source.includes('ZBROKEN')) {
+        msgs.push(
+          `<chkl:msg type="E"><chkl:shortText><chkl:txt>Syntax error: ZBROKEN is not defined (${obj.name})</chkl:txt></chkl:shortText></chkl:msg>`,
+        );
+      }
+    }
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.checkmessages+xml');
+    res.end(
+      adtXml(
+        `<chkl:messages xmlns:chkl="${NS_CHKL}">
+  ${msgs.join('\n  ')}
+</chkl:messages>`,
+      ),
+    );
+    return;
+  }
+
+  // ---- ABAP Unit (async run) ----
+  if (path === '/abapunit/runs' && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const body = await readBody(req);
+    const requestedNames = [...body.matchAll(/osl:object name="([^"]+)"/g)].map((m) => m[1]!.toUpperCase());
+    const runId = randomUUID();
+    state.unitRuns.set(runId, requestedNames.length ? requestedNames : undefined);
+    res.statusCode = 201;
+    res.setHeader('Location', `/sap/bc/adt/abapunit/runs/${runId}`);
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.api.abapunit.run-status.v1+xml');
+    res.end(
+      adtXml(
+        `<aunit:runStatus xmlns:aunit="${NS_AUNIT}" xmlns:atom="http://www.w3.org/2005/Atom" status="completed" completed="true">
+  <aunit:id>${runId}</aunit:id>
+  <atom:link rel="self" href="/sap/bc/adt/abapunit/runs/${runId}"/>
+  <atom:link rel="result" href="/sap/bc/adt/abapunit/results/${runId}"/>
+</aunit:runStatus>`,
+      ),
+    );
+    return;
+  }
+  const unitStatusMatch = /^\/abapunit\/runs\/([^/]+)$/.exec(path);
+  if (unitStatusMatch && req.method === 'GET') {
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.api.abapunit.run-status.v1+xml');
+    res.end(
+      adtXml(
+        `<aunit:runStatus xmlns:aunit="${NS_AUNIT}" xmlns:atom="http://www.w3.org/2005/Atom" status="completed" completed="true">
+  <aunit:id>${unitStatusMatch[1]}</aunit:id>
+  <atom:link rel="result" href="/sap/bc/adt/abapunit/results/${unitStatusMatch[1]}"/>
+</aunit:runStatus>`,
+      ),
+    );
+    return;
+  }
+  const unitResultMatch = /^\/abapunit\/results\/([^/]+)$/.exec(path);
+  if (unitResultMatch && req.method === 'GET') {
+    const runId = unitResultMatch[1]!;
+    const requested = state.unitRuns.get(runId);
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.api.junit.run-result.v1+xml');
+    const testCases: string[] = [];
+    let passed = 0;
+    let failed = 0;
+    let total = 0;
+    const targets = requested
+      ? state.objects.filter((o) => requested.includes(o.name.toUpperCase()))
+      : state.objects.filter((o) => o.unit);
+    for (const obj of targets) {
+      if (!obj.unit) continue;
+      if (obj.unit.failed > 0) {
+        total += obj.unit.total;
+        failed += obj.unit.failed;
+        for (let i = 0; i < obj.unit.total; i++) {
+          const name = obj.unit.failedMethod ?? `TEST_${i + 1}`;
+          testCases.push(
+            `<testcase asserts="1" time="0.01" name="${name}" classname="${obj.name.toLowerCase()}">
+      <failure type="Assert Failure" message="${xmlEscape(obj.unit.failedMessage ?? '')}">expected: &lt;X&gt; but was: &lt;Y&gt;</failure>
+    </testcase>`,
+          );
+        }
+      } else {
+        total += obj.unit.total;
+        passed += obj.unit.total;
+        for (let i = 0; i < obj.unit.total; i++) {
+          testCases.push(`<testcase asserts="1" time="0.01" name="TEST_${i + 1}" classname="${obj.name.toLowerCase()}"/>`);
+        }
+      }
+    }
+    res.end(
+      adtXml(
+        `<testsuites tests="${total}" asserts="${total}" skipped="0" errors="0" failures="${failed}" timestamp="2026-08-13T12:00:00Z" time="0.36" executedBy="DEMO" client="000" system="${opts.systemId}">
+  <testsuite tests="${total}" asserts="${total}" skipped="0" errors="0" failures="${failed}" name="">
+    ${testCases.join('\n    ')}
+  </testsuite>
+</testsuites>`,
+      ),
+    );
+    return;
+  }
+
+  // ---- ATC (async run) ----
+  if (path === '/atc/runs' && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const runId = randomUUID();
+    res.statusCode = 201;
+    res.setHeader('Location', `/sap/bc/adt/atc/runs/${runId}`);
+    res.setHeader('Content-Type', 'application/vnd.sap.atc.run.v1+xml');
+    res.end(
+      adtXml(
+        `<atc:run xmlns:atc="${NS_ATC}" xmlns:atom="http://www.w3.org/2005/Atom" state="completed">
+  <atc:id>${runId}</atc:id>
+  <atc:displayId>${runId}</atc:displayId>
+  <atom:link rel="result" href="/sap/bc/adt/atc/results/${runId}"/>
+</atc:run>`,
+      ),
+    );
+    return;
+  }
+  const atcStatusMatch = /^\/atc\/runs\/([^/]+)$/.exec(path);
+  if (atcStatusMatch && req.method === 'GET') {
+    res.setHeader('Content-Type', 'application/vnd.sap.atc.run.v1+xml');
+    res.end(
+      adtXml(
+        `<atc:run xmlns:atc="${NS_ATC}" xmlns:atom="http://www.w3.org/2005/Atom" state="completed">
+  <atc:id>${atcStatusMatch[1]}</atc:id>
+  <atc:displayId>${atcStatusMatch[1]}</atc:displayId>
+  <atom:link rel="result" href="/sap/bc/adt/atc/results/${atcStatusMatch[1]}"/>
+</atc:run>`,
+      ),
+    );
+    return;
+  }
+  const atcResultMatch = /^\/atc\/results\/([^/]+)$/.exec(path);
+  if (atcResultMatch && req.method === 'GET') {
+    res.setHeader('Content-Type', 'application/vnd.sap.atc.checkstyle.v1+xml');
+    const files = state.objects
+      .filter((o) => o.atcFindings && o.atcFindings.length > 0)
+      .map((o) => {
+        const errors = (o.atcFindings ?? [])
+          .map(
+            (f) =>
+              `<error message="${xmlEscape(f.message)}" source="${f.check}" line="${f.line ?? 1}" severity="${f.severity === 'CRITICAL' ? 'error' : f.severity.toLowerCase()}"/>`,
+          )
+          .join('\n    ');
+        return `<file name="${o.name}.${o.category}">
+    ${errors}
+  </file>`;
+      })
+      .join('\n  ');
+    res.end(
+      adtXml(
+        `<checkstyle version="1.0">
+  ${files}
+</checkstyle>`,
+      ),
+    );
+    return;
+  }
+
+  // ---- 404 ----
+  res.statusCode = 404;
+  res.setHeader('Content-Type', 'application/xml');
+  res.end(errorXml(`Mock ADT: no handler for ${req.method} ${path}`));
+}
+
+function typeForCollection(collection: string): string {
+  switch (collection) {
+    case 'oo/classes':
+      return 'CLAS/OC';
+    case 'oo/interfaces':
+      return 'INTF/OI';
+    case 'programs/programs':
+      return 'PROG/P';
+    case 'ddls/sources':
+      return 'DDLS/DF';
+    case 'ddic/tables':
+      return 'TABL/DT';
+    case 'ddic/structures':
+      return 'STRU/DT';
+    case 'msgclass':
+      return 'MSAG/N';
+    case 'packages':
+      return 'DEVC/K';
+    default:
+      return 'CLAS/OC';
+  }
+}
+
+function unescapeXml(text: string): string {
+  return text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+}
+
+/** Build a case-insensitive matcher honoring `*` wildcards (like ADT search). */
+function wildcardMatcher(query: string): (value: string) => boolean {
+  const lower = query.toLowerCase();
+  if (!lower.includes('*')) return (value) => value.toLowerCase().includes(lower);
+  const escaped = lower.split('*').map((part) => part.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('.*');
+  const re = new RegExp(`^${escaped}$`);
+  return (value) => re.test(value.toLowerCase());
+}
+
+function uriFor(type: string, name: string): string {
+  const cat = type.split('/')[0]!;
+  switch (cat) {
+    case 'CLAS':
+      return `/sap/bc/adt/oo/classes/${name.toLowerCase()}`;
+    case 'INTF':
+      return `/sap/bc/adt/oo/interfaces/${name.toLowerCase()}`;
+    case 'PROG':
+      return `/sap/bc/adt/programs/programs/${name.toLowerCase()}`;
+    case 'DDLS':
+      return `/sap/bc/adt/ddls/sources/${name.toLowerCase()}`;
+    case 'TABL':
+      return `/sap/bc/adt/ddic/tables/${name.toLowerCase()}`;
+    case 'STRU':
+      return `/sap/bc/adt/ddic/structures/${name.toLowerCase()}`;
+    case 'MSAG':
+      return `/sap/bc/adt/msgclass/${name.toLowerCase()}`;
+    case 'DEVC':
+      return `/sap/bc/adt/packages/${name.toLowerCase()}`;
+    default:
+      return `/sap/bc/adt/repository/objects/${name.toLowerCase()}`;
+  }
+}
+
+function initialSourceFor(type: string, name: string): string {
+  const cat = type.split('/')[0]!;
+  switch (cat) {
+    case 'CLAS':
+      return `CLASS ${name} DEFINITION PUBLIC CREATE PUBLIC.\n  PUBLIC SECTION.\n  PROTECTED SECTION.\n  PRIVATE SECTION.\nENDCLASS.\n\nCLASS ${name} IMPLEMENTATION.\nENDCLASS.`;
+    case 'INTF':
+      return `INTERFACE ${name} PUBLIC.\nENDINTERFACE.`;
+    case 'PROG':
+      return `REPORT ${name}.\n\nWRITE / 'Hello'.`;
+    case 'DDLS':
+      return `@EndUserText.label: '${name}'\ndefine view ${name} as select from t100\n{\n  key msgno,\n      text\n}`;
+    default:
+      return `* ${name}`;
+  }
+}
