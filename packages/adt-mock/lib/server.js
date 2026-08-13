@@ -51,6 +51,21 @@ function lockResultXml(handle, corrnr) {
   </asx:values>
 </asx:abap>`);
 }
+/** Deterministic stored ATC runs exposed by the results collection. */
+const ATC_SAMPLE_RUNS = [
+    {
+        displayId: '10000000000000000000000000000001',
+        createdBy: 'DEMO',
+        createdAt: '2026-08-13T10:00:00.000Z',
+        scope: ['ZCL_FLAKY', 'ZPROG_DEMO'],
+    },
+    {
+        displayId: '10000000000000000000000000000002',
+        createdBy: 'DEMO',
+        createdAt: '2026-08-12T09:30:00.000Z',
+        scope: ['ZCL_DEMO'],
+    },
+];
 export function createMockAdtServer(options = {}) {
     const state = {
         objects: OBJECTS.map((o) => ({ ...o })),
@@ -58,6 +73,7 @@ export function createMockAdtServer(options = {}) {
         csrfToken: randomUUID(),
         sessions: new Set(),
         unitRuns: new Map(),
+        atcRunIds: new Set(),
     };
     const systemId = options.systemId ?? 'MOCK';
     const release = options.release ?? '757';
@@ -517,6 +533,7 @@ async function handle(req, res, state, opts) {
         if (!checkCsrf(req, res, state))
             return;
         const runId = randomUUID();
+        state.atcRunIds.add(runId);
         res.statusCode = 201;
         res.setHeader('Location', `/sap/bc/adt/atc/runs/${runId}`);
         res.setHeader('Content-Type', 'application/vnd.sap.atc.run.v1+xml');
@@ -537,11 +554,35 @@ async function handle(req, res, state, opts) {
 </atc:run>`));
         return;
     }
+    // ---- ATC results collection (list existing runs) ----
+    if (path === '/atc/results' && req.method === 'GET') {
+        const createdBy = (url.searchParams.get('createdBy') ?? 'DEMO').toUpperCase();
+        res.setHeader('Content-Type', 'application/xml');
+        const runs = ATC_SAMPLE_RUNS.filter((r) => !createdBy || r.createdBy.toUpperCase() === createdBy || createdBy === '*')
+            .map((r) => `<atcresult:result displayId="${r.displayId}" createdBy="${r.createdBy}" createdAt="${r.createdAt}" status="COMPLETED"/>`)
+            .join('\n  ');
+        res.end(adtXml(`<atcresult:resultList xmlns:atcresult="http://www.sap.com/adt/atc/result">
+  ${runs}
+</atcresult:resultList>`));
+        return;
+    }
     const atcResultMatch = /^\/atc\/results\/([^/]+)$/.exec(path);
     if (atcResultMatch && req.method === 'GET') {
+        const displayId = atcResultMatch[1].toUpperCase();
+        const sample = ATC_SAMPLE_RUNS.find((r) => r.displayId.toUpperCase() === displayId);
+        const fromAsyncRun = state.atcRunIds.has(atcResultMatch[1]);
+        if (!sample && !fromAsyncRun) {
+            res.statusCode = 404;
+            res.setHeader('Content-Type', 'application/xml');
+            res.end(errorXml(`ATC result ${displayId} does not exist`));
+            return;
+        }
+        const scope = sample ? sample.scope : undefined;
+        const targets = scope
+            ? state.objects.filter((o) => scope.includes(o.name.toUpperCase()))
+            : state.objects.filter((o) => o.atcFindings && o.atcFindings.length > 0);
         res.setHeader('Content-Type', 'application/vnd.sap.atc.checkstyle.v1+xml');
-        const files = state.objects
-            .filter((o) => o.atcFindings && o.atcFindings.length > 0)
+        const files = targets
             .map((o) => {
             const errors = (o.atcFindings ?? [])
                 .map((f) => `<error message="${xmlEscape(f.message)}" source="${f.check}" line="${f.line ?? 1}" severity="${f.severity === 'CRITICAL' ? 'error' : f.severity.toLowerCase()}"/>`)

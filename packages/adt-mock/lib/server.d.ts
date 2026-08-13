@@ -31,6 +31,8 @@ interface MockState {
     sessions: Set<string>;
     /** ABAP Unit run id → requested object names (uppercased). */
     unitRuns: Map<string, string[] | undefined>;
+    /** ATC run ids issued by the async run flow. */
+    atcRunIds: Set<string>;
 }
 export declare function createMockAdtServer(options?: MockAdtOptions): {
     server: import("http").Server<typeof IncomingMessage, typeof ServerResponse>;

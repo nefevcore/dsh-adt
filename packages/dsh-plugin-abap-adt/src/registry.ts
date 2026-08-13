@@ -45,8 +45,27 @@ export class AdtRegistry {
       username: process.env.ADT_MOCK_USER,
       password: process.env.ADT_MOCK_PASSWORD,
     });
-    const actualPort = await mock.listen();
-    this.mockServer = mock;
+    let actualPort: number;
+    try {
+      actualPort = await mock.listen();
+    } catch (error) {
+      // HMR reload can race the previous mock's port release; fall back to a
+      // random free port instead of failing the whole plugin load.
+      if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+        const retry = createMockAdtServer({
+          port: 0,
+          host: '127.0.0.1',
+          username: process.env.ADT_MOCK_USER,
+          password: process.env.ADT_MOCK_PASSWORD,
+        });
+        actualPort = await retry.listen();
+        void mock.close().catch(() => undefined);
+        this.mockServer = retry;
+      } else {
+        throw error;
+      }
+    }
+    if (!this.mockServer) this.mockServer = mock;
     this.mockPort = actualPort;
     this.destinations.set('demo', {
       config: {
