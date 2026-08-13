@@ -12,6 +12,7 @@
 import { Context } from '@deepseek-ai/cordis';
 import { Config } from './config.js';
 import { AdtRegistry } from './registry.js';
+import { deepCompact } from './tools/common.js';
 import { systemTools } from './tools/system.js';
 import { searchTools } from './tools/search.js';
 import { sourceTools } from './tools/source.js';
@@ -37,7 +38,14 @@ async function apply(ctx, config) {
         ...batchTools(deps, ctx),
     ];
     for (const tool of tools) {
-        ctx.tools.register(tool);
+        // Sanitize every tool's output at the registry boundary: strip `undefined`
+        // property values so the value passes the DSH lossless-JSON validation
+        // (the registry rejects undefined anywhere in the returned value).
+        const { execute, ...rest } = tool;
+        ctx.tools.register({
+            ...rest,
+            execute: async (args, exec) => deepCompact(await execute(args, exec)),
+        });
     }
     const logger = ctx.logger?.(name);
     (logger?.info ?? console.info)(`abap-adt plugin active: ${tools.length} tools registered, ` +

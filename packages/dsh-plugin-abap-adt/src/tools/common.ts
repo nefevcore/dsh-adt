@@ -26,6 +26,31 @@ export function text(content: string): Array<{ type: 'text'; text: string }> {
   return [{ type: 'text', text: content }];
 }
 
+/**
+ * Deep-strip `undefined` values so tool outputs pass the DSH lossless-JSON
+ * boundary (the registry rejects any object property whose value is
+ * `undefined`, because JSON has no representation for it). `null` is kept.
+ */
+export function deepCompact(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const out: unknown[] = [];
+    for (const item of value) {
+      const cleaned = deepCompact(item);
+      if (cleaned !== undefined) out.push(cleaned);
+    }
+    return out;
+  }
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const cleaned = deepCompact(item);
+      if (cleaned !== undefined) out[key] = cleaned;
+    }
+    return out;
+  }
+  return value;
+}
+
 /** Render an object list as a compact table. */
 export function renderObjectRefs(refs: AdtObjectRef[]): string {
   if (refs.length === 0) return '(no objects)';
