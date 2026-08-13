@@ -139,7 +139,8 @@ Accept: application/xml  →  <adtcore:objectReferences><adtcore:objectReference
 - **ATC run 启动必须显式 `clientWait=false`**，否则 400（"Only 'false' is currently supported as QueryParameter 'ClientWait'"）。
 - **ATC run 状态响应用 `status` 属性**（`<atc:run status="Running|Completed">` + `<atc:phase status=...>`）；完成时 `<atom:link href="/sap/bc/adt/atc/results/{displayId}">` 的 **displayId 与 runId 不同**，必须从链接提取。
 - **ATC 结果端点拒绝 checkstyle 媒体类型（406）**，用 `application/xml` 取回；解析时兼容 checkstyle 与未知格式（保留原始 XML）。
-- **ATC 结果集合 `GET /atc/results` 可能恒为空**（该 S4C 系统所有过滤组合均返回空 `atcresult:resultList`）——结果只能通过 run 的 displayId 直接获取；`adt_list_atc_runs` 返回空是后端行为而非客户端缺陷。
+- **ATC 结果的真实格式是 `atcresult` 命名空间**（非 checkstyle）：`resultList → result → objects → object → findings → finding`。finding 属性：`priority`(1-4)、`checkId`、`checkTitle`、`messageId`、`messageTitle`、`location`(`#start=行,列`)、`uri`。集合列表也是子元素格式（`<atcresult:displayId>` 等），并带 `aggregates`（`numPrio1..4`/`numFailure`）。priority 映射：1→CRITICAL、2→ERROR、3→WARNING、4→INFO。
+- **ATC 结果集合 `GET /atc/results` 需要 `createdBy` 参数**（缺省会 400）；`createdBy=*` 可跨用户列出全部结果；`activeResult=true` 语义不同（活跃结果）。结果可通过 displayId 直接获取（`GET /atc/results/{displayId}`）。
 
 ## 7. 待验证项（勿在生产依赖）
 

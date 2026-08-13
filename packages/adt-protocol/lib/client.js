@@ -1372,90 +1372,190 @@ function parseAtcResult(xml, variant) {
     };
 }
 /**
- * Parse the ATC results collection (`atcresult:resultList`; tolerant of Atom
- * feed shapes). Extracts every attribute the backend reports per entry.
+ * Parse the ATC results collection (`atcresult:resultList`). Real backends use
+ * child elements (`<atcresult:result><atcresult:displayId>...`) rather than
+ * attributes; both shapes are tolerated, plus Atom feed fallback.
  */
 function parseAtcResultList(xml) {
     const root = parseXml(xml);
     const runs = [];
-    const push = (el) => {
-        const displayId = attr(el, 'displayId') ?? attr(el, 'id') ?? attr(el, 'resultId');
+    const emptyAggregates = () => ({ priority1: 0, priority2: 0, priority3: 0, priority4: 0, failures: 0 });
+    for (const el of children(root, 'result')) {
+        const displayId = childText(el, 'displayId') ?? attr(el, 'displayId') ?? attr(el, 'id');
         if (!displayId)
-            return;
+            continue;
+        const agg = child(el, 'aggregates');
+        const num = (key) => {
+            const raw = agg ? childText(agg, key) : undefined;
+            const n = raw !== undefined && raw !== '' ? Number(raw) : NaN;
+            return Number.isFinite(n) ? n : 0;
+        };
         const attributes = {};
-        for (const [key, value] of Object.entries(el.attributes)) {
+        for (const [key, value] of Object.entries(el.attributes))
             attributes[key.replace(/^[^:]*:/, '')] = value;
-        }
+        runs.push({
+            displayId,
+            title: childText(el, 'title') ?? undefined,
+            checkVariant: childText(el, 'checkVariant') ?? undefined,
+            createdAt: childText(el, 'createdAt') ?? attr(el, 'createdAt') ?? undefined,
+            createdBy: childText(el, 'createdBy') ?? attr(el, 'createdBy') ?? attr(el, 'user'),
+            status: childText(el, 'status') ?? attr(el, 'status') ?? attr(el, 'state'),
+            kind: child(el, 'centralResult') ? 'central' : undefined,
+            aggregates: agg
+                ? {
+                    priority1: num('numPrio1'),
+                    priority2: num('numPrio2'),
+                    priority3: num('numPrio3'),
+                    priority4: num('numPrio4'),
+                    failures: num('numFailure'),
+                }
+                : undefined,
+            attributes,
+        });
+    }
+    // Attribute-shaped entries (older mocks / minimal backends).
+    for (const el of children(root, 'result')) {
+        if (runs.some((r) => r.displayId === (attr(el, 'displayId') ?? attr(el, 'id'))))
+            continue;
+        const displayId = attr(el, 'displayId') ?? attr(el, 'id');
+        if (!displayId)
+            continue;
         runs.push({
             displayId,
             createdBy: attr(el, 'createdBy') ?? attr(el, 'user'),
-            createdAt: attr(el, 'createdAt') ?? attr(el, 'timestamp') ?? attr(el, 'date'),
+            createdAt: attr(el, 'createdAt'),
             status: attr(el, 'status') ?? attr(el, 'state'),
-            kind: attr(el, 'centralResult') ? 'central' : attr(el, 'activeResult') ? 'active' : undefined,
-            attributes,
+            kind: attr(el, 'centralResult') ? 'central' : undefined,
+            aggregates: undefined,
+            attributes: {},
         });
-    };
-    for (const el of [...children(root, 'result'), ...children(root, 'entry')])
-        push(el);
+    }
     // Atom feed entries carry the id in a child <id>/<link>.
-    if (runs.length === 0) {
-        for (const entry of children(root, 'entry')) {
-            const id = childText(entry, 'id');
-            const link = children(entry, 'link').map((l) => attr(l, 'href') ?? '').find((h) => h.includes('/atc/results/'));
-            const displayId = id ?? (link ? link.split('/').pop() : undefined);
-            if (!displayId)
-                continue;
-            runs.push({
-                displayId: displayId.split('/').pop() ?? displayId,
-                createdBy: childText(entry, 'author') ?? undefined,
-                createdAt: childText(entry, 'updated') ?? undefined,
-                status: attr(entry, 'status') ?? undefined,
-                attributes: {},
-            });
-        }
+    for (const entry of children(root, 'entry')) {
+        const id = childText(entry, 'id');
+        const link = children(entry, 'link').map((l) => attr(l, 'href') ?? '').find((h) => h.includes('/atc/results/'));
+        const displayId = id ?? (link ? link.split('/').pop() : undefined);
+        if (!displayId)
+            continue;
+        if (runs.some((r) => r.displayId === displayId.split('/').pop()))
+            continue;
+        runs.push({
+            displayId: displayId.split('/').pop() ?? displayId,
+            createdBy: childText(entry, 'author') ?? undefined,
+            createdAt: childText(entry, 'updated') ?? undefined,
+            status: attr(entry, 'status') ?? undefined,
+            aggregates: undefined,
+            attributes: {},
+        });
     }
     return runs;
 }
-/** Parse one ATC result body; checkstyle on on-prem, raw preserved otherwise. */
-function parseAtcResultBody(xml, displayId) {
-    const trimmed = xml.trimStart();
-    if (!trimmed.startsWith('<')) {
-        return {
-            success: true,
-            clean: true,
-            findings: [],
-            counts: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0, CATASTROPHIC: 0 },
-            durationMs: 0,
-            displayId,
-            rawXml: xml,
-        };
+/** Map an ATC finding priority (1-4) to a severity. */
+function severityFromPriority(priority) {
+    switch (priority) {
+        case 1:
+            return 'CRITICAL';
+        case 2:
+            return 'ERROR';
+        case 3:
+            return 'WARNING';
+        default:
+            return 'INFO';
     }
+}
+function parseAggregatesNode(node) {
+    if (!node)
+        return undefined;
+    const num = (key) => {
+        const raw = childText(node, key);
+        const n = raw !== undefined && raw !== '' ? Number(raw) : NaN;
+        return Number.isFinite(n) ? n : 0;
+    };
+    return {
+        priority1: num('numPrio1'),
+        priority2: num('numPrio2'),
+        priority3: num('numPrio3'),
+        priority4: num('numPrio4'),
+        failures: num('numFailure'),
+    };
+}
+/**
+ * Parse one ATC result body. Real on-prem backends return the
+ * `atcresult:resultList` envelope with `atcfinding:finding` elements; older
+ * mocks/BTP use checkstyle XML. Unknown formats preserve the raw body.
+ */
+function parseAtcResultBody(xml, displayId) {
+    const emptyResult = () => ({
+        success: true,
+        clean: true,
+        findings: [],
+        counts: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0, CATASTROPHIC: 0 },
+        durationMs: 0,
+        displayId,
+        rawXml: xml,
+    });
+    const trimmed = xml.trimStart();
+    if (!trimmed.startsWith('<'))
+        return emptyResult();
+    let root;
     try {
-        const root = parseXml(xml);
-        if (root.name === 'checkstyle')
-            return { ...parseAtcResult(xml), displayId };
-        // Unknown XML envelope: preserve raw for the caller.
-        return {
-            success: true,
-            clean: true,
-            findings: [],
-            counts: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0, CATASTROPHIC: 0 },
-            durationMs: 0,
-            displayId,
-            rawXml: xml,
-        };
+        root = parseXml(xml);
     }
     catch {
+        return emptyResult();
+    }
+    if (root.name === 'checkstyle')
+        return { ...parseAtcResult(xml), displayId };
+    // atcresult envelope: resultList → result → objects → object → findings → finding
+    const result = child(root, 'result') ?? root;
+    if (result.name === 'resultList' || child(root, 'result') || child(result, 'displayId') || child(result, 'objects')) {
+        const findings = [];
+        const counts = {
+            INFO: 0,
+            WARNING: 0,
+            ERROR: 0,
+            CRITICAL: 0,
+            CATASTROPHIC: 0,
+        };
+        const objectsNode = child(result, 'objects');
+        for (const obj of children(objectsNode ?? result, 'object')) {
+            const objectName = attr(obj, 'name') ?? '';
+            const findingsNode = child(obj, 'findings');
+            for (const finding of children(findingsNode ?? obj, 'finding')) {
+                const priority = Number(attr(finding, 'priority') ?? 0);
+                const severity = Number.isFinite(priority) ? severityFromPriority(priority) : 'INFO';
+                const location = attr(finding, 'location') ?? '';
+                const locMatch = /#start=(\d+)(?:,(\d+))?/.exec(location);
+                counts[severity] = (counts[severity] ?? 0) + 1;
+                findings.push({
+                    check: attr(finding, 'checkId') ?? '',
+                    checkTitle: attr(finding, 'checkTitle') ?? '',
+                    severity,
+                    message: attr(finding, 'messageTitle') ?? attr(finding, 'messageId') ?? '',
+                    objectName,
+                    uri: attr(finding, 'uri') ?? '',
+                    line: locMatch ? Number(locMatch[1]) : undefined,
+                    offset: locMatch && locMatch[2] ? Number(locMatch[2]) : undefined,
+                    messageId: attr(finding, 'messageId'),
+                    longText: childText(finding, 'longText') ?? undefined,
+                });
+            }
+        }
+        const clean = counts.ERROR + counts.CRITICAL + counts.CATASTROPHIC === 0;
+        const aggregates = parseAggregatesNode(child(result, 'aggregates'));
         return {
             success: true,
-            clean: true,
-            findings: [],
-            counts: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0, CATASTROPHIC: 0 },
+            clean,
+            findings,
+            counts,
             durationMs: 0,
-            displayId,
-            rawXml: xml,
+            displayId: displayId ?? childText(result, 'displayId') ?? undefined,
+            title: childText(result, 'title') ?? undefined,
+            checkVariant: childText(result, 'checkVariant') ?? undefined,
+            aggregates,
         };
     }
+    return emptyResult();
 }
 function severityFromCheckstyle(value) {
     switch ((value ?? '').toLowerCase()) {

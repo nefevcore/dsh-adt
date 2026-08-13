@@ -153,13 +153,31 @@ export function testingTools(deps) {
                     },
                     durationMs: { type: 'integer', required: true },
                     variant: { type: 'string' },
+                    displayId: { type: 'string', description: 'Result display id — pass to adt_get_atc_result to re-fetch.' },
+                    title: { type: 'string' },
+                    checkVariant: { type: 'string' },
+                    aggregates: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                            priority1: { type: 'integer', required: true },
+                            priority2: { type: 'integer', required: true },
+                            priority3: { type: 'integer', required: true },
+                            priority4: { type: 'integer', required: true },
+                            failures: { type: 'integer', required: true },
+                        },
+                    },
                 },
             },
             render: (_args, value) => {
+                const agg = value.aggregates
+                    ? ` (P1 ${value.aggregates.priority1}, P2 ${value.aggregates.priority2}, P3 ${value.aggregates.priority3}, P4 ${value.aggregates.priority4})`
+                    : '';
                 const lines = [
                     `ATC: ${value.clean ? 'CLEAN' : 'findings found'} — ` +
                         `INFO ${value.counts.INFO}, WARNING ${value.counts.WARNING}, ERROR ${value.counts.ERROR}, ` +
-                        `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC} (${value.durationMs} ms)`,
+                        `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC} (${value.durationMs} ms)${agg}` +
+                        `${value.displayId ? `\nResult displayId: ${value.displayId} (use adt_get_atc_result to re-fetch)` : ''}`,
                 ];
                 for (const f of value.findings) {
                     lines.push(`- [${f.severity}] ${f.objectName}${f.line ? `:${f.line}` : ''} — ${f.checkTitle}: ${f.message}`);
@@ -184,6 +202,10 @@ export function testingTools(deps) {
                 counts: result.counts,
                 durationMs: result.durationMs,
                 variant: result.variant,
+                displayId: result.displayId,
+                title: result.title,
+                checkVariant: result.checkVariant,
+                aggregates: result.aggregates,
             };
         },
     });
