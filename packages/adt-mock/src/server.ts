@@ -646,6 +646,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
     if (!checkCsrf(req, res, state)) return;
     const runId = randomUUID();
     state.atcRunIds.add(runId);
+    state.atcRunIds.add(`A${runId.slice(1)}`.toUpperCase());
     res.statusCode = 201;
     res.setHeader('Location', `/sap/bc/adt/atc/runs/${runId}`);
     res.setHeader('Content-Type', 'application/vnd.sap.atc.run.v1+xml');
@@ -662,13 +663,22 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
   const atcStatusMatch = /^\/atc\/runs\/([^/]+)$/.exec(path);
   if (atcStatusMatch && req.method === 'GET') {
+    // Mirror the real backend shape: `status` attribute, phases, and a result
+    // link whose id DIFFERS from the run id (exercises link extraction).
+    const runId = atcStatusMatch[1]!;
+    const resultId = `A${runId.slice(1)}`.toUpperCase();
     res.setHeader('Content-Type', 'application/vnd.sap.atc.run.v1+xml');
     res.end(
       adtXml(
-        `<atc:run xmlns:atc="${NS_ATC}" xmlns:atom="http://www.w3.org/2005/Atom" state="completed">
-  <atc:id>${atcStatusMatch[1]}</atc:id>
-  <atc:displayId>${atcStatusMatch[1]}</atc:displayId>
-  <atom:link rel="result" href="/sap/bc/adt/atc/results/${atcStatusMatch[1]}"/>
+        `<atc:run xmlns:atc="${NS_ATC}" xmlns:atom="http://www.w3.org/2005/Atom" status="Completed">
+  <atc:id>${runId}</atc:id>
+  <atc:progress description="Run Completed"/>
+  <atc:phases>
+    <atc:phase title="Determine Object Keys" status="Completed" number="1"/>
+    <atc:phase title="Check Objects" status="Completed" number="2"/>
+    <atc:phase title="Completion Phase" status="Completed" number="3"/>
+  </atc:phases>
+  <atom:link href="/sap/bc/adt/atc/results/${resultId}" rel="http://www.sap.com/abap/checks/atc/relations/result"/>
 </atc:run>`,
       ),
     );
