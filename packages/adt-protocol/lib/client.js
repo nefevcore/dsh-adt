@@ -119,7 +119,13 @@ export class AdtClient {
     /** Connection identifier sent as `sap-adt-connection-id` on every request. */
     connectionId = randomUUID();
     constructor(destination, fetchImpl = globalThis.fetch.bind(globalThis)) {
-        this.destination = destination;
+        this.destination = {
+            ...destination,
+            // Tolerate destinations without explicit auth (treat as unauthenticated).
+            auth: destination.auth ?? { type: 'none' },
+            strictSSL: destination.strictSSL ?? true,
+            timeoutMs: destination.timeoutMs ?? 60_000,
+        };
         this.base = destination.url.replace(/\/+$/, '');
         this.fetchImpl = fetchImpl;
     }
@@ -534,7 +540,10 @@ export class AdtClient {
     /** Run ABAP Test Cockpit checks; polls the async run until completion. */
     async runAtc(objects, options = {}) {
         const body = buildAtcRunRequest(objects, options.variant);
-        const query = this.baseQuery({});
+        // Some backends reject the start request unless clientWait=false is sent
+        // explicitly (error: 'Only "false" is currently supported as
+        // QueryParameter "ClientWait"').
+        const query = this.baseQuery({ clientWait: 'false' });
         const start = await this.request({
             method: 'POST',
             path: `${ENDPOINTS.atcRuns()}${toQuery(query)}`,
@@ -562,10 +571,12 @@ export class AdtClient {
         }
         const results = await this.request({
             path: `${ENDPOINTS.atcResults()}/${encodeURIComponent(displayId)}${toQuery(this.baseQuery())}`,
-            accept: MEDIA.atcResult,
+            // Real on-prem backends reject the checkstyle media type here (406) and
+            // serve the result with plain application/xml.
+            accept: 'application/xml',
             timeoutMs: 60_000,
         });
-        return parseAtcResult(results.text, options.variant);
+        return parseAtcResultBody(results.text, displayId);
     }
     /**
      * List existing ATC runs (the results collection). The backend requires at
@@ -1178,12 +1189,20 @@ function extractDisplayId(xml) {
 function isAtcRunComplete(xml) {
     try {
         const root = parseXml(xml);
-        const state = (attr(root, 'state') ?? childText(root, 'state') ?? '').toLowerCase();
-        if (state && (state.includes('completed') || state.includes('finished') || state.includes('done')))
-            return true;
+        // Real backends use `status` ("Running"/"Completed"); tolerate `state`.
+        const status = (attr(root, 'status') ?? attr(root, 'state') ?? childText(root, 'status') ?? '').toLowerCase();
+        if (status) {
+            if (status.includes('completed') || status.includes('finished') || status.includes('done'))
+                return true;
+            if (status.includes('running') || status.includes('in process'))
+                return false;
+        }
         const phases = children(root, 'phase');
         if (phases.length) {
-            return phases.every((p) => (attr(p, 'state') ?? '').toLowerCase() === 'completed');
+            return phases.every((p) => {
+                const s = (attr(p, 'status') ?? attr(p, 'state') ?? '').toLowerCase();
+                return s === 'completed' || s === 'done' || s === 'finished';
+            });
         }
         return false;
     }

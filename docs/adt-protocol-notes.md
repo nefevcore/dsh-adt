@@ -136,6 +136,10 @@ Accept: application/xml  →  <adtcore:objectReferences><adtcore:objectReference
 - **`/sap/bc/adt/repository/nodestructure` 在加固系统上可能 405**。包成员列表优先用搜索 + `packageName` 过滤（`?query=*&packageName=ZPACK&maxResults=500`），nodestructure 仅作回退。
 - **系统信息用 `/sap/bc/adt/core/http/systeminformation`**（JSON：`systemID`/`userName`/`client`/`language`）比 discovery feature 可靠；discovery 的 `feature` 元素在真实系统上经常没有。
 - **自签名证书常见**（`CN=...pvt` 自签发）：`strictSSL: false` 时客户端通过 undici dispatcher 关闭校验（仅该目的地生效）。
+- **ATC run 启动必须显式 `clientWait=false`**，否则 400（"Only 'false' is currently supported as QueryParameter 'ClientWait'"）。
+- **ATC run 状态响应用 `status` 属性**（`<atc:run status="Running|Completed">` + `<atc:phase status=...>`）；完成时 `<atom:link href="/sap/bc/adt/atc/results/{displayId}">` 的 **displayId 与 runId 不同**，必须从链接提取。
+- **ATC 结果端点拒绝 checkstyle 媒体类型（406）**，用 `application/xml` 取回；解析时兼容 checkstyle 与未知格式（保留原始 XML）。
+- **ATC 结果集合 `GET /atc/results` 可能恒为空**（该 S4C 系统所有过滤组合均返回空 `atcresult:resultList`）——结果只能通过 run 的 displayId 直接获取；`adt_list_atc_runs` 返回空是后端行为而非客户端缺陷。
 
 ## 7. 待验证项（勿在生产依赖）
 
