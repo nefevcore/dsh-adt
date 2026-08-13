@@ -128,7 +128,16 @@ Accept: application/xml  →  <adtcore:objectReferences><adtcore:objectReference
 | ATC | `/sap/bc/adt/atc/runs` | `/sap/bc/adt/api/atc/runs` |
 | 传输 | 传统 CTS | 软件组件 + release state 驱动 |
 
-## 6. 待验证项（勿在生产依赖）
+## 6. 实测补充（S/4HANA S4C 系统验证结论）
+
+在真实 S/4HANA 系统（`sap-system: S4C`）上端到端验证后的经验值：
+
+- **`operation=quickSearchSource` 和 `operation=objectSearch` 可能返回 HTTP 500**（搜索提供者受限时）。客户端会自动降级到 `quickSearch` 并通过 `note` 字段告知；此时全文搜索不可用、对象搜索仍可用。
+- **`/sap/bc/adt/repository/nodestructure` 在加固系统上可能 405**。包成员列表优先用搜索 + `packageName` 过滤（`?query=*&packageName=ZPACK&maxResults=500`），nodestructure 仅作回退。
+- **系统信息用 `/sap/bc/adt/core/http/systeminformation`**（JSON：`systemID`/`userName`/`client`/`language`）比 discovery feature 可靠；discovery 的 `feature` 元素在真实系统上经常没有。
+- **自签名证书常见**（`CN=...pvt` 自签发）：`strictSSL: false` 时客户端通过 undici dispatcher 关闭校验（仅该目的地生效）。
+
+## 7. 待验证项（勿在生产依赖）
 
 - `?includeSupportPackageCompatibility` 参数
 - `x-sap-login-with` 头

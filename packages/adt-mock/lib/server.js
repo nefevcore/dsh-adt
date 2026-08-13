@@ -214,10 +214,12 @@ async function handle(req, res, state, opts) {
         res.setHeader('Content-Type', 'application/xml');
         // Wildcard-aware matching: `Z*` / `*DEMO*` behave like the real ADT search.
         const matcher = wildcardMatcher(query);
+        const packageFilter = url.searchParams.get('packageName')?.toUpperCase();
+        const inPackage = (o) => !packageFilter || o.packageName === packageFilter;
         const objectHits = state.objects
-            .filter((o) => matcher(o.name) || matcher(o.description))
+            .filter((o) => inPackage(o) && (matcher(o.name) || matcher(o.description)))
             .slice(0, maxResults);
-        const sourceHits = operation === 'quickSearchSource' || operation === 'quickSearch'
+        const sourceHits = (operation === 'quickSearchSource' || operation === 'quickSearch') && !packageFilter
             ? state.objects.filter((o) => o.source.toLowerCase().includes(query)).slice(0, maxResults)
             : [];
         const objectXml = objectHits.map(objectRefXml).join('\n  ');
