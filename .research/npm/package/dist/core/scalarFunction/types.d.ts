@@ -1,0 +1,2 @@
+export type { ICreateScalarFunctionParams, IDeleteScalarFunctionParams, IScalarFunctionConfig, IScalarFunctionState, IUpdateScalarFunctionParams, } from '@mcp-abap-adt/interfaces';
+//# sourceMappingURL=types.d.ts.map

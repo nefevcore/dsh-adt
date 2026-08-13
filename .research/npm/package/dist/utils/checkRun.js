@@ -1,0 +1,340 @@
+"use strict";
+/**
+ * Shared check run utilities
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getObjectUri = getObjectUri;
+exports.buildCheckRunXml = buildCheckRunXml;
+exports.buildCheckRunXmlWithSource = buildCheckRunXmlWithSource;
+exports.parseCheckRunResponse = parseCheckRunResponse;
+exports.runCheckRun = runCheckRun;
+exports.runCheckRunWithSource = runCheckRunWithSource;
+exports.waitForCleanCheckRun = waitForCleanCheckRun;
+const fast_xml_parser_1 = require("fast-xml-parser");
+const contentTypes_1 = require("../constants/contentTypes");
+const internalUtils_1 = require("./internalUtils");
+const timeouts_1 = require("./timeouts");
+/**
+ * Get ADT URI for object type
+ */
+function getObjectUri(objectType, objectName) {
+    const encodedName = (0, internalUtils_1.encodeSapObjectName)(objectName.toLowerCase());
+    switch (objectType.toLowerCase()) {
+        case 'class':
+            return `/sap/bc/adt/oo/classes/${encodedName}`;
+        case 'program':
+            return `/sap/bc/adt/programs/programs/${encodedName}`;
+        case 'interface':
+            return `/sap/bc/adt/oo/interfaces/${encodedName}`;
+        case 'function_group':
+        case 'fugr':
+            return `/sap/bc/adt/functions/groups/${encodedName}`;
+        case 'function_module':
+        case 'fugr/ff': {
+            // Function module needs function group in format: "FUGR_NAME/FM_NAME"
+            if (!objectName.includes('/')) {
+                throw new Error('Function module requires function group. Use format: "functionGroupName/functionModuleName"');
+            }
+            const [fugrName, fmName] = objectName.split('/');
+            const encodedFugr = (0, internalUtils_1.encodeSapObjectName)(fugrName.toLowerCase());
+            const encodedFm = (0, internalUtils_1.encodeSapObjectName)(fmName.toLowerCase());
+            return `/sap/bc/adt/functions/groups/${encodedFugr}/fmodules/${encodedFm}`;
+        }
+        case 'table':
+        case 'tabl/dt':
+            return `/sap/bc/adt/ddic/tables/${encodedName}`;
+        case 'structure':
+        case 'stru/dt':
+            return `/sap/bc/adt/ddic/structures/${encodedName}`;
+        case 'view':
+        case 'ddls/df':
+            return `/sap/bc/adt/ddic/ddl/sources/${encodedName}`;
+        case 'metadata_extension':
+        case 'ddlx/ex':
+            return `/sap/bc/adt/ddic/ddlx/sources/${encodedName}`;
+        case 'domain':
+            return `/sap/bc/adt/ddic/domains/${encodedName}`;
+        case 'data_element':
+        case 'dtel':
+            return `/sap/bc/adt/ddic/dataelements/${encodedName}`;
+        case 'package':
+        case 'devc/k':
+            return `/sap/bc/adt/packages/${encodedName}`;
+        case 'service_definition':
+        case 'srvd/srv':
+            return `/sap/bc/adt/ddic/srvd/sources/${encodedName}`;
+        case 'scalar_function':
+        case 'dsfd/scf':
+            return `/sap/bc/adt/ddic/dsfd/sources/${encodedName}`;
+        case 'scalar_function_implementation':
+        case 'dsfi/sfi':
+            return `/sap/bc/adt/ddic/dsfi/${encodedName}`;
+        case 'append_structure':
+        case 'tabl/ds':
+            return `/sap/bc/adt/ddic/structures/${encodedName}`;
+        case 'access_control':
+        case 'dcls/dl':
+            return `/sap/bc/adt/acm/dcl/sources/${encodedName}`;
+        case 'transformation':
+        case 'xslt/vt':
+            return `/sap/bc/adt/xslt/transformations/${encodedName}`;
+        default:
+            throw new Error(`Unsupported object type: ${objectType}`);
+    }
+}
+function buildCheckRunXml(objectUri, version = 'active') {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<chkrun:checkObjectList xmlns:chkrun="http://www.sap.com/adt/checkrun" xmlns:adtcore="http://www.sap.com/adt/core">
+  <chkrun:checkObject adtcore:uri="${objectUri}" chkrun:version="${version}"/>
+</chkrun:checkObjectList>`;
+}
+/**
+ * Build XML body for checkRun request with source code (live validation)
+ *
+ * Used for checking code that hasn't been saved to SAP yet.
+ * SAP will validate the provided source code instead of reading from system.
+ *
+ * @param objectUri - ADT URI of the object (e.g., /sap/bc/adt/oo/classes/zcl_test)
+ * @param sourceCode - Source code to validate
+ * @param version - 'active' or 'inactive' (typically 'active' for live validation)
+ */
+function buildCheckRunXmlWithSource(objectUri, sourceCode, version = 'active', artifactContentType = 'text/plain; charset=utf-8') {
+    // Encode source code to base64
+    const base64Source = Buffer.from(sourceCode, 'utf-8').toString('base64');
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<chkrun:checkObjectList xmlns:chkrun="http://www.sap.com/adt/checkrun" xmlns:adtcore="http://www.sap.com/adt/core">
+  <chkrun:checkObject adtcore:uri="${objectUri}" chkrun:version="${version}">
+    <chkrun:artifacts>
+      <chkrun:artifact chkrun:contentType="${artifactContentType}" chkrun:uri="${objectUri}/source/main">
+        <chkrun:content>${base64Source}</chkrun:content>
+      </chkrun:artifact>
+    </chkrun:artifacts>
+  </chkrun:checkObject>
+</chkrun:checkObjectList>`;
+}
+/**
+ * Parse check run response
+ */
+function parseCheckRunResponse(response) {
+    const parser = new fast_xml_parser_1.XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: '@_',
+    });
+    try {
+        const result = parser.parse(response.data);
+        let checkReport = result['chkrun:checkRunReports']?.['chkrun:checkReport'];
+        if (!checkReport) {
+            checkReport = result.checkRunReports?.checkReport;
+        }
+        if (!checkReport) {
+            checkReport = result['chkrun:checkReport'];
+        }
+        if (!checkReport) {
+            return {
+                success: true,
+                status: 'no_report',
+                message: 'No check report in response (possibly no issues found)',
+                errors: [],
+                warnings: [],
+                info: [],
+                total_messages: 0,
+                has_errors: false,
+                has_warnings: false,
+            };
+        }
+        const status = checkReport['@_chkrun:status'] ||
+            checkReport['chkrun:status'] ||
+            checkReport['@_status'] ||
+            checkReport.status;
+        const statusText = checkReport['chkrun:statusText'] ||
+            checkReport['@_chkrun:statusText'] ||
+            checkReport.statusText ||
+            checkReport['@_statusText'] ||
+            '';
+        const messages = checkReport['chkrun:checkMessageList']?.['chkrun:checkMessage'] ||
+            checkReport.checkMessageList?.checkMessage ||
+            checkReport['chkrun:messages']?.msg ||
+            checkReport.messages?.msg ||
+            checkReport['chkrun:messages'] ||
+            checkReport.messages ||
+            [];
+        const messageArray = Array.isArray(messages)
+            ? messages
+            : messages
+                ? [messages]
+                : [];
+        const errors = [];
+        const warnings = [];
+        const info = [];
+        messageArray.forEach((msg) => {
+            if (!msg || typeof msg !== 'object')
+                return;
+            const msgType = String(msg['@_chkrun:type'] || msg['@_type'] || msg.type || '');
+            const st = msg.shortText;
+            const shortText = String(msg['@_chkrun:shortText'] ||
+                (typeof st === 'object' && st ? st['#text'] || st.txt || '' : st) ||
+                '');
+            const line = String(msg['@_line'] || msg.line || '');
+            const href = String(msg['@_chkrun:uri'] || msg['@_href'] || msg.href || '');
+            const code = String(msg['@_chkrun:code'] || msg['@_code'] || msg.code || '');
+            // Extract T100 message key (language-independent error identifier)
+            const t100Key = msg['chkrun:t100Key'];
+            const msgId = t100Key
+                ? String(t100Key['@_chkrun:msgid'] || t100Key['@_msgid'] || '')
+                : '';
+            const msgNo = t100Key
+                ? String(t100Key['@_chkrun:msgno'] || t100Key['@_msgno'] || '')
+                : '';
+            const msgObj = {
+                type: msgType,
+                text: shortText,
+                line,
+                href,
+                ...(code && { code }),
+                ...(msgId && { msgId }),
+                ...(msgNo && { msgNo }),
+            };
+            if (msgType === 'E') {
+                errors.push(msgObj);
+            }
+            else if (msgType === 'W') {
+                warnings.push(msgObj);
+            }
+            else {
+                info.push(msgObj);
+            }
+        });
+        // When status='processed', SAP sometimes echoes the statusText as a type="E" message.
+        // This is not a real error — it's just the check completion notification (e.g.,
+        // "Objekt Z_TEST wurde geprüft" / "Object Z_TEST has been checked").
+        // Filter these out by comparing E-type message text with statusText (language-independent).
+        let realErrors = errors;
+        if (status === 'processed' && statusText && errors.length > 0) {
+            const statusLower = statusText.toLowerCase().trim();
+            realErrors = errors.filter((err) => err.text.toLowerCase().trim() !== statusLower);
+        }
+        // If status is 'notProcessed', it's an error (object doesn't exist or can't be validated)
+        const hasErrors = realErrors.length > 0 || status === 'notProcessed';
+        const isSuccess = status === 'processed' && realErrors.length === 0;
+        return {
+            success: isSuccess,
+            status: status || 'no_report',
+            message: statusText,
+            errors: realErrors,
+            warnings,
+            info,
+            total_messages: messageArray.length,
+            has_errors: hasErrors,
+            has_warnings: warnings.length > 0,
+        };
+    }
+    catch (error) {
+        return {
+            success: false,
+            status: 'parse_error',
+            message: `Failed to parse check run response: ${error}`,
+            errors: [],
+            warnings: [],
+            info: [],
+            total_messages: 0,
+            has_errors: false,
+            has_warnings: false,
+        };
+    }
+}
+/**
+ * Run check run for any object type
+ */
+async function runCheckRun(connection, objectType, objectName, version = 'active', reporter = 'abapCheckRun', sourceCode, artifactContentType = 'text/plain; charset=utf-8') {
+    const objectUri = getObjectUri(objectType, objectName);
+    const xmlBody = sourceCode
+        ? buildCheckRunXmlWithSource(objectUri, sourceCode, version, artifactContentType)
+        : buildCheckRunXml(objectUri, version);
+    const headers = {
+        Accept: contentTypes_1.ACCEPT_CHECK_MESSAGES,
+        'Content-Type': contentTypes_1.CT_CHECK_OBJECTS,
+    };
+    const url = `/sap/bc/adt/checkruns?reporters=${reporter}`;
+    return connection.makeAdtRequest({
+        url,
+        method: 'POST',
+        timeout: (0, timeouts_1.getTimeout)('default'),
+        data: xmlBody,
+        headers,
+    });
+}
+/**
+ * Run a check on an object with unsaved source code (live validation).
+ *
+ * This function validates source code that hasn't been saved to SAP yet,
+ * similar to real-time validation in Eclipse ADT editor during typing.
+ *
+ * @param connection - The ABAP connection
+ * @param objectType - Type of object (e.g., 'class', 'program')
+ * @param objectName - Name of the object
+ * @param sourceCode - The source code to validate
+ * @param version - Version to validate against ('active' or 'inactive')
+ * @param reporter - Reporter type for check results
+ * @param sessionId - Optional session ID for session-based requests
+ * @returns Promise resolving to IAdtResponse with check results
+ */
+async function runCheckRunWithSource(connection, objectType, objectName, sourceCode, version = 'active', reporter = 'abapCheckRun', artifactContentType = 'text/plain; charset=utf-8') {
+    const objectUri = await getObjectUri(objectType, objectName);
+    const xmlBody = buildCheckRunXmlWithSource(objectUri, sourceCode, version, artifactContentType);
+    const headers = {
+        Accept: contentTypes_1.ACCEPT_CHECK_MESSAGES,
+        'Content-Type': contentTypes_1.CT_CHECK_OBJECTS,
+    };
+    const url = `/sap/bc/adt/checkruns?reporters=${reporter}`;
+    return connection.makeAdtRequest({
+        url,
+        method: 'POST',
+        timeout: (0, timeouts_1.getTimeout)('default'),
+        data: xmlBody,
+        headers,
+    });
+}
+/**
+ * Run a check repeatedly until the report comes back with no messages at all.
+ *
+ * This is what ADT itself does. A trace of an Eclipse session writing an append
+ * structure shows six `POST /checkruns` in a row while the source is being
+ * completed — each answering ~1.2 KB of messages — and then one final answer of
+ * 0.3 KB carrying an empty report:
+ *
+ * ```xml
+ * <chkrun:checkReport chkrun:reporter="abapCheckRun" chkrun:status="processed"
+ *   chkrun:statusText="Object ZADT_S_APPEND_S has been checked"/>
+ * ```
+ *
+ * Only then does Eclipse send the PUT. Two earlier readings of that trace were
+ * wrong and are worth naming: it does **not** ignore check errors and write
+ * anyway, and the repetition is not idle chatter — a clean report is the
+ * precondition for writing.
+ *
+ * Waiting matters because no ADT operation that changes system state guarantees
+ * when the change becomes visible: a base object activated moments earlier can
+ * still be reported as unextendable until DDIC catches up.
+ *
+ * @throws the last set of messages if the report never comes back clean.
+ */
+async function waitForCleanCheckRun(connection, objectType, objectName, version, sourceCode, options) {
+    const attempts = options?.attempts ?? 10;
+    const delayMs = options?.delayMs ?? 2000;
+    let lastMessages = '';
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        const response = await runCheckRun(connection, objectType, objectName, version, 'abapCheckRun', sourceCode);
+        const parsed = parseCheckRunResponse(response);
+        if (parsed.total_messages === 0) {
+            return response;
+        }
+        lastMessages = [...parsed.errors, ...parsed.warnings, ...parsed.info]
+            .map((m) => m.text)
+            .join('; ');
+        options?.logger?.debug?.(`check on ${objectName} still reports findings (attempt ${attempt}/${attempts}): ${lastMessages}`);
+        if (attempt < attempts) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+    }
+    throw new Error(`Check on ${objectName} never came back clean after ${attempts} attempts: ${lastMessages}`);
+}

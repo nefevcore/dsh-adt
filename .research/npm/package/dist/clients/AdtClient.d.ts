@@ -1,0 +1,339 @@
+/**
+ * AdtClient - High-level ADT Object Operations Client
+ *
+ * Provides simplified CRUD operations with automatic operation chains,
+ * error handling, and resource cleanup.
+ *
+ * AdtClient provides high-level methods that encapsulate complex operation chains:
+ * - Create: validate → create → check → lock → check(inactive) → update → unlock → check → activate
+ * - Update: lock → check(inactive) → update → unlock → check → activate
+ * - Delete: check(deletion) → delete
+ *
+ * Each factory method returns an IAdtObject instance that can be used
+ * to perform operations on a specific object type.
+ */
+import type { IAbapConnection, IAdtActivatable, IAdtCdsTestRunnable, IAdtCheckable, IAdtCreatable, IAdtCrud, IAdtLockable, IAdtNonVersionedObject, IAdtReadable, IAdtSourceObject, IAdtTestRunnable, IAdtTransportAware, IAdtValidatable, IAdtVersionable, ILogger } from '@mcp-abap-adt/interfaces';
+import { type IAccessControlConfig, type IAccessControlState } from '../core/accessControl';
+import { type IAppendStructureConfig, type IAppendStructureState } from '../core/appendStructure';
+import { type IAuthorizationFieldConfig, type IAuthorizationFieldState } from '../core/authorizationField';
+import { type IBehaviorDefinitionConfig, type IBehaviorDefinitionState } from '../core/behaviorDefinition';
+import { type IBehaviorImplementationConfig, type IBehaviorImplementationState } from '../core/behaviorImplementation';
+import { type IClassConfig, type IClassState, type ILocalDefinitionsConfig, type ILocalMacrosConfig, type ILocalTestClassConfig, type ILocalTypesConfig } from '../core/class';
+import { type IDataElementConfig, type IDataElementState } from '../core/dataElement';
+import { type IDdlConfig, type IDdlState } from '../core/ddl';
+import { type IDomainConfig, type IDomainState } from '../core/domain';
+import { type IEnhancementConfig, type IEnhancementState } from '../core/enhancement';
+import { type IFeatureToggleObject } from '../core/featureToggle';
+import { type IFunctionGroupConfig, type IFunctionGroupState } from '../core/functionGroup';
+import { type IFunctionIncludeConfig, type IFunctionIncludeState } from '../core/functionInclude';
+import { type IFunctionModuleConfig, type IFunctionModuleState } from '../core/functionModule';
+import { type IInterfaceConfig, type IInterfaceState } from '../core/interface';
+import { type IMessageClassConfig, type IMessageClassMessageConfig, type IMessageClassMessageState, type IMessageClassState } from '../core/messageClass';
+import { type IMetadataExtensionConfig, type IMetadataExtensionState } from '../core/metadataExtension';
+import { type IPackageConfig, type IPackageState } from '../core/package';
+import { type IProgramConfig, type IProgramState } from '../core/program';
+import { type IScalarFunctionConfig, type IScalarFunctionState } from '../core/scalarFunction';
+import { type IScalarFunctionImplementationConfig, type IScalarFunctionImplementationState } from '../core/scalarFunctionImplementation';
+import { type IAdtServiceBinding } from '../core/service';
+import { type IServiceDefinitionConfig, type IServiceDefinitionState } from '../core/serviceDefinition';
+import { AdtUtils } from '../core/shared/AdtUtils';
+import { type LockFailure, LockRegistry } from '../core/shared/LockRegistry';
+import { type IStructureConfig, type IStructureState } from '../core/structure';
+import { type ITableConfig, type ITableState } from '../core/table';
+import { type ITableTypeConfig, type ITableTypeState } from '../core/tabletype';
+import { type ITransformationConfig, type ITransformationState } from '../core/transformation';
+import { AdtRequest } from '../core/transport';
+import { type ICdsUnitTestConfig, type ICdsUnitTestState, type IUnitTestConfig, type IUnitTestState } from '../core/unitTest';
+export interface IAdtSystemContext {
+    masterSystem?: string;
+    responsible?: string;
+    /** Master/original language for newly created objects (adtcore:masterLanguage). Sourced from SAP_LANGUAGE; defaults to EN when unset. */
+    masterLanguage?: string;
+}
+export interface IAdtClientOptions {
+    enableAcceptCorrection?: boolean;
+    masterSystem?: string;
+    responsible?: string;
+    /** Master/original language for newly created objects. Falls back to EN when unset. */
+    masterLanguage?: string;
+    contentTypes?: import('../core/shared/contentTypes').IAdtContentTypes;
+    /** Whether the SAP system uses Unicode encoding. Affects Content-Type headers for source code operations. */
+    unicode?: boolean;
+}
+export declare class AdtClient {
+    protected connection: IAbapConnection;
+    protected logger: ILogger;
+    protected systemContext: IAdtSystemContext;
+    protected contentTypes?: import('../core/shared/contentTypes').IAdtContentTypes;
+    /**
+     * Session-scoped registry of locks held by handlers created from this client.
+     * All handlers share one stateful session, so all their locks belong here.
+     */
+    protected readonly lockRegistry: LockRegistry;
+    constructor(connection: IAbapConnection, logger?: ILogger, options?: IAdtClientOptions);
+    /**
+     * Refuses to hand out a handler over a connection nobody connected.
+     *
+     * Connecting is the CONSUMER's job and stays that way — this library does not
+     * own the connection and must not connect on anyone's behalf. What it can do
+     * is catch the case where a connector was injected and `connect()` was never
+     * called, which otherwise surfaces deep in an operation chain: the handlers
+     * collect failures into `state.errors` rather than stopping, so a missing
+     * connection arrives as a state object full of `ADT_NOT_CONNECTED` after the
+     * chain has walked its whole length. Failing here turns that into nothing
+     * having happened at all.
+     *
+     * Only asked of a connection that ANSWERS the question. `isConnected()` lives
+     * on `ISessionLifecycleAware`, not on `IAbapConnection`: an RFC connection has
+     * no HTTP session and no such method, and a transport that cannot answer must
+     * not be blocked on its silence. This is a real limit, not an oversight — a
+     * transport with no session has no "not connected" state to catch, so the
+     * promise this guard makes is necessarily narrower than "every
+     * `IAbapConnection`".
+     *
+     * It checks ONLY `isConnected`, which is the only method it calls. That is a
+     * different rule from the one for a type predicate, and the difference is
+     * worth stating because the two look alike: a predicate narrows to the WHOLE
+     * interface, so it must verify the whole interface or its caller will invoke a
+     * method that is not there. This asks one question and calls one method, so
+     * demanding the other two would only make it step aside for a connection that
+     * could have answered — refusing evidence it was offered.
+     */
+    private assertConnected;
+    /**
+     * Get high-level operations for Class objects
+     * @returns IAdtObject instance for Class operations
+     */
+    getClass(): IAdtSourceObject<IClassConfig, IClassState>;
+    /**
+     * Get high-level operations for Program objects
+     * @returns IAdtObject instance for Program operations
+     */
+    getProgram(): IAdtSourceObject<IProgramConfig, IProgramState>;
+    /**
+     * Get high-level operations for Interface objects
+     * @returns IAdtObject instance for Interface operations
+     */
+    getInterface(): IAdtSourceObject<IInterfaceConfig, IInterfaceState>;
+    /**
+     * Get high-level operations for Domain objects
+     * @returns IAdtObject instance for Domain operations
+     */
+    getDomain(): IAdtNonVersionedObject<IDomainConfig, IDomainState>;
+    /**
+     * Last-resort cleanup: release every lock still held by handlers created from
+     * this client. Returns the locks that could not be released.
+     *
+     * This is a safety net for abandoned locks (a forgot-to-unlock, or a managed
+     * flow that threw before its unlock). Preventing a timeout from interrupting a
+     * lock→unlock critical section remains the caller's responsibility.
+     */
+    unlockAll(): Promise<LockFailure[]>;
+    /**
+     * Keys of locks currently held by handlers created from this client
+     * (e.g. `Domain/ZFOO`, `DataElement/ZBAR`). Lets a consumer inspect whether a
+     * session was left with dangling locks before deciding to `unlockAll()`.
+     */
+    get pendingLocks(): string[];
+    /**
+     * Release all held locks when used with `await using`.
+     *
+     * Best-effort: like {@link unlockAll}, this never throws — a lock whose unlock
+     * fails is retained rather than surfaced as an error, so a disposer failure
+     * cannot mask the error that ended the `using` scope. Any residual failures
+     * are logged as a warning and remain observable via {@link pendingLocks}.
+     * Callers that must react to unlock failures should call `unlockAll()`
+     * explicitly and inspect the returned `LockFailure[]`.
+     */
+    [Symbol.asyncDispose](): Promise<void>;
+    /**
+     * Get high-level operations for DataElement objects
+     * @returns IAdtObject instance for DataElement operations
+     */
+    getDataElement(): IAdtNonVersionedObject<IDataElementConfig, IDataElementState>;
+    /**
+     * Get high-level operations for AuthorizationField objects
+     * @returns IAdtObject instance for AuthorizationField operations
+     */
+    getAuthorizationField(): IAdtCrud<IAuthorizationFieldConfig, IAuthorizationFieldState> & IAdtValidatable<IAuthorizationFieldConfig, IAuthorizationFieldState> & IAdtCheckable<IAuthorizationFieldConfig, IAuthorizationFieldState> & IAdtActivatable<IAuthorizationFieldConfig, IAuthorizationFieldState> & IAdtLockable<IAuthorizationFieldConfig, IAuthorizationFieldState>;
+    /**
+     * Get high-level operations for Structure objects
+     * @returns IAdtObject instance for Structure operations
+     */
+    getStructure(): IAdtSourceObject<IStructureConfig, IStructureState>;
+    /**
+     * Get high-level operations for Table objects
+     * @returns IAdtObject instance for Table operations
+     */
+    getTable(): IAdtSourceObject<ITableConfig, ITableState>;
+    /**
+     * Get high-level operations for TableType (DDIC Table Type) objects
+     * @returns IAdtObject instance for TableType operations
+     */
+    getTableType(): IAdtSourceObject<ITableTypeConfig, ITableTypeState>;
+    /**
+     * Generic client for ABAP DDL source objects (`/sap/bc/adt/ddic/ddl/sources/`):
+     * CDS views, AMDP table functions, and other DDL sources. Classic DDIC structures
+     * (`/ddic/structures/`), tables (`/ddic/tables/`), and scalar functions
+     * (`/ddic/dsfd/sources/`) have their own clients.
+     * @returns IAdtObject instance for DDL source operations
+     */
+    getDdl(): IAdtSourceObject<IDdlConfig, IDdlState>;
+    /**
+     * Get high-level operations for FunctionGroup objects
+     * @returns IAdtObject instance for FunctionGroup operations
+     */
+    getFunctionGroup(): IAdtNonVersionedObject<IFunctionGroupConfig, IFunctionGroupState>;
+    /**
+     * Get high-level operations for FunctionModule objects
+     * @returns IAdtObject instance for FunctionModule operations
+     */
+    getFunctionModule(): IAdtSourceObject<IFunctionModuleConfig, IFunctionModuleState>;
+    /**
+     * Get high-level operations for FunctionInclude objects
+     * @returns IAdtObject instance for FunctionInclude operations
+     */
+    getFunctionInclude(): IAdtCrud<IFunctionIncludeConfig, IFunctionIncludeState> & IAdtValidatable<IFunctionIncludeConfig, IFunctionIncludeState> & IAdtCheckable<IFunctionIncludeConfig, IFunctionIncludeState> & IAdtActivatable<IFunctionIncludeConfig, IFunctionIncludeState> & IAdtLockable<IFunctionIncludeConfig, IFunctionIncludeState> & IAdtVersionable<IFunctionIncludeConfig>;
+    /**
+     * Get high-level operations for Package objects
+     * @returns IAdtObject instance for Package operations
+     */
+    getPackage(): IAdtCrud<IPackageConfig, IPackageState> & IAdtValidatable<IPackageConfig, IPackageState> & IAdtCheckable<IPackageConfig, IPackageState> & IAdtLockable<IPackageConfig, IPackageState> & IAdtTransportAware<IPackageConfig, IPackageState>;
+    /**
+     * Get high-level operations for MessageClass (MSAG/N) objects
+     * @returns IAdtObject instance for MessageClass operations
+     */
+    getMessageClass(): IAdtCrud<IMessageClassConfig, IMessageClassState> & IAdtValidatable<IMessageClassConfig, IMessageClassState> & IAdtLockable<IMessageClassConfig, IMessageClassState>;
+    /**
+     * Get high-level operations for a single message within a MessageClass.
+     * Supports read, create/update (upsert), and delete of individual messages.
+     * @returns IAdtObject instance for MessageClassMessage operations
+     */
+    getMessageClassMessage(): IAdtCrud<IMessageClassMessageConfig, IMessageClassMessageState>;
+    /**
+     * Get high-level operations for AccessControl objects
+     * @returns IAdtObject instance for AccessControl operations
+     */
+    getAccessControl(): IAdtSourceObject<IAccessControlConfig, IAccessControlState>;
+    /**
+     * Get high-level operations for Transformation objects (XSLT)
+     * Supports both SimpleTransformation and XSLTProgram types
+     * @returns IAdtObject instance for Transformation operations
+     */
+    getTransformation(): IAdtSourceObject<ITransformationConfig, ITransformationState>;
+    /**
+     * Get high-level operations for ServiceDefinition objects
+     * @returns IAdtObject instance for ServiceDefinition operations
+     */
+    getServiceDefinition(): IAdtSourceObject<IServiceDefinitionConfig, IServiceDefinitionState>;
+    /**
+     * Get high-level operations for CDS Scalar Function (DSFD/SCF) objects
+     */
+    getScalarFunction(): IAdtSourceObject<IScalarFunctionConfig, IScalarFunctionState>;
+    /**
+     * Get high-level operations for Scalar Function Implementation (DSFI/SFI) objects
+     */
+    getScalarFunctionImplementation(): IAdtSourceObject<IScalarFunctionImplementationConfig, IScalarFunctionImplementationState>;
+    /**
+     * Get high-level operations for Append Structure (TABL/DS) objects
+     */
+    getAppendStructure(): IAdtSourceObject<IAppendStructureConfig, IAppendStructureState>;
+    /**
+     * Get high-level operations for ServiceBinding objects
+     * @returns IAdtServiceBinding instance for ServiceBinding CRUD and lifecycle operations
+     */
+    getServiceBinding(): IAdtServiceBinding;
+    /**
+     * @deprecated Use getServiceBinding() instead.
+     */
+    getService(): IAdtServiceBinding;
+    /**
+     * Get high-level operations for BehaviorDefinition objects
+     * @returns IAdtObject instance for BehaviorDefinition operations
+     */
+    getBehaviorDefinition(): IAdtSourceObject<IBehaviorDefinitionConfig, IBehaviorDefinitionState>;
+    /**
+     * Get high-level operations for BehaviorImplementation objects
+     * @returns IAdtObject instance for BehaviorImplementation operations
+     */
+    getBehaviorImplementation(): IAdtSourceObject<IBehaviorImplementationConfig, IBehaviorImplementationState>;
+    /**
+     * Get high-level operations for MetadataExtension objects
+     * @returns IAdtObject instance for MetadataExtension operations
+     */
+    getMetadataExtension(): IAdtSourceObject<IMetadataExtensionConfig, IMetadataExtensionState>;
+    /**
+     * Get high-level operations for Enhancement objects
+     * Supports multiple enhancement types:
+     * - Enhancement Implementation (ENHO)
+     * - BAdI Implementation
+     * - Source Code Plugin (with source code)
+     * - Enhancement Spot (ENHS)
+     * - BAdI Enhancement Spot
+     * @returns IAdtObject instance for Enhancement operations
+     */
+    getEnhancement(): IAdtSourceObject<IEnhancementConfig, IEnhancementState>;
+    /**
+     * Get high-level operations for FeatureToggle objects
+     * @returns IFeatureToggleObject instance for FeatureToggle operations
+     */
+    getFeatureToggle(): IFeatureToggleObject;
+    /**
+     * Get high-level operations for UnitTest objects.
+     *
+     * A test run is created and read, never edited: ADT exposes no update,
+     * delete, activate, check, lock or version resource for one. The declared
+     * type says so rather than promising thirteen methods of which nine throw.
+     *
+     * It also carries {@link IAdtTestRunnable} — starting a run and collecting
+     * its outcome is the reason this handler exists, and until interfaces 13.1.0
+     * no contract described it, so callers cast past the type to reach it.
+     */
+    getUnitTest(): IAdtCreatable<IUnitTestConfig, IUnitTestState> & IAdtReadable<IUnitTestConfig, IUnitTestState> & IAdtValidatable<IUnitTestConfig, IUnitTestState> & IAdtTestRunnable;
+    /**
+     * Get high-level operations for CDS UnitTest objects.
+     *
+     * Same capability set as {@link getUnitTest}; the CDS-specific surface
+     * (`checkCdsTestDoubles`, `getCdsViewName`) is on the concrete class.
+     */
+    getCdsUnitTest(): IAdtCreatable<ICdsUnitTestConfig, ICdsUnitTestState> & IAdtReadable<ICdsUnitTestConfig, ICdsUnitTestState> & IAdtValidatable<ICdsUnitTestConfig, ICdsUnitTestState> & IAdtCdsTestRunnable;
+    /**
+     * Get high-level operations for Request (Transport Request) objects
+     * @returns IAdtObject instance for Request operations
+     */
+    getRequest(): AdtRequest;
+    /**
+     * Get utility functions (NOT CRUD operations)
+     * Provides access to cross-cutting ADT utility functions:
+     * - Search operations
+     * - Where-used analysis
+     * - Inactive objects management
+     * - Group activation/deletion
+     * - Object metadata and source code reading
+     * - SQL queries and table contents
+     *
+     * @returns AdtUtils instance for utility operations
+     */
+    getUtils(): AdtUtils;
+    /**
+     * Get high-level operations for LocalTestClass objects
+     * @returns IAdtObject instance for LocalTestClass operations
+     */
+    getLocalTestClass(): IAdtSourceObject<ILocalTestClassConfig, IClassState>;
+    /**
+     * Get high-level operations for LocalTypes objects
+     * @returns IAdtObject instance for LocalTypes operations
+     */
+    getLocalTypes(): IAdtSourceObject<ILocalTypesConfig, IClassState>;
+    /**
+     * Get high-level operations for LocalDefinitions objects
+     * @returns IAdtObject instance for LocalDefinitions operations
+     */
+    getLocalDefinitions(): IAdtSourceObject<ILocalDefinitionsConfig, IClassState>;
+    /**
+     * Get high-level operations for LocalMacros objects
+     * @returns IAdtObject instance for LocalMacros operations
+     */
+    getLocalMacros(): IAdtSourceObject<ILocalMacrosConfig, IClassState>;
+}
+//# sourceMappingURL=AdtClient.d.ts.map

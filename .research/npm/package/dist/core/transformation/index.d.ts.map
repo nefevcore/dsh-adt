@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../../src/core/transformation/index.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,0BAA0B,CAAC;AACjE,OAAO,KAAK,EAAE,qBAAqB,EAAE,oBAAoB,EAAE,MAAM,SAAS,CAAC;AAE3E,OAAO,EAAE,iBAAiB,EAAE,MAAM,qBAAqB,CAAC;AACxD,cAAc,SAAS,CAAC;AAExB,MAAM,MAAM,qBAAqB,GAAG,gBAAgB,CAClD,qBAAqB,EACrB,oBAAoB,CACrB,CAAC"}

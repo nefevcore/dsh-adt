@@ -1,0 +1,1 @@
+{"version":3,"file":"check.d.ts","sourceRoot":"","sources":["../../../src/core/authorizationField/check.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,OAAO,KAAK,EAAE,eAAe,EAAE,YAAY,EAAE,MAAM,0BAA0B,CAAC;AAU9E;;;;;;;;;GASG;AACH,wBAAsB,uBAAuB,CAC3C,UAAU,EAAE,eAAe,EAC3B,IAAI,EAAE,MAAM,EACZ,OAAO,EAAE,QAAQ,GAAG,UAAU,EAC9B,UAAU,CAAC,EAAE,MAAM,GAClB,OAAO,CAAC,YAAY,CAAC,CA8CvB"}

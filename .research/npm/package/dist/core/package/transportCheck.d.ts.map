@@ -1,0 +1,1 @@
+{"version":3,"file":"transportCheck.d.ts","sourceRoot":"","sources":["../../../src/core/package/transportCheck.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,0BAA0B,CAAC;AAWhE,OAAO,KAAK,EAAE,oBAAoB,EAAE,MAAM,SAAS,CAAC;AAEpD;;GAEG;AACH,wBAAsB,0BAA0B,CAC9C,UAAU,EAAE,eAAe,EAC3B,IAAI,EAAE,oBAAoB,EAC1B,cAAc,EAAE,MAAM,GACrB,OAAO,CAAC,MAAM,EAAE,CAAC,CAmDnB"}

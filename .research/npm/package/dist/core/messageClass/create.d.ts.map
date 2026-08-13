@@ -1,0 +1,1 @@
+{"version":3,"file":"create.d.ts","sourceRoot":"","sources":["../../../src/core/messageClass/create.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,OAAO,KAAK,EAAE,eAAe,EAAE,YAAY,EAAE,MAAM,0BAA0B,CAAC;AAE9E,OAAO,KAAK,EAAE,yBAAyB,EAAE,MAAM,SAAS,CAAC;AAKzD;;;;;GAKG;AACH,wBAAsB,kBAAkB,CACtC,UAAU,EAAE,eAAe,EAC3B,MAAM,EAAE,yBAAyB,GAChC,OAAO,CAAC,YAAY,CAAC,CA0BvB"}

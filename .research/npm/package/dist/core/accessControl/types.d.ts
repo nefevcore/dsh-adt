@@ -1,0 +1,2 @@
+export type { IAccessControlConfig, IAccessControlState, ICreateAccessControlParams, IDeleteAccessControlParams, IUpdateAccessControlParams, } from '@mcp-abap-adt/interfaces';
+//# sourceMappingURL=types.d.ts.map

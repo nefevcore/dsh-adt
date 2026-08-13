@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../../src/core/accessControl/index.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,0BAA0B,CAAC;AACjE,OAAO,KAAK,EAAE,oBAAoB,EAAE,mBAAmB,EAAE,MAAM,SAAS,CAAC;AAEzE,OAAO,EAAE,gBAAgB,EAAE,MAAM,oBAAoB,CAAC;AACtD,cAAc,SAAS,CAAC;AAExB,MAAM,MAAM,oBAAoB,GAAG,gBAAgB,CACjD,oBAAoB,EACpB,mBAAmB,CACpB,CAAC"}

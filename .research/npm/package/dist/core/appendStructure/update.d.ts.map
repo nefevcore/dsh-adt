@@ -1,0 +1,1 @@
+{"version":3,"file":"update.d.ts","sourceRoot":"","sources":["../../../src/core/appendStructure/update.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,YAAY,EAAE,MAAM,0BAA0B,CAAC;AAI9E,OAAO,KAAK,EAAE,4BAA4B,EAAE,MAAM,SAAS,CAAC;AAE5D,wBAAsB,qBAAqB,CACzC,UAAU,EAAE,eAAe,EAC3B,IAAI,EAAE,4BAA4B,EAClC,UAAU,EAAE,MAAM,GACjB,OAAO,CAAC,YAAY,CAAC,CAavB"}

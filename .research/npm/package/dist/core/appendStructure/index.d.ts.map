@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../../src/core/appendStructure/index.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,0BAA0B,CAAC;AACjE,OAAO,KAAK,EAAE,sBAAsB,EAAE,qBAAqB,EAAE,MAAM,SAAS,CAAC;AAE7E,OAAO,EAAE,kBAAkB,EAAE,MAAM,sBAAsB,CAAC;AAC1D,cAAc,SAAS,CAAC;AAExB,MAAM,MAAM,sBAAsB,GAAG,gBAAgB,CACnD,sBAAsB,EACtB,qBAAqB,CACtB,CAAC"}

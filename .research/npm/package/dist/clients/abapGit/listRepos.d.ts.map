@@ -1,0 +1,1 @@
+{"version":3,"file":"listRepos.d.ts","sourceRoot":"","sources":["../../../src/clients/abapGit/listRepos.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,0BAA0B,CAAC;AAGhE,OAAO,EAAE,KAAK,iBAAiB,EAAiB,MAAM,aAAa,CAAC;AAEpE,wBAAsB,SAAS,CAC7B,UAAU,EAAE,eAAe,GAC1B,OAAO,CAAC,iBAAiB,EAAE,CAAC,CAQ9B"}

@@ -1,0 +1,70 @@
+"use strict";
+/**
+ * Behavior Definition create operations - Low-level functions
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.create = create;
+const contentTypes_1 = require("../../constants/contentTypes");
+const internalUtils_1 = require("../../utils/internalUtils");
+const timeouts_1 = require("../../utils/timeouts");
+/**
+ * Create a new behavior definition
+ *
+ * Endpoint: POST /sap/bc/adt/bo/behaviordefinitions
+ *
+ * @param connection - ABAP connection instance
+ * @param params - Creation parameters
+ * @param sessionId - Session ID for request tracking
+ * @returns Axios response with created object metadata
+ *
+ * @example
+ * ```typescript
+ * const response = await create(connection, {
+ *   name: 'Z_MY_BDEF',
+ *   description: 'My Behavior Definition',
+ *   package: 'Z_PACKAGE',
+ *   implementationType: 'Managed'
+ * }, sessionId);
+ *
+ * // Extract source URI
+ * const sourceUri = response.data.match(/abapsource:sourceUri="([^"]+)"/)?.[1];
+ * ```
+ */
+async function create(connection, params) {
+    try {
+        const language = params.language || 'EN';
+        const masterSystem = params.masterSystem || '';
+        const responsible = params.responsible || '';
+        // Description is limited to 60 characters in SAP ADT
+        const description = (0, internalUtils_1.limitDescription)(params.description);
+        const masterSystemAttr = masterSystem
+            ? ` adtcore:masterSystem="${masterSystem}"`
+            : '';
+        const responsibleAttr = responsible
+            ? ` adtcore:responsible="${responsible}"`
+            : '';
+        const xmlBody = `<?xml version="1.0" encoding="UTF-8"?><blue:blueSource xmlns:blue="http://www.sap.com/wbobj/blue" xmlns:adtcore="http://www.sap.com/adt/core" adtcore:description="${description}" adtcore:language="${language}" adtcore:name="${params.name}" adtcore:type="BDEF/BDO" adtcore:masterLanguage="${language}"${masterSystemAttr}${responsibleAttr}>
+    <adtcore:adtTemplate>
+        <adtcore:adtProperty adtcore:key="implementation_type">${params.implementationType}</adtcore:adtProperty>
+    </adtcore:adtTemplate>
+    <adtcore:packageRef adtcore:name="${params.package}"/>
+</blue:blueSource>`;
+        const headers = {
+            Accept: contentTypes_1.CT_BEHAVIOR_DEFINITION,
+            'Content-Type': contentTypes_1.CT_BEHAVIOR_DEFINITION,
+        };
+        const url = `/sap/bc/adt/bo/behaviordefinitions${params.transportRequest ? `?corrNr=${params.transportRequest}` : ''}`;
+        const response = await connection.makeAdtRequest({
+            url,
+            method: 'POST',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            data: xmlBody,
+            headers,
+        });
+        return response;
+    }
+    catch (error) {
+        const e = error;
+        throw new Error(`Failed to create behavior definition ${params.name}: ${e.message}`);
+    }
+}

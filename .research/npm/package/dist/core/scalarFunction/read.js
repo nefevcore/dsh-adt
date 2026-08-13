@@ -1,0 +1,45 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getScalarFunction = getScalarFunction;
+exports.getScalarFunctionSource = getScalarFunctionSource;
+exports.getScalarFunctionTransport = getScalarFunctionTransport;
+const contentTypes_1 = require("../../constants/contentTypes");
+const acceptNegotiation_1 = require("../../utils/acceptNegotiation");
+const internalUtils_1 = require("../../utils/internalUtils");
+const timeouts_1 = require("../../utils/timeouts");
+function buildQuery(version, options) {
+    const q = [];
+    if (version)
+        q.push(`version=${version}`);
+    if (options?.withLongPolling)
+        q.push('withLongPolling=true');
+    return q.length ? `?${q.join('&')}` : '';
+}
+async function getScalarFunction(connection, name, version = 'inactive', options, logger) {
+    const url = `/sap/bc/adt/ddic/dsfd/sources/${(0, internalUtils_1.encodeSapObjectName)(name.toLowerCase())}${buildQuery(version, options)}`;
+    return (0, acceptNegotiation_1.makeAdtRequestWithAcceptNegotiation)(connection, {
+        url,
+        method: 'GET',
+        timeout: (0, timeouts_1.getTimeout)('default'),
+        headers: { Accept: options?.accept ?? contentTypes_1.ACCEPT_SCALAR_FUNCTION },
+    }, { logger });
+}
+async function getScalarFunctionSource(connection, name, version = 'inactive', options, logger) {
+    const url = `/sap/bc/adt/ddic/dsfd/sources/${(0, internalUtils_1.encodeSapObjectName)(name.toLowerCase())}/source/main${buildQuery(version, options)}`;
+    return (0, acceptNegotiation_1.makeAdtRequestWithAcceptNegotiation)(connection, {
+        url,
+        method: 'GET',
+        timeout: (0, timeouts_1.getTimeout)('default'),
+        headers: { Accept: options?.accept ?? contentTypes_1.ACCEPT_SOURCE },
+    }, { logger });
+}
+async function getScalarFunctionTransport(connection, name, options) {
+    const query = options?.withLongPolling ? '?withLongPolling=true' : '';
+    const url = `/sap/bc/adt/ddic/dsfd/sources/${(0, internalUtils_1.encodeSapObjectName)(name.toLowerCase())}/transport${query}`;
+    return connection.makeAdtRequest({
+        url,
+        method: 'GET',
+        timeout: (0, timeouts_1.getTimeout)('default'),
+        headers: { Accept: options?.accept ?? contentTypes_1.ACCEPT_TRANSPORT },
+    });
+}

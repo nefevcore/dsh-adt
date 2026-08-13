@@ -1,0 +1,43 @@
+import type { IAbapConnection, IAdtResponse, ILogger } from '@mcp-abap-adt/interfaces';
+import type { IAdtClientOptions } from '../clients/AdtClient';
+import { BatchRecordingConnection } from './BatchRecordingConnection';
+export declare class AdtClientBatch {
+    private recorder;
+    private innerClient;
+    private realConnection;
+    constructor(connection: IAbapConnection, logger?: ILogger, options?: IAdtClientOptions);
+    getClass(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IClassConfig, import("@mcp-abap-adt/interfaces").IClassState>;
+    getProgram(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IProgramConfig, import("@mcp-abap-adt/interfaces").IProgramState>;
+    getInterface(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IInterfaceConfig, import("@mcp-abap-adt/interfaces").IInterfaceState>;
+    getDomain(): import("@mcp-abap-adt/interfaces").IAdtNonVersionedObject<import("@mcp-abap-adt/interfaces").IDomainConfig, import("@mcp-abap-adt/interfaces").IDomainState>;
+    getDataElement(): import("@mcp-abap-adt/interfaces").IAdtNonVersionedObject<import("@mcp-abap-adt/interfaces").IDataElementConfig, import("@mcp-abap-adt/interfaces").IDataElementState>;
+    getStructure(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IStructureConfig, import("@mcp-abap-adt/interfaces").IStructureState>;
+    getTable(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").ITableConfig, import("@mcp-abap-adt/interfaces").ITableState>;
+    getTableType(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").ITableTypeConfig, import("@mcp-abap-adt/interfaces").ITableTypeState>;
+    getDdl(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IDdlConfig, import("@mcp-abap-adt/interfaces").IDdlState>;
+    getFunctionGroup(): import("@mcp-abap-adt/interfaces").IAdtNonVersionedObject<import("@mcp-abap-adt/interfaces").IFunctionGroupConfig, import("@mcp-abap-adt/interfaces").IFunctionGroupState>;
+    getFunctionModule(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IFunctionModuleConfig, import("@mcp-abap-adt/interfaces").IFunctionModuleState>;
+    getPackage(): import("@mcp-abap-adt/interfaces").IAdtCrud<import("@mcp-abap-adt/interfaces").IPackageConfig, import("@mcp-abap-adt/interfaces").IPackageState> & import("@mcp-abap-adt/interfaces").IAdtValidatable<import("@mcp-abap-adt/interfaces").IPackageConfig, import("@mcp-abap-adt/interfaces").IPackageState> & import("@mcp-abap-adt/interfaces").IAdtCheckable<import("@mcp-abap-adt/interfaces").IPackageConfig, import("@mcp-abap-adt/interfaces").IPackageState> & import("@mcp-abap-adt/interfaces").IAdtLockable<import("@mcp-abap-adt/interfaces").IPackageConfig, import("@mcp-abap-adt/interfaces").IPackageState> & import("@mcp-abap-adt/interfaces").IAdtTransportAware<import("@mcp-abap-adt/interfaces").IPackageConfig, import("@mcp-abap-adt/interfaces").IPackageState>;
+    getServiceDefinition(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IServiceDefinitionConfig, import("@mcp-abap-adt/interfaces").IServiceDefinitionState>;
+    getScalarFunction(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IScalarFunctionConfig, import("@mcp-abap-adt/interfaces").IScalarFunctionState>;
+    getScalarFunctionImplementation(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IScalarFunctionImplementationConfig, import("@mcp-abap-adt/interfaces").IScalarFunctionImplementationState>;
+    getAppendStructure(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IAppendStructureConfig, import("@mcp-abap-adt/interfaces").IAppendStructureState>;
+    getServiceBinding(): import("@mcp-abap-adt/interfaces").IAdtServiceBinding;
+    getService(): import("@mcp-abap-adt/interfaces").IAdtServiceBinding;
+    getBehaviorDefinition(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IBehaviorDefinitionConfig, import("@mcp-abap-adt/interfaces").IBehaviorDefinitionState>;
+    getBehaviorImplementation(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IBehaviorImplementationConfig, import("@mcp-abap-adt/interfaces").IBehaviorImplementationState>;
+    getMetadataExtension(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IMetadataExtensionConfig, import("@mcp-abap-adt/interfaces").IMetadataExtensionState>;
+    getEnhancement(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").IEnhancementConfig, import("@mcp-abap-adt/interfaces").IEnhancementState>;
+    getUnitTest(): import("@mcp-abap-adt/interfaces").IAdtCreatable<import("@mcp-abap-adt/interfaces").IUnitTestConfig, import("@mcp-abap-adt/interfaces").IUnitTestState> & import("@mcp-abap-adt/interfaces").IAdtReadable<import("@mcp-abap-adt/interfaces").IUnitTestConfig, import("@mcp-abap-adt/interfaces").IUnitTestState> & import("@mcp-abap-adt/interfaces").IAdtValidatable<import("@mcp-abap-adt/interfaces").IUnitTestConfig, import("@mcp-abap-adt/interfaces").IUnitTestState> & import("@mcp-abap-adt/interfaces").IAdtTestRunnable;
+    getCdsUnitTest(): import("@mcp-abap-adt/interfaces").IAdtCreatable<import("@mcp-abap-adt/interfaces").ICdsUnitTestConfig, import("@mcp-abap-adt/interfaces").ICdsUnitTestState> & import("@mcp-abap-adt/interfaces").IAdtReadable<import("@mcp-abap-adt/interfaces").ICdsUnitTestConfig, import("@mcp-abap-adt/interfaces").ICdsUnitTestState> & import("@mcp-abap-adt/interfaces").IAdtValidatable<import("@mcp-abap-adt/interfaces").ICdsUnitTestConfig, import("@mcp-abap-adt/interfaces").ICdsUnitTestState> & import("@mcp-abap-adt/interfaces").IAdtCdsTestRunnable;
+    getRequest(): import("../core/transport").AdtRequest;
+    getUtils(): import("../core/shared").AdtUtils;
+    getLocalTestClass(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").ILocalTestClassConfig, import("@mcp-abap-adt/interfaces").IClassState>;
+    getLocalTypes(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").ILocalTypesConfig, import("@mcp-abap-adt/interfaces").IClassState>;
+    getLocalDefinitions(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").ILocalDefinitionsConfig, import("@mcp-abap-adt/interfaces").IClassState>;
+    getLocalMacros(): import("@mcp-abap-adt/interfaces").IAdtSourceObject<import("@mcp-abap-adt/interfaces").ILocalMacrosConfig, import("@mcp-abap-adt/interfaces").IClassState>;
+    batchExecute(): Promise<IAdtResponse[]>;
+    reset(): void;
+    getRecorder(): BatchRecordingConnection;
+}
+//# sourceMappingURL=AdtClientBatch.d.ts.map

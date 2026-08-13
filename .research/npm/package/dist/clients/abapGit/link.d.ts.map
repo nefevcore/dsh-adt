@@ -1,0 +1,1 @@
+{"version":3,"file":"link.d.ts","sourceRoot":"","sources":["../../../src/clients/abapGit/link.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,0BAA0B,CAAC;AAMhE,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,SAAS,CAAC;AAGhD,wBAAsB,QAAQ,CAC5B,UAAU,EAAE,eAAe,EAC3B,IAAI,EAAE,gBAAgB,EACtB,kBAAkB,GAAE,IAAI,GAAG,IAAW,GACrC,OAAO,CAAC,IAAI,CAAC,CAUf"}

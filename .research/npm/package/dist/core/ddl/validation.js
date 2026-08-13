@@ -1,0 +1,39 @@
+"use strict";
+/**
+ * View validation
+ * Uses ADT validation endpoint: /sap/bc/adt/ddic/ddl/validation
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.validateDdlName = validateDdlName;
+const contentTypes_1 = require("../../constants/contentTypes");
+const timeouts_1 = require("../../utils/timeouts");
+/**
+ * Validate view name
+ * Returns raw response from ADT - consumer decides how to interpret it
+ *
+ * Endpoint: POST /sap/bc/adt/ddic/ddl/validation
+ *
+ * Response format:
+ * - Success: <CHECK_RESULT>X</CHECK_RESULT>
+ * - Error: <exc:exception> with message about existing object or validation failure
+ */
+async function validateDdlName(connection, ddlName, packageName, description) {
+    const url = `/sap/bc/adt/ddic/ddl/validation`;
+    const queryParams = new URLSearchParams({
+        objtype: 'ddls',
+        objname: ddlName,
+    });
+    if (packageName) {
+        queryParams.append('packagename', packageName);
+    }
+    // Description is required for view validation
+    queryParams.append('description', description || '');
+    return connection.makeAdtRequest({
+        url: `${url}?${queryParams.toString()}`,
+        method: 'POST',
+        timeout: (0, timeouts_1.getTimeout)('default'),
+        headers: {
+            Accept: contentTypes_1.ACCEPT_VALIDATION,
+        },
+    });
+}

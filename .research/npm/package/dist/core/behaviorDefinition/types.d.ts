@@ -1,0 +1,2 @@
+export type { BehaviorDefinitionImplementationType, CheckReporter, IBehaviorDefinitionConfig, IBehaviorDefinitionCreateParams, IBehaviorDefinitionState, IBehaviorDefinitionValidationParams, ICheckMessage, ICheckRunResult, ILockResult, IUpdateBehaviorDefinitionParams, IValidationResult, } from '@mcp-abap-adt/interfaces';
+//# sourceMappingURL=types.d.ts.map

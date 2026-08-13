@@ -1,0 +1,1 @@
+{"version":3,"file":"lock.d.ts","sourceRoot":"","sources":["../../../src/core/functionInclude/lock.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAEH,OAAO,KAAK,EAAE,eAAe,EAAE,OAAO,EAAE,MAAM,0BAA0B,CAAC;AAMzE;;;GAGG;AACH,wBAAsB,mBAAmB,CACvC,UAAU,EAAE,eAAe,EAC3B,SAAS,EAAE,MAAM,EACjB,WAAW,EAAE,MAAM,EACnB,MAAM,CAAC,EAAE,OAAO,GACf,OAAO,CAAC,MAAM,CAAC,CAiCjB"}

@@ -1,0 +1,1 @@
+{"version":3,"file":"AdtFunctionGroupLegacy.d.ts","sourceRoot":"","sources":["../../../src/core/functionGroup/AdtFunctionGroupLegacy.ts"],"names":[],"mappings":"AASA,OAAO,EAAE,gBAAgB,EAAE,MAAM,oBAAoB,CAAC;AAEtD,OAAO,KAAK,EAAE,oBAAoB,EAAE,mBAAmB,EAAE,MAAM,SAAS,CAAC;AAGzE,qBAAa,sBAAuB,SAAQ,gBAAgB;IAC3C,MAAM,CACnB,MAAM,EAAE,OAAO,CAAC,oBAAoB,CAAC,GACpC,OAAO,CAAC,mBAAmB,CAAC;CAwDhC"}

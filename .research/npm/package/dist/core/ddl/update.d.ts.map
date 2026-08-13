@@ -1,0 +1,1 @@
+{"version":3,"file":"update.d.ts","sourceRoot":"","sources":["../../../src/core/ddl/update.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,OAAO,KAAK,EAAE,eAAe,EAAE,YAAY,EAAE,MAAM,0BAA0B,CAAC;AAK9E;;;;GAIG;AACH,wBAAsB,SAAS,CAC7B,UAAU,EAAE,eAAe,EAC3B,OAAO,EAAE,MAAM,EACf,SAAS,EAAE,MAAM,EACjB,UAAU,EAAE,MAAM,EAClB,gBAAgB,CAAC,EAAE,MAAM,GACxB,OAAO,CAAC,YAAY,CAAC,CAgBvB"}

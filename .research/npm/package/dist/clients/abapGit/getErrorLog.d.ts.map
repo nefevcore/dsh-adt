@@ -1,0 +1,1 @@
+{"version":3,"file":"getErrorLog.d.ts","sourceRoot":"","sources":["../../../src/clients/abapGit/getErrorLog.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,0BAA0B,CAAC;AAIhE,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,SAAS,CAAC;AAGrD,wBAAsB,WAAW,CAC/B,UAAU,EAAE,eAAe,EAC3B,WAAW,EAAE,MAAM,GAClB,OAAO,CAAC,qBAAqB,EAAE,CAAC,CAoBlC"}

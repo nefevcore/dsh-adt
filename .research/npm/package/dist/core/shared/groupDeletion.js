@@ -1,0 +1,122 @@
+"use strict";
+/**
+ * Group Deletion operations - delete multiple objects with session support
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.checkDeletionGroup = checkDeletionGroup;
+exports.deleteObjectsGroup = deleteObjectsGroup;
+const contentTypes_1 = require("../../constants/contentTypes");
+const activationUtils_1 = require("../../utils/activationUtils");
+const timeouts_1 = require("../../utils/timeouts");
+/**
+ * Check if multiple objects can be deleted (group deletion check)
+ *
+ * Endpoint: POST /sap/bc/adt/deletion/check
+ *
+ * This function allows checking deletion for multiple objects of different types in a single request.
+ * Useful for checking related objects together (e.g., view + table).
+ *
+ * @param connection - ABAP connection instance
+ * @param objects - Array of objects to check for deletion
+ * @returns Axios response with deletion check result
+ *
+ * @example
+ * ```typescript
+ * // Check deletion for view and table together
+ * const objects = [
+ *   {
+ *     type: 'DDLS/DF',
+ *     name: 'ZADT_BLD_VIEW02'
+ *   },
+ *   {
+ *     type: 'TABL/DT',
+ *     name: 'ZADT_VIEW_TBL02'
+ *   }
+ * ];
+ *
+ * const result = await checkDeletionGroup(connection, objects);
+ * ```
+ */
+async function checkDeletionGroup(connection, objects) {
+    const checkUrl = `/sap/bc/adt/deletion/check`;
+    // Build object URIs
+    const objectElements = objects
+        .map((obj) => {
+        const uri = (0, activationUtils_1.buildObjectUri)(obj.name, obj.type, obj.parentName);
+        return `  <del:object adtcore:uri="${uri}"/>`;
+    })
+        .join('\n');
+    const xmlPayload = `<?xml version="1.0" encoding="UTF-8"?><del:checkRequest xmlns:del="http://www.sap.com/adt/deletion" xmlns:adtcore="http://www.sap.com/adt/core">
+${objectElements}
+</del:checkRequest>`;
+    const headers = {
+        Accept: contentTypes_1.ACCEPT_DELETION_CHECK,
+        'Content-Type': contentTypes_1.CT_DELETION_CHECK,
+    };
+    return connection.makeAdtRequest({
+        url: checkUrl,
+        method: 'POST',
+        timeout: (0, timeouts_1.getTimeout)('default'),
+        data: xmlPayload,
+        headers,
+    });
+}
+/**
+ * Delete multiple objects in a group (with session support)
+ *
+ * Endpoint: POST /sap/bc/adt/deletion/delete
+ *
+ * This function allows deleting multiple objects of different types in a single request.
+ * Useful for deleting related objects together (e.g., view + table).
+ *
+ * @param connection - ABAP connection instance
+ * @param objects - Array of objects to delete
+ * @param transportRequest - Optional transport request number
+ * @returns Axios response with deletion result
+ *
+ * @example
+ * ```typescript
+ * // Delete view and table together
+ * const objects = [
+ *   {
+ *     type: 'DDLS/DF',
+ *     name: 'ZADT_BLD_VIEW02'
+ *   },
+ *   {
+ *     type: 'TABL/DT',
+ *     name: 'ZADT_VIEW_TBL02'
+ *   }
+ * ];
+ *
+ * const result = await deleteObjectsGroup(connection, objects);
+ * ```
+ */
+async function deleteObjectsGroup(connection, objects, transportRequest) {
+    const deletionUrl = `/sap/bc/adt/deletion/delete`;
+    // Build object URIs with transport number
+    const transportNumberTag = transportRequest?.trim()
+        ? `<del:transportNumber>${transportRequest}</del:transportNumber>`
+        : '<del:transportNumber/>';
+    const objectElements = objects
+        .map((obj) => {
+        const uri = (0, activationUtils_1.buildObjectUri)(obj.name, obj.type, obj.parentName);
+        return `  <del:object adtcore:uri="${uri}">
+    ${transportNumberTag}
+  </del:object>`;
+    })
+        .join('\n');
+    const xmlPayload = `<?xml version="1.0" encoding="UTF-8"?><del:deletionRequest xmlns:del="http://www.sap.com/adt/deletion" xmlns:adtcore="http://www.sap.com/adt/core">
+${objectElements}
+</del:deletionRequest>`;
+    const headers = {
+        Accept: contentTypes_1.ACCEPT_DELETION,
+        'Content-Type': contentTypes_1.CT_DELETION,
+    };
+    return connection.makeAdtRequest({
+        url: deletionUrl,
+        method: 'POST',
+        timeout: (0, timeouts_1.getTimeout)('default'),
+        data: xmlPayload,
+        headers,
+    });
+}

@@ -1,0 +1,1 @@
+{"version":3,"file":"sqlQuery.d.ts","sourceRoot":"","sources":["../../../src/core/shared/sqlQuery.ts"],"names":[],"mappings":"AAAA;;;;;;GAMG;AAEH,OAAO,KAAK,EAAE,eAAe,EAAE,YAAY,EAAE,MAAM,0BAA0B,CAAC;AAG9E,OAAO,KAAK,EAAE,kBAAkB,EAAE,MAAM,SAAS,CAAC;AAElD;;;;;;GAMG;AACH,wBAAsB,WAAW,CAC/B,UAAU,EAAE,eAAe,EAC3B,MAAM,EAAE,kBAAkB,GACzB,OAAO,CAAC,YAAY,CAAC,CAkBvB"}

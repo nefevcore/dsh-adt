@@ -1,0 +1,101 @@
+"use strict";
+/**
+ * FunctionGroup create operations
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.create = create;
+const contentTypes_1 = require("../../constants/contentTypes");
+const internalUtils_1 = require("../../utils/internalUtils");
+const timeouts_1 = require("../../utils/timeouts");
+const debugEnabled = process.env.DEBUG_ADT_LIBS === 'true';
+/**
+ * Create function group metadata via POST
+ * Low-level function - creates function group without workflow logic
+ */
+async function create(connection, params, logger, contentTypes) {
+    const url = `/sap/bc/adt/functions/groups${params.transportRequest ? `?corrNr=${params.transportRequest}` : ''}`;
+    const finalMasterSystem = params.masterSystem || undefined;
+    let finalResponsible = params.responsible || undefined;
+    // Don't add responsible if it's empty - this can cause "Kerberos library not loaded" error
+    if (finalResponsible && finalResponsible.trim() === '') {
+        finalResponsible = undefined;
+    }
+    // Don't escape masterSystem and responsible - they are identifiers (like "TRL", "CB9980002377")
+    // Escaping them may cause SAP to fail parsing and trigger Kerberos errors
+    const masterSystemAttr = finalMasterSystem
+        ? ` adtcore:masterSystem="${finalMasterSystem}"`
+        : '';
+    const responsibleAttr = finalResponsible
+        ? ` adtcore:responsible="${finalResponsible}"`
+        : '';
+    // Log to help diagnose Kerberos errors
+    if (debugEnabled) {
+        logger?.debug?.('[FunctionGroup create] systemContext:', {
+            finalMasterSystem,
+            finalResponsible,
+            willIncludeMasterSystem: !!finalMasterSystem,
+            willIncludeResponsible: !!finalResponsible,
+            masterSystemAttr: masterSystemAttr || '(not included)',
+            responsibleAttr: responsibleAttr || '(not included)',
+        });
+    }
+    // Description is limited to 60 characters in SAP ADT
+    const limitedDescription = (0, internalUtils_1.limitDescription)(params.description);
+    // Build XML payload - no escaping (same as old working code)
+    const xmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
+<group:abapFunctionGroup xmlns:group="http://www.sap.com/adt/functions/groups" xmlns:adtcore="http://www.sap.com/adt/core" adtcore:description="${limitedDescription}" adtcore:language="${params.masterLanguage || 'EN'}" adtcore:name="${params.functionGroupName}" adtcore:type="FUGR/F" adtcore:masterLanguage="${params.masterLanguage || 'EN'}"${masterSystemAttr}${responsibleAttr}>
+  <adtcore:packageRef adtcore:name="${params.packageName}"/>
+</group:abapFunctionGroup>`;
+    const ct = contentTypes?.functionGroupCreate();
+    const headers = {
+        'Content-Type': ct?.contentType || contentTypes_1.CT_FUNCTION_GROUP,
+    };
+    // Log request details for debugging authorization issues (same as class/create.ts)
+    if (debugEnabled) {
+        logger?.debug?.(`[DEBUG] Creating FunctionGroup - URL: ${url}`);
+        logger?.debug?.(`[DEBUG] Creating FunctionGroup - Method: POST`);
+        logger?.debug?.(`[DEBUG] Creating FunctionGroup - Headers: ${JSON.stringify(headers, null, 2)}`);
+        logger?.debug?.(`[DEBUG] Creating FunctionGroup - Body (first 500 chars): ${xmlPayload.substring(0, 500)}`);
+    }
+    try {
+        const response = await connection.makeAdtRequest({
+            url,
+            method: 'POST',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            data: xmlPayload,
+            headers,
+        });
+        return response;
+    }
+    catch (error) {
+        const e = error;
+        // Special handling: Ignore Kerberos error for FunctionGroup
+        // SAP sometimes returns HTTP 400 with "Kerberos library not loaded" but still creates the object
+        // This is a known issue with FunctionGroup create - we ignore the error
+        if (e.response?.status === 400) {
+            const errorData = typeof e.response.data === 'string'
+                ? e.response.data
+                : (0, internalUtils_1.safeStringify)(e.response.data);
+            if (errorData.includes('Kerberos library not loaded')) {
+                logger?.debug?.(`[WARN] FunctionGroup create returned Kerberos error, but object may have been created - ignoring error`);
+                // Return a mock successful response (status 201)
+                return {
+                    ...e.response,
+                    status: 201,
+                    statusText: 'Created',
+                    data: e.response.data,
+                };
+            }
+        }
+        // Log error details for debugging (same as class/create.ts)
+        if (e.response && debugEnabled) {
+            logger?.error?.(`[ERROR] Create FunctionGroup failed - Status: ${e.response.status}`);
+            logger?.error?.(`[ERROR] Create FunctionGroup failed - StatusText: ${e.response.statusText}`);
+            logger?.error?.(`[ERROR] Create FunctionGroup failed - Response headers: ${JSON.stringify(e.response.headers, null, 2)}`);
+            logger?.error?.(`[ERROR] Create FunctionGroup failed - Response data (first 1000 chars):`, typeof e.response.data === 'string'
+                ? e.response.data.substring(0, 1000)
+                : (0, internalUtils_1.safeStringify)(e.response.data).substring(0, 1000));
+        }
+        throw error;
+    }
+}

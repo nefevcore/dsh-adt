@@ -1,0 +1,1 @@
+{"version":3,"file":"checkExternalRepo.d.ts","sourceRoot":"","sources":["../../../src/clients/abapGit/checkExternalRepo.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,0BAA0B,CAAC;AAMhE,OAAO,KAAK,EACV,+BAA+B,EAC/B,wBAAwB,EACzB,MAAM,SAAS,CAAC;AAIjB,wBAAsB,iBAAiB,CACrC,UAAU,EAAE,eAAe,EAC3B,IAAI,EAAE,+BAA+B,GACpC,OAAO,CAAC,wBAAwB,CAAC,CAenC"}

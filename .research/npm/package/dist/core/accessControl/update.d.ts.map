@@ -1,0 +1,1 @@
+{"version":3,"file":"update.d.ts","sourceRoot":"","sources":["../../../src/core/accessControl/update.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,YAAY,EAAE,MAAM,0BAA0B,CAAC;AAI9E,OAAO,KAAK,EAAE,0BAA0B,EAAE,MAAM,SAAS,CAAC;AAE1D;;;GAGG;AACH,wBAAsB,mBAAmB,CACvC,UAAU,EAAE,eAAe,EAC3B,IAAI,EAAE,0BAA0B,EAChC,UAAU,EAAE,MAAM,GACjB,OAAO,CAAC,YAAY,CAAC,CAsBvB"}

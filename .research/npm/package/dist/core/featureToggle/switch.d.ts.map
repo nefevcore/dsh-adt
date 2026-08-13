@@ -1,0 +1,1 @@
+{"version":3,"file":"switch.d.ts","sourceRoot":"","sources":["../../../src/core/featureToggle/switch.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,0BAA0B,CAAC;AAIhE,OAAO,KAAK,EAAE,0BAA0B,EAAE,MAAM,SAAS,CAAC;AAE1D,wBAAsB,mBAAmB,CACvC,UAAU,EAAE,eAAe,EAC3B,MAAM,EAAE,0BAA0B,GACjC,OAAO,CAAC,IAAI,CAAC,CAkBf"}

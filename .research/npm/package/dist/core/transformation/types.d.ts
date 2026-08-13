@@ -1,0 +1,2 @@
+export type { ICreateTransformationParams, IDeleteTransformationParams, ITransformationConfig, ITransformationState, IUpdateTransformationParams, TransformationType, } from '@mcp-abap-adt/interfaces';
+//# sourceMappingURL=types.d.ts.map

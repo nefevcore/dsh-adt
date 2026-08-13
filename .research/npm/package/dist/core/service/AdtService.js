@@ -1,0 +1,798 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.AdtService = exports.AdtServiceBinding = void 0;
+const fast_xml_parser_1 = require("fast-xml-parser");
+const contentTypes_1 = require("../../constants/contentTypes");
+const internalUtils_1 = require("../../utils/internalUtils");
+const systemInfo_1 = require("../../utils/systemInfo");
+const timeouts_1 = require("../../utils/timeouts");
+const versions_1 = require("../shared/versions");
+const types_1 = require("./types");
+class AdtServiceBinding {
+    connection;
+    logger;
+    systemContext;
+    objectType = 'ServiceBinding';
+    constructor(connection, logger, systemContext) {
+        this.connection = connection;
+        this.logger = logger;
+        this.systemContext = systemContext ?? {};
+    }
+    parser = new fast_xml_parser_1.XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: '@_',
+    });
+    asRecord(value) {
+        return (value ?? {});
+    }
+    static encodeName(name) {
+        return encodeURIComponent(name.toLowerCase());
+    }
+    buildServiceBindingCreateXml(params) {
+        const { bindingType, bindingVersion, bindingCategory } = (0, types_1.resolveBindingVariant)(params.bindingVariant);
+        const masterLanguage = params.masterLanguage ?? 'EN';
+        const masterSystem = params.masterSystem;
+        const responsible = params.responsible;
+        const escapedDescription = params.description.replace(/"/g, '&quot;');
+        const escapedBindingName = params.bindingName.toUpperCase();
+        const escapedPackageName = params.packageName.toUpperCase();
+        const escapedServiceName = params.serviceName.toUpperCase();
+        const escapedServiceVersion = params.serviceVersion;
+        const escapedServiceDefinition = params.serviceDefinitionName.toUpperCase();
+        const masterSystemAttr = masterSystem
+            ? ` adtcore:masterSystem="${masterSystem}"`
+            : '';
+        const responsibleAttr = responsible
+            ? ` adtcore:responsible="${responsible}"`
+            : '';
+        return `<?xml version="1.0" encoding="UTF-8"?><srvb:serviceBinding xmlns:srvb="http://www.sap.com/adt/ddic/ServiceBindings" xmlns:adtcore="http://www.sap.com/adt/core" adtcore:description="${escapedDescription}" adtcore:language="${masterLanguage}" adtcore:name="${escapedBindingName}" adtcore:type="SRVB/SVB" adtcore:masterLanguage="${masterLanguage}"${masterSystemAttr}${responsibleAttr}>
+  <adtcore:packageRef adtcore:name="${escapedPackageName}"/>
+  <srvb:services srvb:name="${escapedServiceName}">
+    <srvb:content srvb:version="${escapedServiceVersion}">
+      <srvb:serviceDefinition adtcore:name="${escapedServiceDefinition}"/>
+    </srvb:content>
+  </srvb:services>
+  <srvb:binding srvb:category="${bindingCategory}" srvb:type="${bindingType}" srvb:version="${bindingVersion}">
+    <srvb:implementation adtcore:name=""/>
+  </srvb:binding>
+</srvb:serviceBinding>`;
+    }
+    buildTransportCheckXml(params) {
+        const description = (params.description ?? '').replace(/"/g, '&quot;');
+        return `<?xml version="1.0" encoding="UTF-8"?><asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0"><asx:values><DATA><PGMID>R3TR</PGMID><OBJECT>SRVB</OBJECT><OBJECTNAME>${params.objectName.toUpperCase()}</OBJECTNAME><OPERATION>${params.operation ?? 'I'}</OPERATION><DEVCLASS>${params.packageName.toUpperCase()}</DEVCLASS><CTEXT>${description}</CTEXT></DATA></asx:values></asx:abap>`;
+    }
+    buildDeletionXml(params) {
+        const bindingUri = `/sap/bc/adt/businessservices/bindings/${AdtServiceBinding.encodeName(params.bindingName)}`;
+        const transportNumber = params.transportRequest ?? '';
+        return `<?xml version="1.0" encoding="UTF-8"?><del:deletionRequest xmlns:del="http://www.sap.com/adt/deletion" xmlns:adtcore="http://www.sap.com/adt/core"><del:object adtcore:uri="${bindingUri}"><del:transportNumber>${transportNumber}</del:transportNumber></del:object></del:deletionRequest>`;
+    }
+    extractAvailableBindingTypes(response) {
+        const available = new Set();
+        const raw = typeof response.data === 'string' ? response.data : '';
+        if (!raw) {
+            return available;
+        }
+        const parsed = this.asRecord(this.parser.parse(raw));
+        const namedItemList = this.asRecord(parsed['nameditem:namedItemList']);
+        const list = namedItemList['nameditem:namedItem'];
+        const items = Array.isArray(list) ? list : list ? [list] : [];
+        for (const item of items) {
+            const name = String(item?.['nameditem:name'] ?? '').toUpperCase();
+            const description = String(item?.['nameditem:description'] ?? '');
+            const data = String(item?.['nameditem:data'] ?? '').toUpperCase();
+            if (!name || !data) {
+                continue;
+            }
+            available.add(`${name}:${description}:${data}`);
+        }
+        return available;
+    }
+    parseServiceBindingState(response) {
+        const raw = typeof response.data === 'string' ? response.data : '';
+        if (!raw) {
+            return { published: false };
+        }
+        const parsed = this.asRecord(this.parser.parse(raw));
+        const root = this.asRecord(parsed['srvb:serviceBinding'] ?? parsed.serviceBinding);
+        const publishedRaw = root['@_srvb:published'] ?? root['@_published'];
+        const allowedActionRaw = root['@_srvb:allowedAction'] ?? root['@_allowedAction'];
+        const binding = this.asRecord(root['srvb:binding'] ?? root.binding);
+        const services = this.asRecord(root['srvb:services'] ?? root.services);
+        const content = this.asRecord(services['srvb:content'] ?? services.content);
+        const bindingType = String(binding['@_srvb:type'] ?? binding['@_type'] ?? '').toUpperCase();
+        const bindingVersion = String(binding['@_srvb:version'] ?? binding['@_version'] ?? '').toUpperCase();
+        let serviceType;
+        if (bindingType === 'ODATA') {
+            serviceType = bindingVersion === 'V4' ? 'odatav4' : 'odatav2';
+        }
+        return {
+            published: String(publishedRaw).toLowerCase() === 'true',
+            allowedAction: allowedActionRaw ? String(allowedActionRaw) : undefined,
+            serviceType,
+            serviceName: (services['@_srvb:name'] ?? services['@_name']),
+            serviceVersion: (content['@_srvb:version'] ?? content['@_version']),
+        };
+    }
+    getBindingTypeAvailabilityKey(bindingType, bindingVersion) {
+        const name = bindingType.toUpperCase();
+        const version = bindingVersion.toUpperCase();
+        if (name === 'ODATA' && version === 'V4') {
+            return 'ODATA:1:ODATA V4';
+        }
+        if (name === 'ODATA' && version === 'V2') {
+            return 'ODATA:1:ODATA V2';
+        }
+        return `${name}:1:${name}`;
+    }
+    async publishByServiceType(serviceType, bindingName, servicename, serviceversion) {
+        const bindingUri = `/sap/bc/adt/businessservices/bindings/${AdtServiceBinding.encodeName(bindingName)}`;
+        const xml = `<?xml version="1.0" encoding="UTF-8"?><adtcore:objectReferences xmlns:adtcore="http://www.sap.com/adt/core"><adtcore:objectReference adtcore:uri="${bindingUri}" adtcore:name="${bindingName.toUpperCase()}"/></adtcore:objectReferences>`;
+        const publishQs = (0, internalUtils_1.buildQueryString)({ servicename, serviceversion });
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/businessservices/${serviceType}/publishjobs?${publishQs}`,
+            method: 'POST',
+            timeout: (0, timeouts_1.getTimeout)('long'),
+            data: xml,
+            headers: {
+                Accept: contentTypes_1.ACCEPT_VALIDATION,
+                'Content-Type': 'application/xml',
+            },
+        });
+    }
+    async unpublishByServiceType(serviceType, bindingName, servicename, serviceversion) {
+        const bindingUri = `/sap/bc/adt/businessservices/bindings/${AdtServiceBinding.encodeName(bindingName)}`;
+        const xml = `<?xml version="1.0" encoding="UTF-8"?><adtcore:objectReferences xmlns:adtcore="http://www.sap.com/adt/core"><adtcore:objectReference adtcore:uri="${bindingUri}" adtcore:name="${bindingName.toUpperCase()}"/></adtcore:objectReferences>`;
+        const unpublishQs = (0, internalUtils_1.buildQueryString)({ servicename, serviceversion });
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/businessservices/${serviceType}/unpublishjobs?${unpublishQs}`,
+            method: 'POST',
+            timeout: (0, timeouts_1.getTimeout)('long'),
+            data: xml,
+            headers: {
+                Accept: contentTypes_1.ACCEPT_VALIDATION,
+                'Content-Type': 'application/xml',
+            },
+        });
+    }
+    async validate(config) {
+        if (!config.bindingName) {
+            throw new Error('bindingName is required for validation');
+        }
+        if (!config.serviceDefinitionName) {
+            throw new Error('serviceDefinitionName is required for validation');
+        }
+        if (!config.packageName) {
+            throw new Error('packageName is required for validation');
+        }
+        if (!config.bindingVariant) {
+            throw new Error('bindingVariant is required for validation');
+        }
+        const { bindingType, bindingVersion } = (0, types_1.resolveBindingVariant)(config.bindingVariant);
+        // Validation flow:
+        // 1) Read available binding types (GET discovery endpoint)
+        // 2) Run transport check (POST), as pre-create server-side validation
+        const serviceTypesResult = await this.getServiceBindingTypes();
+        const availableBindingTypes = this.extractAvailableBindingTypes(serviceTypesResult);
+        const availabilityKey = this.getBindingTypeAvailabilityKey(bindingType, bindingVersion);
+        if (!availableBindingTypes.has(availabilityKey)) {
+            throw new Error(`Binding variant ${config.bindingVariant} (${bindingType}/${bindingVersion}) is not available on current ADT system`);
+        }
+        const validationResponse = await this.transportCheckServiceBinding({
+            objectName: config.bindingName,
+            packageName: config.packageName,
+            description: config.description,
+            operation: 'I',
+        });
+        return {
+            errors: [],
+            validationResponse,
+            serviceTypesResult,
+            transportResult: validationResponse,
+        };
+    }
+    async create(config, options) {
+        if (!config.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        if (!config.packageName) {
+            throw new Error('packageName is required');
+        }
+        if (!config.description) {
+            throw new Error('description is required');
+        }
+        if (!config.serviceDefinitionName) {
+            throw new Error('serviceDefinitionName is required');
+        }
+        if (!config.serviceName) {
+            throw new Error('serviceName is required');
+        }
+        if (!config.serviceVersion) {
+            throw new Error('serviceVersion is required');
+        }
+        if (!config.bindingVariant) {
+            throw new Error('bindingVariant is required');
+        }
+        const { bindingType, bindingVersion, serviceType: generatedServiceType, } = (0, types_1.resolveBindingVariant)(config.bindingVariant);
+        const state = { errors: [] };
+        const serviceTypesResult = await this.getServiceBindingTypes();
+        state.serviceTypesResult = serviceTypesResult;
+        const availableBindingTypes = this.extractAvailableBindingTypes(serviceTypesResult);
+        const availabilityKey = this.getBindingTypeAvailabilityKey(bindingType, bindingVersion);
+        if (!availableBindingTypes.has(availabilityKey)) {
+            throw new Error(`Binding variant ${config.bindingVariant} (${bindingType}/${bindingVersion}) is not available on current ADT system`);
+        }
+        if (config.runTransportCheck ?? true) {
+            state.transportResult = await this.transportCheckServiceBinding({
+                objectName: config.bindingName,
+                packageName: config.packageName,
+                description: config.description,
+                operation: 'I',
+            });
+        }
+        state.createResult = await this.createServiceBinding({
+            bindingName: config.bindingName,
+            packageName: config.packageName,
+            description: config.description,
+            serviceDefinitionName: config.serviceDefinitionName,
+            serviceName: config.serviceName,
+            serviceVersion: config.serviceVersion,
+            bindingVariant: config.bindingVariant,
+            masterLanguage: config.masterLanguage,
+            masterSystem: config.masterSystem,
+            responsible: config.responsible,
+            transportRequest: config.transportRequest,
+        });
+        state.inactiveCheckResult = await this.checkServiceBinding({
+            bindingName: config.bindingName,
+            version: 'inactive',
+        });
+        const activateAfterCreate = options?.activateOnCreate === undefined ? true : options.activateOnCreate;
+        if (activateAfterCreate) {
+            state.activateResult = await this.activateServiceBinding({
+                bindingName: config.bindingName,
+                preauditRequested: true,
+            });
+        }
+        state.readResult = await this.readServiceBinding({
+            bindingName: config.bindingName,
+            version: activateAfterCreate ? 'active' : 'inactive',
+        });
+        state.generatedInfoResult = await this.generateServiceBinding({
+            serviceType: generatedServiceType,
+            bindingName: config.bindingName,
+            serviceName: config.serviceName,
+            serviceVersion: config.serviceVersion,
+            serviceDefinitionName: config.serviceDefinitionName,
+        });
+        if (activateAfterCreate) {
+            state.activeCheckResult = await this.checkServiceBinding({
+                bindingName: config.bindingName,
+                version: 'active',
+            });
+            state.checkResult = state.activeCheckResult;
+        }
+        else {
+            state.checkResult = state.inactiveCheckResult;
+        }
+        return state;
+    }
+    async read(config, version) {
+        if (!config.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        try {
+            const readResult = await this.readServiceBinding({
+                bindingName: config.bindingName,
+                version,
+            });
+            return {
+                errors: [],
+                readResult,
+            };
+        }
+        catch (error) {
+            const err = error;
+            if (err.response?.status === 404) {
+                return undefined;
+            }
+            throw error;
+        }
+    }
+    async readMetadata(config, options) {
+        const state = await this.read(config, options?.version);
+        return {
+            ...(state ?? { errors: [] }),
+            metadataResult: state?.readResult,
+        };
+    }
+    async update(config) {
+        if (!config.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        if (!config.desiredPublicationState) {
+            throw new Error('desiredPublicationState is required');
+        }
+        if (!config.serviceType) {
+            throw new Error('serviceType is required for update');
+        }
+        if (!config.serviceName) {
+            throw new Error('serviceName is required for update');
+        }
+        const updateResult = await this.updateServiceBinding({
+            bindingName: config.bindingName,
+            desiredPublicationState: config.desiredPublicationState,
+            serviceType: config.serviceType,
+            serviceName: config.serviceName,
+            serviceVersion: config.serviceVersion,
+        });
+        const readResult = await this.readServiceBinding({
+            bindingName: config.bindingName,
+            version: 'active',
+        });
+        return {
+            errors: [],
+            updateResult,
+            readResult,
+        };
+    }
+    async delete(config) {
+        if (!config.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        try {
+            const activeState = await this.readServiceBinding({
+                bindingName: config.bindingName,
+                version: 'active',
+            });
+            const current = this.parseServiceBindingState(activeState);
+            if (current.published && current.allowedAction === 'UNPUBLISH') {
+                const serviceType = config.serviceType ?? current.serviceType;
+                const serviceName = config.serviceName ?? current.serviceName;
+                const serviceVersion = config.serviceVersion ?? current.serviceVersion;
+                if (serviceType && serviceName) {
+                    this.logger?.info?.(`ServiceBinding delete pre-step: unpublish ${config.bindingName}`, {
+                        serviceType,
+                        serviceName,
+                        serviceVersion,
+                    });
+                    await this.updateServiceBinding({
+                        bindingName: config.bindingName,
+                        desiredPublicationState: 'unpublished',
+                        serviceType,
+                        serviceName,
+                        serviceVersion,
+                    });
+                }
+            }
+        }
+        catch {
+            // best-effort: if read/unpublish fails, try delete directly
+        }
+        const deleteResult = await this.deleteServiceBinding({
+            bindingName: config.bindingName,
+            transportRequest: config.transportRequest,
+        });
+        return {
+            errors: [],
+            deleteResult,
+        };
+    }
+    async activate(config) {
+        if (!config.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        const activateResult = await this.activateServiceBinding({
+            bindingName: config.bindingName,
+            preauditRequested: true,
+        });
+        return {
+            errors: [],
+            activateResult,
+        };
+    }
+    async check(config, status) {
+        if (!config.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        const version = status === 'active' ? 'active' : 'inactive';
+        const checkResult = await this.checkServiceBinding({
+            bindingName: config.bindingName,
+            version,
+        });
+        return {
+            errors: [],
+            checkResult,
+        };
+    }
+    async readTransport(config) {
+        if (!config.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        if (!config.packageName) {
+            throw new Error('packageName is required for transport check');
+        }
+        const transportResult = await this.transportCheckServiceBinding({
+            objectName: config.bindingName,
+            packageName: config.packageName,
+            description: config.description,
+            operation: 'U',
+        });
+        return {
+            errors: [],
+            transportResult,
+        };
+    }
+    async lock(_config) {
+        throw new Error('Lock is not supported for service bindings via ADT API');
+    }
+    async unlock(_config, _lockHandle) {
+        throw new Error('Unlock is not supported for service bindings via ADT API');
+    }
+    async getServiceBindingTypes() {
+        return this.connection.makeAdtRequest({
+            url: '/sap/bc/adt/businessservices/bindings/bindingtypes',
+            method: 'GET',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            headers: {
+                Accept: 'application/vnd.sap.adt.nameditems.v1+xml, application/xml',
+            },
+        });
+    }
+    async validateServiceBinding(params) {
+        if (!params.objname) {
+            throw new Error('objname is required');
+        }
+        if (!params.serviceDefinition) {
+            throw new Error('serviceDefinition is required');
+        }
+        return this.connection.makeAdtRequest({
+            url: '/sap/bc/adt/businessservices/bindings/validation',
+            method: 'GET',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            params,
+            headers: {
+                Accept: 'application/vnd.sap.adt.businessservices.servicebinding.v2+xml',
+            },
+        });
+    }
+    async transportCheckServiceBinding(params) {
+        if (!params.objectName) {
+            throw new Error('objectName is required');
+        }
+        if (!params.packageName) {
+            throw new Error('packageName is required');
+        }
+        return this.connection.makeAdtRequest({
+            url: '/sap/bc/adt/cts/transportchecks',
+            method: 'POST',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            data: this.buildTransportCheckXml(params),
+            headers: {
+                Accept: contentTypes_1.ACCEPT_TRANSPORT_CHECK,
+                'Content-Type': contentTypes_1.CT_TRANSPORT_CHECK,
+            },
+        });
+    }
+    async createServiceBinding(params) {
+        if (!params.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        if (!params.packageName) {
+            throw new Error('packageName is required');
+        }
+        if (!params.description) {
+            throw new Error('description is required');
+        }
+        if (!params.serviceDefinitionName) {
+            throw new Error('serviceDefinitionName is required');
+        }
+        if (!params.serviceName) {
+            throw new Error('serviceName is required');
+        }
+        if (!params.serviceVersion) {
+            throw new Error('serviceVersion is required');
+        }
+        if (!params.bindingVariant) {
+            throw new Error('bindingVariant is required');
+        }
+        const systemInfo = await (0, systemInfo_1.getSystemInformation)(this.connection);
+        const createParams = {
+            ...params,
+            masterLanguage: params.masterLanguage ??
+                this.systemContext.masterLanguage ??
+                systemInfo?.language ??
+                'EN',
+            masterSystem: params.masterSystem ??
+                this.systemContext.masterSystem ??
+                systemInfo?.systemID,
+            responsible: params.responsible ??
+                this.systemContext.responsible ??
+                systemInfo?.userName,
+        };
+        const queryParams = params.transportRequest
+            ? { corrNr: params.transportRequest }
+            : undefined;
+        return this.connection.makeAdtRequest({
+            url: '/sap/bc/adt/businessservices/bindings',
+            method: 'POST',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            data: this.buildServiceBindingCreateXml(createParams),
+            headers: {
+                Accept: 'application/vnd.sap.adt.businessservices.servicebinding.v1+xml, application/vnd.sap.adt.businessservices.servicebinding.v2+xml',
+                'Content-Type': 'application/vnd.sap.adt.businessservices.servicebinding.v2+xml',
+            },
+            params: queryParams,
+        });
+    }
+    async readServiceBinding(params) {
+        if (!params.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/businessservices/bindings/${AdtServiceBinding.encodeName(params.bindingName)}`,
+            method: 'GET',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            params: params.version ? { version: params.version } : undefined,
+            headers: {
+                Accept: 'application/vnd.sap.adt.businessservices.servicebinding.v1+xml, application/vnd.sap.adt.businessservices.servicebinding.v2+xml',
+            },
+        });
+    }
+    async updateServiceBinding(params) {
+        if (!params.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        if (!params.desiredPublicationState) {
+            throw new Error('desiredPublicationState is required');
+        }
+        if (!params.serviceType) {
+            throw new Error('serviceType is required');
+        }
+        if (!params.serviceName) {
+            throw new Error('serviceName is required');
+        }
+        const readResponse = await this.readServiceBinding({
+            bindingName: params.bindingName,
+            version: 'active',
+        });
+        const current = this.parseServiceBindingState(readResponse);
+        this.logger?.info?.(`ServiceBinding update: ${params.bindingName} -> ${params.desiredPublicationState}`, {
+            desiredPublicationState: params.desiredPublicationState,
+            currentPublished: current.published,
+            allowedAction: current.allowedAction,
+            serviceType: params.serviceType,
+            serviceName: params.serviceName,
+            serviceVersion: params.serviceVersion,
+        });
+        if (params.desiredPublicationState === 'unchanged') {
+            return readResponse;
+        }
+        if (params.desiredPublicationState === 'published') {
+            if (current.published) {
+                return readResponse;
+            }
+            if (current.allowedAction !== 'PUBLISH') {
+                throw new Error(`Invalid state transition: cannot publish service binding ${params.bindingName}. allowedAction=${current.allowedAction ?? 'UNKNOWN'}`);
+            }
+            return this.publishByServiceType(params.serviceType, params.bindingName, params.serviceName, params.serviceVersion);
+        }
+        if (current.allowedAction !== 'UNPUBLISH') {
+            throw new Error(`Invalid state transition: cannot unpublish service binding ${params.bindingName}. allowedAction=${current.allowedAction ?? 'UNKNOWN'}`);
+        }
+        return this.unpublishByServiceType(params.serviceType, params.bindingName, params.serviceName, params.serviceVersion);
+    }
+    async deleteServiceBinding(params) {
+        if (!params.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        return this.connection.makeAdtRequest({
+            url: '/sap/bc/adt/deletion/delete',
+            method: 'POST',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            data: this.buildDeletionXml(params),
+            headers: {
+                Accept: contentTypes_1.ACCEPT_DELETION,
+                'Content-Type': contentTypes_1.CT_DELETION,
+            },
+        });
+    }
+    async checkServiceBinding(params) {
+        if (!params.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        const version = params.version ?? 'inactive';
+        const bindingUri = `/sap/bc/adt/businessservices/bindings/${AdtServiceBinding.encodeName(params.bindingName)}`;
+        const xml = `<?xml version="1.0" encoding="UTF-8"?><chkrun:checkObjectList xmlns:chkrun="http://www.sap.com/adt/checkrun" xmlns:adtcore="http://www.sap.com/adt/core"><chkrun:checkObject adtcore:uri="${bindingUri}" chkrun:version="${version}"/></chkrun:checkObjectList>`;
+        return this.connection.makeAdtRequest({
+            url: '/sap/bc/adt/checkruns',
+            method: 'POST',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            data: xml,
+            headers: {
+                Accept: contentTypes_1.ACCEPT_CHECK_MESSAGES,
+                'Content-Type': contentTypes_1.CT_CHECK_OBJECTS,
+            },
+        });
+    }
+    async activateServiceBinding(params) {
+        if (!params.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        const preauditRequested = params.preauditRequested === undefined ? true : params.preauditRequested;
+        const bindingUri = `/sap/bc/adt/businessservices/bindings/${AdtServiceBinding.encodeName(params.bindingName)}`;
+        const xml = `<?xml version="1.0" encoding="UTF-8"?><adtcore:objectReferences xmlns:adtcore="http://www.sap.com/adt/core"><adtcore:objectReference adtcore:uri="${bindingUri}" adtcore:name="${params.bindingName.toUpperCase()}"/></adtcore:objectReferences>`;
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/activation?method=activate&preauditRequested=${preauditRequested}`,
+            method: 'POST',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            data: xml,
+            headers: {
+                Accept: 'application/xml',
+                'Content-Type': 'application/xml',
+            },
+        });
+    }
+    async generateServiceBinding(params) {
+        if (!params.bindingName) {
+            throw new Error('bindingName is required');
+        }
+        if (!params.serviceName) {
+            throw new Error('serviceName is required');
+        }
+        if (!params.serviceVersion) {
+            throw new Error('serviceVersion is required');
+        }
+        if (!params.serviceDefinitionName) {
+            throw new Error('serviceDefinitionName is required');
+        }
+        const path = params.serviceType === 'odatav2' ? 'odatav2' : 'odatav4';
+        const accept = params.serviceType === 'odatav2'
+            ? 'application/vnd.sap.adt.businessservices.odatav2.v2+xml, application/vnd.sap.adt.businessservices.odatav2.v3+xml'
+            : 'application/vnd.sap.adt.businessservices.odatav4.v1+xml, application/vnd.sap.adt.businessservices.odatav4.v2+xml';
+        const genQs = (0, internalUtils_1.buildQueryString)({
+            servicename: params.serviceName.toUpperCase(),
+            serviceversion: params.serviceVersion,
+            srvdname: params.serviceDefinitionName.toUpperCase(),
+        });
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/businessservices/${path}/${encodeURIComponent(params.bindingName.toUpperCase())}?${genQs}`,
+            method: 'GET',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            headers: {
+                Accept: accept,
+            },
+        });
+    }
+    async createAndGenerateServiceBinding(params) {
+        const state = await this.create({
+            bindingName: params.bindingName,
+            packageName: params.packageName,
+            description: params.description,
+            serviceDefinitionName: params.serviceDefinitionName,
+            serviceName: params.serviceName,
+            serviceVersion: params.serviceVersion,
+            bindingVariant: params.bindingVariant,
+            masterLanguage: params.masterLanguage,
+            masterSystem: params.masterSystem,
+            responsible: params.responsible,
+            runTransportCheck: params.runTransportCheck,
+        }, { activateOnCreate: true });
+        if (!state.createResult ||
+            !state.inactiveCheckResult ||
+            !state.readResult ||
+            !state.generatedInfoResult) {
+            throw new Error('Create and generate flow did not produce required results');
+        }
+        return {
+            createResult: state.createResult,
+            inactiveCheckResult: state.inactiveCheckResult,
+            activationResult: state.activateResult,
+            readResult: state.readResult,
+            generatedInfoResult: state.generatedInfoResult,
+            activeCheckResult: state.activeCheckResult,
+        };
+    }
+    async getODataV2ServiceBinding(params) {
+        if (!params.objectname) {
+            throw new Error('objectname is required');
+        }
+        const v2Qs = (0, internalUtils_1.buildQueryString)({
+            servicename: params.servicename,
+            serviceversion: params.serviceversion,
+            srvdname: params.srvdname,
+        });
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/businessservices/odatav2/${encodeURIComponent(params.objectname)}?${v2Qs}`,
+            method: 'GET',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            headers: {
+                Accept: 'application/vnd.sap.adt.businessservices.odatav2.v3+xml',
+            },
+        });
+    }
+    async getODataV4ServiceBinding(params) {
+        if (!params.objectname) {
+            throw new Error('objectname is required');
+        }
+        const v4Qs = (0, internalUtils_1.buildQueryString)({
+            servicename: params.servicename,
+            serviceversion: params.serviceversion,
+            srvdname: params.srvdname,
+        });
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/businessservices/odatav4/${encodeURIComponent(params.objectname)}?${v4Qs}`,
+            method: 'GET',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            headers: {
+                Accept: 'application/vnd.sap.adt.businessservices.odatav4.v2+xml',
+            },
+        });
+    }
+    async publishODataV2(params) {
+        if (!params.servicename) {
+            throw new Error('servicename is required');
+        }
+        this.logger?.info?.('Publishing OData V2 service', params);
+        const pubV2Qs = (0, internalUtils_1.buildQueryString)({
+            servicename: params.servicename,
+            serviceversion: params.serviceversion,
+        });
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/businessservices/odatav2/publishjobs?${pubV2Qs}`,
+            method: 'GET',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            headers: {
+                Accept: 'application/vnd.sap.adt.businessservices.odatav2.v3+xml, application/json, text/plain',
+            },
+        });
+    }
+    async unpublishODataV2(params) {
+        if (!params.servicename) {
+            throw new Error('servicename is required');
+        }
+        this.logger?.info?.('Unpublishing OData V2 service', params);
+        const unpubV2Qs = (0, internalUtils_1.buildQueryString)({
+            servicename: params.servicename,
+            serviceversion: params.serviceversion,
+        });
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/businessservices/odatav2/unpublishjobs?${unpubV2Qs}`,
+            method: 'GET',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            headers: {
+                Accept: 'application/vnd.sap.adt.businessservices.odatav2.v3+xml, application/json, text/plain',
+            },
+        });
+    }
+    async classifyServiceBinding(params) {
+        if (!params.objectname) {
+            throw new Error('objectname is required');
+        }
+        const classifyQs = (0, internalUtils_1.buildQueryString)({
+            objectname: params.objectname,
+            bindtype: params.bindtype,
+            bindtypeversion: params.bindtypeversion,
+            repositoryid: params.repositoryid,
+            servicename: params.servicename,
+        });
+        return this.connection.makeAdtRequest({
+            url: `/sap/bc/adt/businessservices/release?${classifyQs}`,
+            method: 'GET',
+            timeout: (0, timeouts_1.getTimeout)('default'),
+            headers: {
+                Accept: 'application/xml, application/json, text/plain',
+            },
+        });
+    }
+    async getVersions(_config) {
+        (0, versions_1.throwUnsupportedVersions)('service binding');
+    }
+    async getVersionSource(_contentUri) {
+        (0, versions_1.throwUnsupportedVersions)('service binding');
+    }
+}
+exports.AdtServiceBinding = AdtServiceBinding;
+// Backward compatibility for existing imports.
+class AdtService extends AdtServiceBinding {
+}
+exports.AdtService = AdtService;

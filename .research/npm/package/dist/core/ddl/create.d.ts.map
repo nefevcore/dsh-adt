@@ -1,0 +1,1 @@
+{"version":3,"file":"create.d.ts","sourceRoot":"","sources":["../../../src/core/ddl/create.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,OAAO,KAAK,EAAE,eAAe,EAAE,YAAY,EAAE,MAAM,0BAA0B,CAAC;AAI9E,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,SAAS,CAAC;AA6ChD;;;;GAIG;AACH,wBAAsB,SAAS,CAC7B,UAAU,EAAE,eAAe,EAC3B,MAAM,EAAE,gBAAgB,GACvB,OAAO,CAAC,YAAY,CAAC,CAMvB"}

@@ -1,0 +1,1 @@
+{"version":3,"file":"read.d.ts","sourceRoot":"","sources":["../../../src/core/messageClass/read.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,OAAO,KAAK,EAAE,eAAe,EAAE,YAAY,EAAE,MAAM,0BAA0B,CAAC;AAU9E;;;GAGG;AACH,wBAAsB,qBAAqB,CACzC,UAAU,EAAE,eAAe,EAC3B,IAAI,EAAE,MAAM,EACZ,OAAO,CAAC,EAAE;IAAE,eAAe,CAAC,EAAE,OAAO,CAAA;CAAE,GACtC,OAAO,CAAC,YAAY,CAAC,CAavB"}

@@ -1,0 +1,2 @@
+export type { IAppendStructureConfig, IAppendStructureState, ICreateAppendStructureParams, IDeleteAppendStructureParams, IUpdateAppendStructureParams, } from '@mcp-abap-adt/interfaces';
+//# sourceMappingURL=types.d.ts.map

@@ -1,0 +1,389 @@
+"use strict";
+/**
+ * Package hierarchy operations
+ *
+ * Builds a tree of package contents using node structure traversal.
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getPackageHierarchy = getPackageHierarchy;
+const fast_xml_parser_1 = require("fast-xml-parser");
+const nodeStructure_1 = require("./nodeStructure");
+const debugEnabled = process.env.DEBUG_ADT_LIBS === 'true';
+const xmlParser = new fast_xml_parser_1.XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '',
+    parseAttributeValue: true,
+    trimValues: true,
+});
+const readNodeValue = (value) => {
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+    if (typeof value === 'string' || typeof value === 'number') {
+        return String(value);
+    }
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false';
+    }
+    if (typeof value === 'object') {
+        const record = value;
+        const textValue = record['#text'] ?? record._text;
+        if (typeof textValue === 'string' ||
+            typeof textValue === 'number' ||
+            typeof textValue === 'boolean') {
+            return String(textValue);
+        }
+    }
+    return undefined;
+};
+const normalizeAdtType = (value) => {
+    if (!value) {
+        return undefined;
+    }
+    const type = String(value).trim().toUpperCase();
+    return type.length > 0 ? type : undefined;
+};
+const isPackageType = (adtType) => adtType === 'DEVC' || adtType.startsWith('DEVC/');
+const mapAdtTypeToCodeFormat = (adtType) => {
+    const type = normalizeAdtType(adtType);
+    if (!type) {
+        return undefined;
+    }
+    if (type === 'DEVC/K' || type === 'DEVC')
+        return 'xml';
+    if (type.startsWith('DEVC/'))
+        return 'xml';
+    if (type.startsWith('DOMA/'))
+        return 'xml';
+    if (type.startsWith('DTEL/'))
+        return 'xml';
+    if (type === 'FUGR/F' || type === 'FUGR')
+        return 'xml';
+    if (type.startsWith('CLAS/'))
+        return 'source';
+    if (type.startsWith('INTF/'))
+        return 'source';
+    if (type.startsWith('PROG/'))
+        return 'source';
+    if (type.startsWith('DDLS/'))
+        return 'source';
+    if (type.startsWith('DDLX/'))
+        return 'source';
+    if (type.startsWith('SRVD/'))
+        return 'source';
+    if (type.startsWith('TABL/DT'))
+        return 'source';
+    if (type.startsWith('TABL/DS') || type.startsWith('STRU/'))
+        return 'source';
+    if (type.startsWith('TTYP/'))
+        return 'source';
+    if (type.startsWith('FUGR/FF'))
+        return 'source';
+    if (type.startsWith('BDEF/'))
+        return 'source';
+    if (type.startsWith('BIMP/') || type.startsWith('BIMPL/'))
+        return 'source';
+    return undefined;
+};
+const mapAdtTypeToSupported = (adtType) => {
+    if (!adtType) {
+        return undefined;
+    }
+    const type = adtType.toUpperCase();
+    const map = {
+        'DEVC/K': 'package',
+        'DOMA/DD': 'domain',
+        'DTEL/DE': 'dataElement',
+        'TABL/DS': 'structure',
+        'STRU/DT': 'structure',
+        'TABL/DT': 'table',
+        'TTYP/DF': 'tableType',
+        'TTYP/TT': 'tableType',
+        'DDLS/DF': 'view',
+        'DDLX/EX': 'metadataExtension',
+        'CLAS/OC': 'class',
+        'INTF/IF': 'interface',
+        'INTF/OI': 'interface',
+        'PROG/P': 'program',
+        'FUGR/FF': 'functionModule',
+        'FUGR/F': 'functionGroup',
+        FUGR: 'functionGroup',
+        'SRVD/SRV': 'serviceDefinition',
+        'BDEF/BDO': 'behaviorDefinition',
+        'BIMP/BIM': 'behaviorImplementation',
+        'BIMP/BI': 'behaviorImplementation',
+        'BIMP/BO': 'behaviorImplementation',
+    };
+    if (map[type]) {
+        return map[type];
+    }
+    if (type.startsWith('CLAS/'))
+        return 'class';
+    if (type.startsWith('INTF/'))
+        return 'interface';
+    if (type.startsWith('PROG/'))
+        return 'program';
+    if (type.startsWith('DDLS/'))
+        return 'view';
+    if (type.startsWith('DDLX/'))
+        return 'metadataExtension';
+    if (type.startsWith('SRVD/'))
+        return 'serviceDefinition';
+    if (type.startsWith('DOMA/'))
+        return 'domain';
+    if (type.startsWith('DTEL/'))
+        return 'dataElement';
+    if (type.startsWith('TABL/DS') || type.startsWith('STRU/'))
+        return 'structure';
+    if (type.startsWith('TABL/DT'))
+        return 'table';
+    if (type.startsWith('TTYP/'))
+        return 'tableType';
+    if (type.startsWith('FUGR/FF'))
+        return 'functionModule';
+    if (type.startsWith('FUGR/'))
+        return 'functionGroup';
+    if (type.startsWith('DEVC/'))
+        return 'package';
+    if (type.startsWith('BDEF/'))
+        return 'behaviorDefinition';
+    if (type.startsWith('BIMP/'))
+        return 'behaviorImplementation';
+    if (type.startsWith('BIMPL/'))
+        return 'behaviorImplementation';
+    return undefined;
+};
+const isRestoreImplemented = (type) => {
+    if (!type) {
+        return false;
+    }
+    const supported = new Set([
+        'package',
+        'domain',
+        'dataElement',
+        'structure',
+        'table',
+        'tableType',
+        'view',
+        'class',
+        'interface',
+        'program',
+        'functionGroup',
+        'functionModule',
+        'serviceDefinition',
+        'metadataExtension',
+        'behaviorDefinition',
+        'behaviorImplementation',
+    ]);
+    return supported.has(type);
+};
+const parseNodeStructure = (xmlData, logger) => {
+    const emptyResult = { nodes: [], objectTypes: [] };
+    try {
+        if (!xmlData) {
+            return emptyResult;
+        }
+        const result = xmlParser.parse(xmlData);
+        const abap = result?.['asx:abap'];
+        const data = abap?.['asx:values']?.DATA;
+        // Parse TREE_CONTENT nodes
+        const treeContent = data?.TREE_CONTENT;
+        const rawNodes = treeContent?.SEU_ADT_REPOSITORY_OBJ_NODE;
+        const nodes = rawNodes
+            ? Array.isArray(rawNodes)
+                ? rawNodes
+                : [rawNodes]
+            : [];
+        // Parse OBJECT_TYPES to get NODE_ID for each object type
+        const objectTypesData = data?.OBJECT_TYPES;
+        const rawTypes = objectTypesData?.SEU_ADT_OBJECT_TYPE_INFO;
+        const typeInfos = rawTypes
+            ? Array.isArray(rawTypes)
+                ? rawTypes
+                : [rawTypes]
+            : [];
+        const objectTypes = [];
+        for (const typeInfo of typeInfos) {
+            const objectType = readNodeValue(typeInfo?.OBJECT_TYPE);
+            const nodeId = readNodeValue(typeInfo?.NODE_ID);
+            if (objectType && nodeId) {
+                objectTypes.push({ objectType, nodeId });
+            }
+        }
+        return { nodes, objectTypes };
+    }
+    catch (error) {
+        if (debugEnabled) {
+            logger?.warn?.('Failed to parse node structure XML', error);
+        }
+        return emptyResult;
+    }
+};
+const buildTreeFromNodes = (nodes, includeDescriptions, logger) => {
+    const nodeMap = new Map();
+    const orderedKeys = [];
+    let hasHierarchy = false;
+    for (const node of nodes) {
+        const objectName = readNodeValue(node?.OBJECT_NAME);
+        const objectTypeRaw = readNodeValue(node?.OBJECT_TYPE);
+        const objectType = normalizeAdtType(objectTypeRaw);
+        const nodeId = readNodeValue(node?.NODE_ID);
+        const parentNodeId = readNodeValue(node?.PARENT_NODE_ID);
+        const description = readNodeValue(node?.DESCRIPTION);
+        if (!objectName || !objectType) {
+            continue;
+        }
+        const isPackage = isPackageType(objectType);
+        const key = nodeId || `${objectType}:${objectName}:${orderedKeys.length.toString()}`;
+        const supportedType = mapAdtTypeToSupported(objectType);
+        nodeMap.set(key, {
+            name: String(objectName).trim(),
+            type: objectType,
+            kind: supportedType,
+            description: includeDescriptions
+                ? description
+                    ? String(description).trim()
+                    : undefined
+                : undefined,
+            isPackage,
+            codeFormat: mapAdtTypeToCodeFormat(objectType),
+            restoreStatus: isRestoreImplemented(supportedType)
+                ? 'ok'
+                : 'not-implemented',
+            children: [],
+            _nodeId: nodeId,
+            _parentNodeId: parentNodeId,
+        });
+        orderedKeys.push(key);
+        if (nodeId && parentNodeId) {
+            hasHierarchy = true;
+        }
+    }
+    if (hasHierarchy) {
+        const roots = [];
+        for (const key of orderedKeys) {
+            const entry = nodeMap.get(key);
+            if (!entry) {
+                continue;
+            }
+            const parentNodeId = entry._parentNodeId;
+            if (parentNodeId && nodeMap.has(parentNodeId)) {
+                nodeMap.get(parentNodeId)?.children?.push(entry);
+            }
+            else {
+                roots.push(entry);
+            }
+        }
+        for (const key of orderedKeys) {
+            const entry = nodeMap.get(key);
+            if (entry) {
+                delete entry._nodeId;
+                delete entry._parentNodeId;
+            }
+        }
+        return roots;
+    }
+    const result = orderedKeys
+        .map((key) => {
+        const entry = nodeMap.get(key);
+        if (!entry) {
+            return null;
+        }
+        delete entry._nodeId;
+        delete entry._parentNodeId;
+        return entry;
+    })
+        .filter((entry) => entry !== null);
+    if (debugEnabled) {
+        logger?.debug?.(`Built flat list: ${result.length} nodes (packages: ${result.filter((node) => node.isPackage).length})`);
+    }
+    return result;
+};
+const createPackageNode = (packageName, children) => ({
+    name: packageName,
+    type: 'DEVC/K',
+    kind: 'package',
+    isPackage: true,
+    codeFormat: mapAdtTypeToCodeFormat('DEVC/K'),
+    restoreStatus: 'ok',
+    children,
+});
+const fetchPackageTreeRecursive = async (connection, packageName, currentDepth, maxDepth, includeDescriptions, includeSubpackages, logger) => {
+    if (currentDepth >= maxDepth) {
+        return createPackageNode(packageName, []);
+    }
+    // Initial request - returns subpackages and OBJECT_TYPES with NODE_IDs
+    const response = await (0, nodeStructure_1.fetchNodeStructure)(connection, 'DEVC/K', packageName, undefined, includeDescriptions);
+    const xml = typeof response.data === 'string'
+        ? response.data
+        : JSON.stringify(response.data);
+    const { nodes, objectTypes } = parseNodeStructure(xml, logger);
+    // Collect all nodes including subpackages from initial response
+    const allNodes = [...nodes];
+    // Fetch objects for each non-package type using their NODE_ID
+    for (const typeInfo of objectTypes) {
+        // Skip DEVC/K as subpackages are already in initial response
+        if (isPackageType(typeInfo.objectType)) {
+            continue;
+        }
+        try {
+            const typeResponse = await (0, nodeStructure_1.fetchNodeStructure)(connection, 'DEVC/K', packageName, typeInfo.nodeId, includeDescriptions);
+            const typeXml = typeof typeResponse.data === 'string'
+                ? typeResponse.data
+                : JSON.stringify(typeResponse.data);
+            const { nodes: typeNodes } = parseNodeStructure(typeXml, logger);
+            allNodes.push(...typeNodes);
+        }
+        catch (error) {
+            if (debugEnabled) {
+                logger?.warn?.(`Failed to fetch objects of type ${typeInfo.objectType} for package ${packageName}`, error);
+            }
+        }
+    }
+    if (allNodes.length === 0) {
+        return createPackageNode(packageName, []);
+    }
+    const children = buildTreeFromNodes(allNodes, includeDescriptions, logger);
+    const packageNode = createPackageNode(packageName, children);
+    if (currentDepth < maxDepth && children.length > 0) {
+        const subpackages = children.filter((child) => child.isPackage);
+        if (subpackages.length > 0) {
+            const subpackageMaxDepth = includeSubpackages
+                ? maxDepth
+                : currentDepth + 1;
+            // Process subpackages sequentially — RFC connections support only
+            // one concurrent request per session, so Promise.all would deadlock.
+            const subpackageTrees = [];
+            for (const subpackage of subpackages) {
+                const tree = await fetchPackageTreeRecursive(connection, subpackage.name, currentDepth + 1, subpackageMaxDepth, includeDescriptions, includeSubpackages, logger);
+                subpackageTrees.push(tree);
+            }
+            packageNode.children = packageNode.children?.map((child) => {
+                if (!child.isPackage) {
+                    return child;
+                }
+                const subpackageTree = subpackageTrees.find((tree) => tree.name === child.name);
+                return subpackageTree
+                    ? { ...subpackageTree, children: subpackageTree.children || [] }
+                    : { ...child, children: child.children || [] };
+            });
+        }
+    }
+    return packageNode;
+};
+async function getPackageHierarchy(connection, packageName, options, logger) {
+    const includeSubpackages = options?.includeSubpackages !== false;
+    const maxDepth = options?.maxDepth ?? 5;
+    const includeDescriptions = options?.includeDescriptions !== false;
+    const packageNameUpper = packageName.toUpperCase();
+    if (debugEnabled) {
+        logger?.debug?.(`Fetching package tree for ${packageNameUpper} (include_subpackages: ${includeSubpackages}, max_depth: ${maxDepth})`);
+    }
+    const tree = await fetchPackageTreeRecursive(connection, packageNameUpper, 0, maxDepth, includeDescriptions, includeSubpackages, logger);
+    tree.name = packageNameUpper;
+    tree.type = 'DEVC/K';
+    tree.kind = 'package';
+    tree.isPackage = true;
+    tree.codeFormat = mapAdtTypeToCodeFormat('DEVC/K');
+    return tree;
+}
