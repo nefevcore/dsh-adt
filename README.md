@@ -87,7 +87,9 @@ corepack pnpm test        # 18 个协议/集成测试（客户端 ↔ mock 端�
 
 ### 2. 加载到 DSH web profile
 
-插件已注册到 `C:\Users\xiaofeng\.dsh\profiles\web\cordis.patch.yml`（file URL 直连本仓库构建产物）。修改该文件后运行中的 DSH 会通过 HMR 自动加载（验证：`netstat -ano | findstr 8123`，demo mock 服务器监听即加载成功）。
+插件已注册到 `C:\Users\xiaofeng\.dsh\profiles\web\cordis.patch.yml`（file URL 直连本仓库构建产物）。
+
+> ⚠️ **插件代码变更后必须重启 DSH**（`scripts/restart-dsh-web.ps1` 或重新执行 `npx @deepseek-ai/dsh web`）。HMR 只能重跑配置、不能更新已缓存的库模块——本插件以 file URL 加载，Node 的 ESM 缓存会钉住 `@abap-adt/protocol`、`@abap-adt/mock` 与 `tools/*` 的旧代码。**不要**依赖"改配置热更新代码"。
 
 如需正式安装（pnpm 依赖解析），在 profile 目录执行：
 
