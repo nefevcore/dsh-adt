@@ -16,7 +16,7 @@
  * server that exposes the ADT service (classic NetWeaver and ABAP Cloud).
  */
 import { type XmlNode } from './xml.js';
-import type { AdtActivationResult, AdtAtcResult, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtDestination, AdtDiscovery, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtSystemInfo, AdtTransport, AdtUnitRunResult } from './types.js';
+import type { AdtActivationResult, AdtAtcResult, AdtAtcRunSummary, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtDestination, AdtDiscovery, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtSystemInfo, AdtTransport, AdtUnitRunResult } from './types.js';
 /** Error raised for HTTP-level or protocol-level failures. */
 export declare class AdtError extends Error {
     readonly status?: number | undefined;
@@ -151,6 +151,26 @@ export declare class AdtClient {
     runAtc(objects: AdtObjectRef[], options?: {
         variant?: string;
         timeoutMs?: number;
+    }): Promise<AdtAtcResult>;
+    /**
+     * List existing ATC runs (the results collection). The backend requires at
+     * least one filter; when none is given the logged-on user is used.
+     */
+    listAtcRuns(options?: {
+        createdBy?: string;
+        ageMin?: number;
+        ageMax?: number;
+        central?: boolean;
+        active?: boolean;
+        sysId?: string;
+        contactPerson?: string;
+    }): Promise<AdtAtcRunSummary[]>;
+    /**
+     * Fetch one ATC run result by display id (checkstyle XML on on-prem
+     * backends; the raw body is preserved when the format is unknown).
+     */
+    getAtcResult(displayId: string, options?: {
+        includeExemptedFindings?: boolean;
     }): Promise<AdtAtcResult>;
     /** List transport requests of the current user (or all users). */
     listTransports(options?: {

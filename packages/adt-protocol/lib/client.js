@@ -567,6 +567,42 @@ export class AdtClient {
         });
         return parseAtcResult(results.text, options.variant);
     }
+    /**
+     * List existing ATC runs (the results collection). The backend requires at
+     * least one filter; when none is given the logged-on user is used.
+     */
+    async listAtcRuns(options = {}) {
+        const params = this.baseQuery({
+            ...(options.createdBy ?? (this.destination.auth.type === 'basic' ? this.destination.auth.username : undefined)
+                ? { createdBy: options.createdBy ?? (this.destination.auth.type === 'basic' ? this.destination.auth.username : undefined) }
+                : {}),
+            ...(options.ageMin !== undefined ? { ageMin: options.ageMin } : {}),
+            ...(options.ageMax !== undefined ? { ageMax: options.ageMax } : {}),
+            ...(options.central ? { centralResult: 'true' } : {}),
+            ...(options.active ? { activeResult: 'true' } : {}),
+            ...(options.sysId ? { sysId: options.sysId } : {}),
+            ...(options.contactPerson ? { contactPerson: options.contactPerson } : {}),
+        });
+        const res = await this.request({
+            path: `${ENDPOINTS.atcResults()}${toQuery(params)}`,
+            accept: 'application/xml',
+        });
+        return parseAtcResultList(res.text);
+    }
+    /**
+     * Fetch one ATC run result by display id (checkstyle XML on on-prem
+     * backends; the raw body is preserved when the format is unknown).
+     */
+    async getAtcResult(displayId, options = {}) {
+        const params = this.baseQuery({
+            ...(options.includeExemptedFindings ? { includeExemptedFindings: 'true' } : {}),
+        });
+        const res = await this.request({
+            path: `${ENDPOINTS.atcResults()}/${encodeURIComponent(displayId)}${toQuery(params)}`,
+            accept: 'application/xml',
+        });
+        return parseAtcResultBody(res.text, displayId);
+    }
     // ---------------------------------------------------------------------------
     // Transports
     // ---------------------------------------------------------------------------
@@ -1315,6 +1351,92 @@ function parseAtcResult(xml, variant) {
         durationMs: 0,
         variant,
     };
+}
+/**
+ * Parse the ATC results collection (`atcresult:resultList`; tolerant of Atom
+ * feed shapes). Extracts every attribute the backend reports per entry.
+ */
+function parseAtcResultList(xml) {
+    const root = parseXml(xml);
+    const runs = [];
+    const push = (el) => {
+        const displayId = attr(el, 'displayId') ?? attr(el, 'id') ?? attr(el, 'resultId');
+        if (!displayId)
+            return;
+        const attributes = {};
+        for (const [key, value] of Object.entries(el.attributes)) {
+            attributes[key.replace(/^[^:]*:/, '')] = value;
+        }
+        runs.push({
+            displayId,
+            createdBy: attr(el, 'createdBy') ?? attr(el, 'user'),
+            createdAt: attr(el, 'createdAt') ?? attr(el, 'timestamp') ?? attr(el, 'date'),
+            status: attr(el, 'status') ?? attr(el, 'state'),
+            kind: attr(el, 'centralResult') ? 'central' : attr(el, 'activeResult') ? 'active' : undefined,
+            attributes,
+        });
+    };
+    for (const el of [...children(root, 'result'), ...children(root, 'entry')])
+        push(el);
+    // Atom feed entries carry the id in a child <id>/<link>.
+    if (runs.length === 0) {
+        for (const entry of children(root, 'entry')) {
+            const id = childText(entry, 'id');
+            const link = children(entry, 'link').map((l) => attr(l, 'href') ?? '').find((h) => h.includes('/atc/results/'));
+            const displayId = id ?? (link ? link.split('/').pop() : undefined);
+            if (!displayId)
+                continue;
+            runs.push({
+                displayId: displayId.split('/').pop() ?? displayId,
+                createdBy: childText(entry, 'author') ?? undefined,
+                createdAt: childText(entry, 'updated') ?? undefined,
+                status: attr(entry, 'status') ?? undefined,
+                attributes: {},
+            });
+        }
+    }
+    return runs;
+}
+/** Parse one ATC result body; checkstyle on on-prem, raw preserved otherwise. */
+function parseAtcResultBody(xml, displayId) {
+    const trimmed = xml.trimStart();
+    if (!trimmed.startsWith('<')) {
+        return {
+            success: true,
+            clean: true,
+            findings: [],
+            counts: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0, CATASTROPHIC: 0 },
+            durationMs: 0,
+            displayId,
+            rawXml: xml,
+        };
+    }
+    try {
+        const root = parseXml(xml);
+        if (root.name === 'checkstyle')
+            return { ...parseAtcResult(xml), displayId };
+        // Unknown XML envelope: preserve raw for the caller.
+        return {
+            success: true,
+            clean: true,
+            findings: [],
+            counts: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0, CATASTROPHIC: 0 },
+            durationMs: 0,
+            displayId,
+            rawXml: xml,
+        };
+    }
+    catch {
+        return {
+            success: true,
+            clean: true,
+            findings: [],
+            counts: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0, CATASTROPHIC: 0 },
+            durationMs: 0,
+            displayId,
+            rawXml: xml,
+        };
+    }
 }
 function severityFromCheckstyle(value) {
     switch ((value ?? '').toLowerCase()) {

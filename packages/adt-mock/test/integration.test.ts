@@ -163,3 +163,24 @@ test('updateSource helper locks and unlocks', async () => {
   const after = await c.readSource(uri);
   assert.ok(after.source.trimEnd().endsWith('ENDINTERFACE.'));
 });
+
+test('lists existing ATC runs and fetches one result', async () => {
+  const c = client();
+  const runs = await c.listAtcRuns({ createdBy: 'DEMO' });
+  assert.ok(runs.length >= 2);
+  const first = runs[0]!;
+  assert.ok(first.displayId.length > 0);
+
+  // Run 1 covers ZCL_FLAKY (CRITICAL) + ZPROG_DEMO (ERROR) → not clean.
+  const result = await c.getAtcResult(first.displayId);
+  assert.equal(result.clean, false);
+  assert.ok(result.findings.length >= 2);
+  assert.ok(result.counts.ERROR >= 1 || result.counts.CRITICAL >= 1);
+
+  // Unknown display id → 404.
+  await assert.rejects(() => c.getAtcResult('99999999999999999999999999999999'), AdtError);
+
+  // Default filter (no createdBy) still returns the user's runs.
+  const mine = await c.listAtcRuns();
+  assert.ok(mine.length >= 1);
+});

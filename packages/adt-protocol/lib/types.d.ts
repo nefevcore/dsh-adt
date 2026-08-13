@@ -196,6 +196,21 @@ export interface AdtUnitRunResult {
     classes: AdtUnitTestClass[];
 }
 export type AdtAtcSeverity = 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL' | 'CATASTROPHIC';
+/** One entry of the ATC results collection (`GET /atc/results`). */
+export interface AdtAtcRunSummary {
+    /** Result display id (usable with {@link getAtcResult}). */
+    displayId: string;
+    /** User who created/triggered the run, when reported. */
+    createdBy?: string;
+    /** Creation timestamp, when reported. */
+    createdAt?: string;
+    /** Run state, when reported. */
+    status?: string;
+    /** Kind: `active` (local) vs `central` (central check), when reported. */
+    kind?: string;
+    /** Any additional attributes the backend reports. */
+    attributes: Record<string, string>;
+}
 /** One ATC finding. */
 export interface AdtAtcFinding {
     check: string;
@@ -227,6 +242,10 @@ export interface AdtAtcResult {
     variant?: string;
     /** `true` when the run was executed asynchronously and results are partial. */
     async?: boolean;
+    /** Result display id this result belongs to (when fetched by id). */
+    displayId?: string;
+    /** Raw response body, kept when the format is not checkstyle XML. */
+    rawXml?: string;
 }
 /** One transport request (CTO request). */
 export interface AdtTransport {

@@ -18,6 +18,7 @@ import { searchTools } from './tools/search.js';
 import { sourceTools } from './tools/source.js';
 import { lifecycleTools } from './tools/lifecycle.js';
 import { testingTools } from './tools/testing.js';
+import { atcRunTools } from './tools/atc_runs.js';
 import { transportTools } from './tools/transports.js';
 import { packageTools } from './tools/packages.js';
 import { batchTools } from './tools/batch.js';
@@ -33,6 +34,7 @@ async function apply(ctx, config) {
         ...sourceTools(deps),
         ...lifecycleTools(deps),
         ...testingTools(deps),
+        ...atcRunTools(deps),
         ...transportTools(deps),
         ...packageTools(deps),
         ...batchTools(deps, ctx),
