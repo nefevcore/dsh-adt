@@ -55,6 +55,9 @@ export function systemTools(deps) {
                         abapCloud: { type: 'boolean', required: true },
                         serviceCount: { type: 'integer', required: true },
                         features: { type: 'object', additionalProperties: true },
+                        userName: { type: 'string' },
+                        client: { type: 'string' },
+                        language: { type: 'string' },
                     },
                 },
                 render: (_args, value) => text([
