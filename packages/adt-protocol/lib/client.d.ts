@@ -74,24 +74,36 @@ export declare class AdtClient {
     resetSession(): void;
     /** Fetch the discovery document (AtomPub service doc; tolerant of simple XML). */
     discover(): Promise<AdtDiscovery>;
-    /** System id / release / ABAP Cloud info. */
+    /**
+     * System id / release / ABAP Cloud info.
+     *
+     * Prefers the structured `core/http/systeminformation` JSON endpoint (SID,
+     * client, language, user); falls back to discovery feature flags when the
+     * endpoint is unavailable.
+     */
     systemInfo(): Promise<AdtSystemInfo>;
     /**
-     * Quick search: objects by name/description and full-text source search.
-     * `operation` is `quickSearch` (default), `quickSearchSource` or
-     * `objectSearch`.
+     * Quick search: objects by name/description and (where supported) full-text
+     * source search. `operation` is `quickSearch` (default), `quickSearchSource`
+     * or `objectSearch`.
+     *
+     * Real-world resilience: some backends (e.g. S/4HANA with limited search
+     * providers) return HTTP 500 for `quickSearchSource`/`objectSearch`; this
+     * method then retries with plain `quickSearch` and marks what it could not
+     * deliver via the `note` field.
      */
     search(query: string, options?: {
         maxResults?: number;
         operation?: string;
         objectType?: string;
+        packageName?: string;
     }): Promise<AdtSearchResult>;
     /** Search only for objects (name/description), no source search. */
     searchObjects(query: string, options?: {
         maxResults?: number;
         objectType?: string;
     }): Promise<AdtObjectSearchHit[]>;
-    /** Full-text search inside ABAP sources. */
+    /** Full-text search inside ABAP sources (empty when unsupported). */
     searchSource(query: string, options?: {
         maxResults?: number;
     }): Promise<AdtSourceSearchHit[]>;
@@ -149,8 +161,17 @@ export declare class AdtClient {
     getTransport(number: string): Promise<AdtTransport>;
     /** Release a transport request. */
     releaseTransport(number: string): Promise<AdtTransport>;
-    /** List direct children of a package (via the repository node structure). */
-    packageContent(packageName: string): Promise<AdtObjectRef[]>;
+    /**
+     * List direct members of a package.
+     *
+     * Strategy: repository search filtered by `packageName` (works on all
+     * backends that expose the search service); falls back to the node-structure
+     * endpoint when the search route is unavailable. The node-structure route is
+     * frequently disabled on hardened S/4HANA systems, hence the preference.
+     */
+    packageContent(packageName: string, options?: {
+        maxResults?: number;
+    }): Promise<AdtObjectRef[]>;
     /**
      * Create a new ABAP development object using the type-specific collection
      * endpoints (e.g. `/sap/bc/adt/oo/classes` for classes) with namespaced

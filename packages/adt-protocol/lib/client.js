@@ -16,7 +16,7 @@
  * server that exposes the ADT service (classic NetWeaver and ABAP Cloud).
  */
 import { randomUUID } from 'node:crypto';
-import { ENDPOINTS, MEDIA, toQuery } from './endpoints.js';
+import { ADT_BASE as ADT_BASE_PATH, ENDPOINTS, MEDIA, toQuery } from './endpoints.js';
 import { attr, child, children, childText, parseXml } from './xml.js';
 /** Error raised for HTTP-level or protocol-level failures. */
 export class AdtError extends Error {
@@ -82,6 +82,30 @@ function parseErrorBody(body) {
     catch {
         return [];
     }
+}
+/**
+ * Lazy singleton undici Agent with TLS verification disabled, used for
+ * destinations with `strictSSL: false` (self-signed / private-CA SAP
+ * front-ends). Uses Node's built-in undici via `process.getBuiltinModule`
+ * (Node >= 22.3); returns `undefined` when unavailable.
+ */
+let insecureTlsDispatcher;
+let insecureTlsPromise;
+function getInsecureTlsDispatcher() {
+    // Lazily load undici only for destinations with `strictSSL: false`
+    // (self-signed / private-CA SAP front-ends). The default path stays
+    // dependency-free at runtime.
+    if (insecureTlsDispatcher !== undefined)
+        return insecureTlsDispatcher;
+    if (!insecureTlsPromise) {
+        insecureTlsPromise = import('undici')
+            .then(({ Agent }) => new Agent({ connect: { rejectUnauthorized: false } }))
+            .catch(() => null);
+    }
+    // The dispatcher is used asynchronously right after this call in
+    // `request()`; synchronously returning the promise is impossible, so
+    // request() awaits it below instead.
+    return insecureTlsPromise;
 }
 function normalizeUri(uri) {
     return uri.startsWith('/sap/bc/adt') ? uri : `/sap/bc/adt${uri.startsWith('/') ? '' : '/'}${uri}`;
@@ -166,13 +190,21 @@ export class AdtClient {
             const timer = setTimeout(() => controller.abort(), timeoutMs ?? this.destination.timeoutMs ?? 60_000);
             let response;
             try {
-                response = await this.fetchImpl(this.buildUrl(path), {
+                const init = {
                     method,
                     headers: reqHeaders,
                     body,
                     signal: controller.signal,
                     redirect: 'follow',
-                });
+                };
+                // Self-signed / private-CA systems: disable TLS verification per
+                // destination (undici dispatcher, lazily loaded).
+                if (this.destination.strictSSL === false) {
+                    const dispatcher = await getInsecureTlsDispatcher();
+                    if (dispatcher)
+                        init.dispatcher = dispatcher;
+                }
+                response = await this.fetchImpl(this.buildUrl(path), init);
             }
             catch (cause) {
                 throw new AdtError(`ADT request failed: ${cause.message}`);
@@ -235,11 +267,35 @@ export class AdtClient {
         });
         return parseDiscovery(res.text);
     }
-    /** System id / release / ABAP Cloud info. */
+    /**
+     * System id / release / ABAP Cloud info.
+     *
+     * Prefers the structured `core/http/systeminformation` JSON endpoint (SID,
+     * client, language, user); falls back to discovery feature flags when the
+     * endpoint is unavailable.
+     */
     async systemInfo() {
+        let systemId = '';
+        let userName = '';
+        let client = '';
+        let language = '';
+        try {
+            const res = await this.request({
+                path: `${ADT_BASE_PATH}/core/http/systeminformation?sap-client=${encodeURIComponent(this.destination.client ?? '')}`,
+                accept: 'application/vnd.sap.adt.core.http.systeminformation.v1+json',
+            });
+            const data = JSON.parse(res.text);
+            systemId = data.systemID ?? '';
+            userName = data.userName ?? '';
+            client = data.client ?? '';
+            language = data.language ?? '';
+        }
+        catch {
+            // Endpoint unavailable → rely on discovery below.
+        }
         const discovery = await this.discover();
         const features = discovery.features;
-        const systemId = features['systemId'] ?? features['SAP_SYSTEM_ID'] ?? '';
+        systemId = systemId || features['systemId'] || features['SAP_SYSTEM_ID'] || '';
         const release = features['release'] ?? features['SAP_SYSTEM_RELEASE'] ?? '';
         const abapCloud = Object.keys(features).some((k) => k.toLowerCase().includes('cloud')) || features['ABAP_CLOUD'] === 'true';
         return {
@@ -249,35 +305,61 @@ export class AdtClient {
             abapCloud,
             features,
             serviceCount: discovery.services.length,
+            userName: userName || undefined,
+            client: client || undefined,
+            language: language || undefined,
         };
     }
     // ---------------------------------------------------------------------------
     // Search
     // ---------------------------------------------------------------------------
     /**
-     * Quick search: objects by name/description and full-text source search.
-     * `operation` is `quickSearch` (default), `quickSearchSource` or
-     * `objectSearch`.
+     * Quick search: objects by name/description and (where supported) full-text
+     * source search. `operation` is `quickSearch` (default), `quickSearchSource`
+     * or `objectSearch`.
+     *
+     * Real-world resilience: some backends (e.g. S/4HANA with limited search
+     * providers) return HTTP 500 for `quickSearchSource`/`objectSearch`; this
+     * method then retries with plain `quickSearch` and marks what it could not
+     * deliver via the `note` field.
      */
     async search(query, options = {}) {
+        const operation = options.operation ?? 'quickSearch';
         const params = this.baseQuery({
-            operation: options.operation ?? 'quickSearch',
+            operation,
             query,
             maxResults: options.maxResults ?? 25,
             ...(options.objectType ? { objectType: options.objectType } : {}),
+            ...(options.packageName ? { packageName: options.packageName } : {}),
         });
-        const res = await this.request({
-            path: ENDPOINTS.search(params),
-            accept: 'application/xml',
-        });
-        return parseSearchResult(res.text, query);
+        try {
+            const res = await this.request({
+                path: ENDPOINTS.search(params),
+                accept: 'application/xml',
+            });
+            return parseSearchResult(res.text, query);
+        }
+        catch (error) {
+            // Fall back to plain quickSearch when a narrowed operation is rejected.
+            if (error instanceof AdtError && error.status === 500 && operation !== 'quickSearch') {
+                const fallback = await this.search(query, {
+                    maxResults: options.maxResults,
+                    objectType: options.objectType,
+                    packageName: options.packageName,
+                    operation: 'quickSearch',
+                });
+                fallback.note = `search operation '${operation}' unsupported by this backend; results from quickSearch`;
+                return fallback;
+            }
+            throw error;
+        }
     }
     /** Search only for objects (name/description), no source search. */
     async searchObjects(query, options = {}) {
         const result = await this.search(query, { ...options, operation: 'objectSearch' });
         return result.objects;
     }
-    /** Full-text search inside ABAP sources. */
+    /** Full-text search inside ABAP sources (empty when unsupported). */
     async searchSource(query, options = {}) {
         const result = await this.search(query, { ...options, operation: 'quickSearchSource' });
         return result.sources;
@@ -529,10 +611,42 @@ export class AdtClient {
     // ---------------------------------------------------------------------------
     // Packages
     // ---------------------------------------------------------------------------
-    /** List direct children of a package (via the repository node structure). */
-    async packageContent(packageName) {
+    /**
+     * List direct members of a package.
+     *
+     * Strategy: repository search filtered by `packageName` (works on all
+     * backends that expose the search service); falls back to the node-structure
+     * endpoint when the search route is unavailable. The node-structure route is
+     * frequently disabled on hardened S/4HANA systems, hence the preference.
+     */
+    async packageContent(packageName, options = {}) {
+        const upper = packageName.toUpperCase();
+        // 1) Search with packageName filter (returns object references).
+        try {
+            const result = await this.search('*', {
+                operation: 'quickSearch',
+                packageName: upper,
+                maxResults: options.maxResults ?? 500,
+            });
+            if (result.objects.length > 0) {
+                return result.objects.map((o) => ({
+                    uri: o.uri,
+                    type: o.type,
+                    name: o.objectName,
+                    category: o.category,
+                }));
+            }
+            // No hits can also mean "empty package"; only fall through to the
+            // node-structure route when the search itself was degraded.
+            if (!result.note)
+                return [];
+        }
+        catch {
+            // fall through to node structure
+        }
+        // 2) Node structure fallback.
         const params = this.baseQuery({
-            parent_name: packageName.toUpperCase(),
+            parent_name: upper,
             parent_type: 'DEVC/K',
             withShortDescriptions: 'true',
         });

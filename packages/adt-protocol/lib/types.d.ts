@@ -102,6 +102,9 @@ export interface AdtSearchResult {
     objects: AdtObjectSearchHit[];
     /** Full-text source hits. */
     sources: AdtSourceSearchHit[];
+    /** Set when the backend degraded the requested operation (e.g. source
+     * search unsupported) — callers should surface this to the user. */
+    note?: string;
 }
 /** Metadata block of a read object (property list). */
 export interface AdtObjectProperty {
@@ -275,6 +278,12 @@ export interface AdtSystemInfo {
     features: Record<string, string>;
     /** Number of advertised services. */
     serviceCount: number;
+    /** Logged-on user (from the systeminformation endpoint, when available). */
+    userName?: string;
+    /** SAP client in use. */
+    client?: string;
+    /** Logon language. */
+    language?: string;
 }
 /** Object types understood by the create service. */
 export type AdtCreatableObjectType = 'CLAS' | 'INTF' | 'PROG' | 'FUNC' | 'DDLS' | 'TABL' | 'STRU' | 'MSAG' | 'PACK' | 'DEVC';

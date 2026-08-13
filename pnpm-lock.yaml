@@ -27,7 +27,11 @@ importers:
         specifier: workspace:*
         version: link:../adt-protocol
 
-  packages/adt-protocol: {}
+  packages/adt-protocol:
+    dependencies:
+      undici:
+        specifier: ^7.0.0
+        version: 7.29.0
 
   packages/dsh-plugin-abap-adt:
     dependencies:
@@ -207,6 +211,10 @@ packages:
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
+  undici@7.29.0:
+    resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
+    engines: {node: '>=20.18.1'}
+
 snapshots:
 
   '@deepseek-ai/cordis@4.0.1':
@@ -342,3 +350,5 @@ snapshots:
   typescript@5.6.2: {}
 
   undici-types@7.18.2: {}
+
+  undici@7.29.0: {}
