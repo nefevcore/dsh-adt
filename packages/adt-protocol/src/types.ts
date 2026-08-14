@@ -117,6 +117,77 @@ export interface AdtObjectProperty {
   value: string;
 }
 
+/** One entry of an ADT object version-history feed (Atom). */
+export interface AdtObjectVersion {
+  /** Version id from the feed entry (e.g. `00000`). */
+  versionId: string;
+  /** User who saved this version, when reported. */
+  author?: string;
+  /** ISO timestamp of the version, when reported. */
+  updatedAt?: string;
+  /** Version title (usually the transport request/task description). */
+  title?: string;
+  /** Content URI of the version source. */
+  contentUri?: string;
+  /** Transport request (or open task) the version was saved into. */
+  transportRequest?: string;
+  /** Description of that transport request/task. */
+  transportDescription?: string;
+}
+
+/** One where-used reference: an object that references/depends on the queried object. */
+export interface AdtWhereUsedReference {
+  name: string;
+  type: string;
+  /** Object URI of the referencing object. */
+  uri: string;
+  /** Package of the referencing object, when reported. */
+  packageName?: string;
+  /** Responsible user, when reported. */
+  responsible?: string;
+  /** Free-text usage info, when reported. */
+  usageInformation?: string;
+}
+
+export interface AdtWhereUsedResult {
+  /** The queried object URI. */
+  objectUri: string;
+  totalReferences: number;
+  references: AdtWhereUsedReference[];
+}
+
+/** Column metadata of a data-preview result. */
+export interface AdtDataPreviewColumn {
+  name: string;
+  type: string;
+  description?: string;
+  length?: number;
+}
+
+export interface AdtDataPreview {
+  /** Entity (table / CDS view) or the SQL query that was previewed. */
+  name: string;
+  totalRows: number;
+  queryExecutionTime?: number;
+  columns: AdtDataPreviewColumn[];
+  /** Row-major values (column name → string/null). */
+  rows: Array<Record<string, string | null>>;
+  /** Raw XML excerpt when parsing was only partial. */
+  rawXml?: string;
+}
+
+/** Lock state of an object, when the backend exposes it. */
+export interface AdtObjectLockInfo {
+  /** True/False when the backend reports a lock; undefined when not exposed. */
+  locked: boolean | undefined;
+  /** Lock owner user, when reported. */
+  lockedBy?: string;
+  /** Transport request the lock is assigned to, when reported. */
+  transport?: string;
+  /** Human note (e.g. why the state is unknown). */
+  note?: string;
+}
+
 /** Raw source read from the backend. */
 export interface AdtSource {
   /** The source text (UTF-8, CRLF-normalized to LF). */

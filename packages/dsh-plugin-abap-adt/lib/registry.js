@@ -1,6 +1,7 @@
 import { AdtClient } from '@abap-adt/protocol';
 import { createMockAdtServer } from '@abap-adt/mock';
 import { resolvePassword } from './config.js';
+import { AdtPolicy } from './policy.js';
 /**
  * Owns the configured destinations and their live ADT clients. Also starts
  * the in-process mock ADT server when `demo` is enabled, so the whole tool
@@ -8,11 +9,15 @@ import { resolvePassword } from './config.js';
  */
 export class AdtRegistry {
     destinations = new Map();
+    /** Effective permission policy (config > SAP_* env > defaults). */
+    policy;
     mockServer;
     mockPort;
-    constructor() { }
+    constructor(policy) {
+        this.policy = policy;
+    }
     static async create(config) {
-        const registry = new AdtRegistry();
+        const registry = new AdtRegistry(AdtPolicy.resolve(config));
         if (config.demo) {
             await registry.startMock(config.demoPort);
         }

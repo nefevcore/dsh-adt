@@ -70,6 +70,16 @@ export declare const ENDPOINTS: {
     readonly informationsystem: (query?: AdtQueryParams) => string;
     /** Quick object / source search. */
     readonly search: (query: AdtQueryParams) => string;
+    /** Where-used references for an object (`?uri=` template). */
+    readonly whereUsed: (query?: AdtQueryParams) => string;
+    /** Where-used scope (searchable object types) for an object. */
+    readonly whereUsedScope: (query?: AdtQueryParams) => string;
+    /** Data preview of a DDIC entity (table / structure / view). */
+    readonly dataPreviewDdic: (name: string, query?: AdtQueryParams) => string;
+    /** Data preview of a CDS view. */
+    readonly dataPreviewCds: (name: string, query?: AdtQueryParams) => string;
+    /** Freestyle SQL data preview. */
+    readonly dataPreviewFreestyle: (query?: AdtQueryParams) => string;
     /** Repository node structure (package contents, tree browsing). */
     readonly nodeStructure: (query?: AdtQueryParams) => string;
     /** Activate a list of objects (POST + `method=activate`). */

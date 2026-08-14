@@ -12,6 +12,7 @@
 | 批量代码分析 | 无（单对象 ATC） | `adt_batch_checks`：一次对整个包的 ATC + ABAP Unit 聚合质量报告 |
 | 传输自动化 | 手动右键操作 | `adt_list_transports` / `adt_get_transport` / `adt_release_transport` |
 | 本地版本化 | 仅虚拟文件系统 | `adt_export_objects`：把对象源码落盘为 `.abap` 文件（git 化/备份/离线评审） |
+| 本地静态检查 | 无 | `adt_local_check`：导出源码后离线跑 abaplint（语法 + lint），验证通过再一次性推送 SAP |
 | 全链路自动化 | 无 | search → read → write → activate → test → transport 由 AI 一条龙完成 |
 | 工作流编排 | 无 | 可配合 DSH 的 `workflow`/`subagent` 做大规模多目标分析 |
 | 定时任务 | 无 | 可配合 `dsh-schedule` 做夜间 ATC/质量巡检 |
@@ -36,25 +37,28 @@ adt/
 │   └── dsh-plugin-abap-adt/     # @abap-adt/dsh-plugin — DSH (Cordis) 插件
 │       ├── cordis.patch.yml     # bundle 层声明（dsh.bundle.patch）
 │       └── src/
-│           ├── index.ts         # 插件入口：注册 17 个 adt_* 工具
-│           ├── config.ts        # schemastery 配置 schema
+│           ├── index.ts         # 插件入口：注册 28 个 adt_* 工具
+│           ├── config.ts        # schemastery 配置 schema（含权限策略键）
 │           ├── registry.ts      # 多目的地注册表 + demo mock 生命周期
-│           ├── resolve.ts       # 对象名/类型 → ADT URI 解析
-│           └── tools/           # 工具实现（system/search/source/lifecycle/testing/transport/packages/batch）
+│           ├── policy.ts        # 权限策略（权限管控）：glob 匹配 / SAP_* 环境变量 / 规则断言
+│           ├── resolve.ts       # 对象名/类型 → ADT URI 解析（含包名解析）
+│           └── tools/           # 工具实现（system/search/source/lifecycle/testing/transport/packages/batch/policy）
 ├── docs/                        # 文档（协议笔记、架构、SAP 连接指南）
 └── .research/                   # 协议调研原始资料（社区仓库克隆与笔记）
 ```
 
-## 工具清单（17 个 `adt_*` 工具）
+## 工具清单（28 个 `adt_*` 工具）
 
 **系统与连接**
 - `adt_list_destinations` — 列出已配置的 SAP 目标及连通性
 - `adt_system_info` — 系统 ID / 版本 / ABAP Cloud 状态 / feature flags
 - `adt_ping` — 可达性与认证探测
+- `adt_permissions` — 查看当前生效的权限策略（权限管控）：传输开关 / 允许的传输号 / 可传输编辑 / 允许的包
 
 **搜索与浏览**
 - `adt_search` — 对象搜索 + 源码全文搜索（quickSearch / objectSearch / quickSearchSource）
 - `adt_package_content` — 包的直接成员列表
+- `adt_where_used` — 影响分析：谁引用了/依赖该对象（usageReferences，改代码前评估爆炸半径）
 
 **对象操作**
 - `adt_read_object` — 读取对象源码与元数据
@@ -63,17 +67,29 @@ adt/
 - `adt_delete_object` — 删除对象
 - `adt_activate` — 激活（支持传输号、check-only 预审）
 - `adt_check` — 语法/一致性检查（check run，不激活）
+- `adt_lock_info` — 只读查询对象锁状态（谁持有编辑锁，写之前先查）
 
 **测试与质量**
 - `adt_run_unit_tests` — ABAP Unit（异步 run 流程，JUnit 结果解析）
 - `adt_run_atc` — ABAP Test Cockpit（异步 run，checkstyle 结果解析）
+- `adt_list_atc_runs` — 列出系统上已存储的 ATC run（按创建者/时间/central/active 过滤）
+- `adt_get_atc_result` — 按 displayId 取回单个 ATC run 的完整结果（findings/严重级别/源码位置/聚合计数）
 - `adt_batch_checks` — **超集功能**：整包 ATC + 单测聚合质量报告
+- `adt_release_gate` — **超集功能**：一次跑完 语法+单测+ATC，输出 go/no-go 预发布质量门禁
+
+**数据预览**
+- `adt_data_preview` — 表/CDS 内容查询与 freestyle SQL（Data Preview API，改完数据层直接验证；⚠️ BTP 上表预览被禁，CDS/SQL 可用）
+
+**本地检查（离线，超集功能）**
+- `adt_local_check` — 用 [abaplint](https://github.com/abaplint/abaplint) 对本地 `.abap` 源码跑静态检查（语法 + lint 规则），零 SAP 依赖、秒级反馈；配合 `adt_export_objects` 实现「导出 → 本地验证 → 修复 → 一次性推送 SAP」。真实 ATC 无法离线运行（检查在后端），abaplint 是其本地替身
 
 **传输**
 - `adt_list_transports` / `adt_get_transport` / `adt_release_transport`
+- `adt_object_versions` — 对象版本历史（Atom feed），只读地映射 对象 → 传输请求（无需加锁）
+- `adt_version_diff` — 当前 vs 历史版本 unified diff（评审/回滚前看改动）
 
 **本地化**
-- `adt_export_objects` — **超集功能**：对象源码导出到本地目录（沙箱感知）
+- `adt_export_objects` — **超集功能**：对象源码导出到本地目录（沙箱感知；文件名带类型后缀如 `zcl_demo.clas.abap`，可直接喂给 `adt_local_check`）
 
 ## 快速开始
 
@@ -82,7 +98,7 @@ adt/
 ```bash
 corepack pnpm install --registry https://registry.npmmirror.com   # 国内镜像
 corepack pnpm build
-corepack pnpm test        # 18 个协议/集成测试（客户端 ↔ mock 端到端）
+corepack pnpm test        # 63 个测试（18 集成 + 6 传输解析 + 17 策略 + 5 XML + 8 本地检查 + 6 版本 diff + 3 门禁）
 ```
 
 ### 2. 加载到 DSH web profile
@@ -104,7 +120,7 @@ dsh plugin --profile web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/pa
 
 插件默认 `demo: true`：进程内启动 mock ADT 服务器并注册 `demo` 目的地。直接对代理说：
 
-> 列出 ADT 目的地 → 搜索 ZCL_DEMO → 读取其源码 → 修改它 → 激活 → 跑它的单元测试和 ATC → 导出整个 ZPACK_DEMO 包到本地
+> 列出 ADT 目的地 → 搜索 ZCL_DEMO → 读取其源码 → 修改它 → 激活 → 跑它的单元测试和 ATC → 导出整个 ZPACK_DEMO 包到本地 → 本地静态检查导出的源码
 
 ### 4. 连接真实 SAP 系统
 
@@ -131,6 +147,27 @@ dsh plugin --profile web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/pa
 - **on-prem 经典 ABAP**：Basic Auth（支持自签名证书时设 `strictSSL: false`）
 - **ABAP Cloud (BTP)**：需要 JWT/服务键认证（本版本已预留 `auth` 类型扩展点，`'basic'` 之外可扩展 `'jwt'`）
 
+## 权限管控（Permission Policy）
+
+所有会**修改 SAP 系统状态**的工具（`adt_write_object` / `adt_create_object` / `adt_delete_object` / `adt_activate` / 传输工具族）在执行前都会经过一层权限策略（`src/policy.ts`），不满足即抛 `[POLICY]` 错误并指明具体规则。只读工具（搜索/读取/检查/测试/ATC/导出）不受限制。
+
+四个独立开关，生效值优先级为 **config（`cordis.patch.yml`）> `SAP_*` 环境变量 > 内置默认值**：
+
+| 开关 | config 键 | 环境变量 | 默认 | 含义 |
+|---|---|---|---|---|
+| 传输开关 | `enableTransports` | `SAP_ENABLE_TRANSPORTS` | `true` | `false` 时传输工具族、显式 `transport` 参数、以及可传输包的一切编辑（隐式产生传输内容）全部拒绝 |
+| 允许的传输号 | `allowedTransports` | `SAP_ALLOWED_TRANSPORTS` | `*` | 逗号分隔 glob（如 `D01K96*`）。既约束显式传入的传输号，也约束后端在 lock 时自动分配的 CORRNR——不匹配则回滚（解锁）并拒绝 |
+| 可传输编辑 | `allowTransportableEdits` | `SAP_ALLOW_TRANSPORTABLE_EDITS` | `true` | `false` 时只允许编辑 `$TMP`（本地对象）中的对象 |
+| 允许的包 | `allowedPackages` | `SAP_ALLOWED_PACKAGES` | `*` | 逗号分隔 glob（如 `Z*,$TMP`），只有白名单内的包可被编辑；`*` = 全部 |
+
+要点：
+
+- 包校验对**新建**用显式 `packageName`；对**已存在对象**（write/delete/activate）优先取调用方传入的 `packageName`，否则通过搜索精确命中解析包名；无法确定包名时**失败关闭**（拒绝并提示补传 `packageName`）。
+- `$TMP` 不被隐式放行——白名单是权威的，需要本地对象就把 `$TMP` 写进 `allowedPackages`。
+- 环境变量示例：`SAP_ENABLE_TRANSPORTS=true SAP_ALLOWED_TRANSPORTS='D01K96*' SAP_ALLOW_TRANSPORTABLE_EDITS=true SAP_ALLOWED_PACKAGES='Z*,$TMP'`。
+- 用 `adt_permissions` 查看当前生效策略与每个开关的来源（config/env/default）。
+- 注意：demo 目的地的 mock 传输号（`S4HK900001` 等）通常不在 `allowedTransports` 白名单内，因此 demo 上对可传输对象的写入/激活会被策略拒绝——纯演示时把 `allowedTransports` 设为 `*`，或只做只读演示。
+
 ## 协议实现要点（与真实 SAP 兼容）
 
 基于对生产级开源客户端的交叉验证（[`@mcp-abap-adt/adt-clients`](https://www.npmjs.com/package/@mcp-abap-adt/adt-clients)、[`abap-adt-api`](https://github.com/marcellourbani/abap-adt-api)、[`vscode_abap_remote_fs`](https://github.com/marcellourbani/vscode_abap_remote_fs)）与 SAP 官方 BTP REST 文档：
@@ -153,7 +190,13 @@ dsh plugin --profile web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/pa
 ## 测试
 
 - `packages/adt-protocol/test/xml.test.ts` — XML 解析器单测
-- `packages/adt-mock/test/integration.test.ts` — 客户端 ↔ mock 端到端（认证失败/发现/搜索/读/写/锁/激活/检查/单测/ATC/传输/包/创建/删除，18 项全绿）
+- `packages/adt-mock/test/integration.test.ts` — 客户端 ↔ mock 端到端（认证/发现/搜索/读/写/锁/激活/检查/单测/ATC/传输/包/创建/删除/ATC run/where-used/数据预览/版本源码/锁状态，18 项全绿）
+- `packages/adt-protocol/test/transports.test.ts` — 传输请求与版本历史（Atom feed）解析（6 项）
+- `packages/dsh-plugin-abap-adt/test/policy.test.ts` — 权限策略单测（17 项）
+- `packages/dsh-plugin-abap-adt/test/local_check.test.ts` — abaplint 本地检查（文件名推断/语法错误/自定义配置/severity 过滤，8 项）
+- `packages/dsh-plugin-abap-adt/test/versions.test.ts` — 版本 diff（行 diff/unified hunk，6 项）
+- `packages/dsh-plugin-abap-adt/test/gate.test.ts` — 发布门禁聚合（3 项）
+- `packages/adt-protocol/test/xml.test.ts` — XML 解析器单测（5 项）
 
 ## 路线图（可扩展方向）
 

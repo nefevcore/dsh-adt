@@ -35,6 +35,8 @@ import type {
   AdtObjectProperty,
   AdtObjectRef,
   AdtObjectSearchHit,
+  AdtObjectVersion,
+  AdtObjectLockInfo,
   AdtSearchResult,
   AdtSource,
   AdtSourceSearchHit,
@@ -44,6 +46,8 @@ import type {
   AdtUnitRunResult,
   AdtUnitTestMethod,
   AdtUnitTestClass,
+  AdtWhereUsedResult,
+  AdtDataPreview,
 } from './types.js';
 
 /** Error raised for HTTP-level or protocol-level failures. */
@@ -718,10 +722,19 @@ export class AdtClient {
   // ---------------------------------------------------------------------------
 
   /** List transport requests of the current user (or all users). */
-  async listTransports(options: { allUsers?: boolean; category?: 'K' | 'C' | 'T' } = {}): Promise<AdtTransport[]> {
+  async listTransports(options: {
+    allUsers?: boolean;
+    category?: 'K' | 'C' | 'T';
+    /** Restrict by release state. Semantic values: 'modifiable' (open requests,
+     *  alias 'D'), 'released' (already published, aliases 'R'/'L'), 'all' (no
+     *  filter). Any other value is forwarded to the backend as the `status`
+     *  query parameter and not filtered client-side. */
+    status?: string;
+  } = {}): Promise<AdtTransport[]> {
     const params = this.baseQuery({
       ...(options.allUsers ? { user: '*' } : {}),
       ...(options.category ? { type: options.category } : {}),
+      ...(options.status && options.status !== 'all' ? { status: options.status } : {}),
     });
     const res = await this.request({
       path: `${ENDPOINTS.transportRequests()}${toQuery(params)}`,
@@ -729,8 +742,16 @@ export class AdtClient {
     });
     const root = parseXml(res.text);
     const transports: AdtTransport[] = [];
-    for (const el of [...children(root, 'request'), ...children(root, 'transport')]) {
-      transports.push(parseTransport(el));
+    // Real backends return a Transport Organizer Tree (tm:root → tm:workbench /
+    // tm:customizing → tm:modifiable / tm:released → tm:request), while the mock
+    // returns requests flat under the root. Walk the whole tree so both shapes work.
+    const wantModifiable = options.status === 'modifiable' || options.status === 'D';
+    const wantReleased = options.status === 'released' || options.status === 'R' || options.status === 'L';
+    for (const el of collectTransportRequests(root)) {
+      const parsed = parseTransport(el);
+      if (wantModifiable && isReleasedStatus(parsed.status)) continue;
+      if (wantReleased && !isReleasedStatus(parsed.status)) continue;
+      transports.push(parsed);
     }
     return transports;
   }
@@ -742,7 +763,121 @@ export class AdtClient {
       accept: MEDIA.transportOrganizer,
     });
     const root = parseXml(res.text);
-    return parseTransport(root);
+    // Real backends wrap the request in a <tm:root> envelope (the root carries
+    // adtcore metadata like type="RQRQ"); the mock returns the request element
+    // itself as root. Accept both shapes.
+    const el = isRequestElement(root) ? root : findRequestElement(root);
+    if (!el) {
+      throw new AdtError(`Transport response for ${number} did not contain a request element`, res.status, [], res.text);
+    }
+    return parseTransport(el);
+  }
+
+  /**
+   * Version history (Atom feed) of a source object. Each version carries the
+   * transport request (or open task) it was saved into — a read-only way to
+   * map objects to transports without locking. Numbers that resolve via
+   * `getTransport` are requests; a version whose transport number does not
+   * resolve is an open task of an unreleased request.
+   */
+  async getVersions(objectUri: string): Promise<AdtObjectVersion[]> {
+    const uri = normalizeUri(objectUri);
+    const res = await this.request({
+      path: `${uri}/source/main/versions${toQuery(this.baseQuery())}`,
+      accept: 'application/atom+xml;type=feed',
+    });
+    const root = parseXml(res.text);
+    const versions: AdtObjectVersion[] = [];
+    for (const entry of children(root, 'entry')) {
+      const author = child(entry, 'author');
+      const transportLink = children(entry, 'link').find((l) => attr(l, 'rel') === TRANSPORT_REQUEST_REL);
+      versions.push({
+        versionId: childText(entry, 'id') ?? '',
+        author: (author ? childText(author, 'name') : undefined) || undefined,
+        updatedAt: childText(entry, 'updated') || undefined,
+        title: childText(entry, 'title') || undefined,
+        contentUri: attr(child(entry, 'content') ?? entry, 'src') || undefined,
+        transportRequest: transportLink ? attr(transportLink, 'name') || undefined : undefined,
+        transportDescription: transportLink ? attr(transportLink, 'title') || undefined : undefined,
+      });
+    }
+    return versions;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Where-used / impact analysis
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Find objects that reference or depend on the given object (where-used).
+   * Hits the `/repository/informationsystem/usageReferences` collection with
+   * the object URI. Parsing is tolerant of the `usagereferences:` prefix.
+   */
+  async getWhereUsed(objectUri: string, options: { enableAllTypes?: boolean } = {}): Promise<AdtWhereUsedResult> {
+    const uri = normalizeUri(objectUri);
+    const params = this.baseQuery({ uri });
+    if (options.enableAllTypes) params.enableAllTypes = true;
+    const res = await this.request({
+      path: ENDPOINTS.whereUsed(params),
+      accept: 'application/xml',
+      timeoutMs: 60_000,
+    });
+    return parseWhereUsed(res.text, uri);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Data preview (tables / CDS / freestyle SQL)
+  // ---------------------------------------------------------------------------
+
+  /** Preview rows of a DDIC entity (table/structure/view) or a CDS view. */
+  async dataPreview(
+    name: string,
+    kind: 'ddic' | 'cds',
+    options: { top?: number } = {},
+  ): Promise<AdtDataPreview> {
+    const top = Math.min(Math.max(options.top ?? 100, 1), 5000);
+    const params = this.baseQuery({ rowNumber: top });
+    const res = await this.request({
+      path: kind === 'cds' ? ENDPOINTS.dataPreviewCds(name, params) : ENDPOINTS.dataPreviewDdic(name, params),
+      accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
+      timeoutMs: 60_000,
+    });
+    return parseDataPreview(res.text, name);
+  }
+
+  /** Execute a freestyle SQL SELECT via the data-preview API. */
+  async runSqlQuery(sql: string, options: { top?: number } = {}): Promise<AdtDataPreview> {
+    const top = Math.min(Math.max(options.top ?? 100, 1), 5000);
+    const params = this.baseQuery({ sqlQuery: sql, rowNumber: top });
+    const res = await this.request({
+      path: ENDPOINTS.dataPreviewFreestyle(params),
+      accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
+      timeoutMs: 60_000,
+    });
+    return parseDataPreview(res.text, sql);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Version sources & lock state
+  // ---------------------------------------------------------------------------
+
+  /** Fetch the source of one object version by its content URI (from getVersions). */
+  async getVersionSource(contentUri: string): Promise<string> {
+    const res = await this.request({ path: contentUri, accept: 'text/plain' });
+    return res.text;
+  }
+
+  /** Best-effort read of an object's lock state via its metadata. */
+  async getObjectLock(objectUri: string): Promise<AdtObjectLockInfo> {
+    const uri = normalizeUri(objectUri);
+    try {
+      const res = await this.request({ path: uri, accept: MEDIA.object });
+      const info = parseLockInfo(res.text);
+      if (info.locked !== undefined) return info;
+      return { locked: undefined, note: 'backend does not expose lock state in object metadata' };
+    } catch (error) {
+      return { locked: undefined, note: `could not read object metadata: ${(error as Error).message}` };
+    }
   }
 
   /** Release a transport request. */
@@ -755,7 +890,11 @@ export class AdtClient {
       timeoutMs: 120_000,
     });
     const root = parseXml(res.text);
-    return parseTransport(root);
+    const el = isRequestElement(root) ? root : findRequestElement(root);
+    if (!el) {
+      throw new AdtError(`Release response for ${number} did not contain a request element`, res.status, [], res.text);
+    }
+    return parseTransport(el);
   }
 
   // ---------------------------------------------------------------------------
@@ -1139,6 +1278,105 @@ function parseSourceResponse(xml: string, uri: string, contentType = ''): AdtSou
 }
 
 // --- Lock -------------------------------------------------------------------
+
+/** Split an XML tag's attribute string into local-name → value (prefix-agnostic). */
+function parseAttrs(attrs: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const match of attrs.matchAll(/([\w-]+(?::[\w-]+)?)="([^"]*)"/g)) {
+    const local = match[1]!.split(':').pop()!;
+    out[local] = match[2]!;
+  }
+  return out;
+}
+
+/** Text content of the first element with the given local name (any namespace prefix). */
+function localText(xml: string, local: string): string | undefined {
+  const re = new RegExp(`<(?:[\\w-]+:)?${local}\\b[^>]*>([\\s\\S]*?)</(?:[\\w-]+:)?${local}>`);
+  return re.exec(xml)?.[1];
+}
+
+/** Attribute map of every element with the given local name (any namespace prefix). */
+function localAttrs(xml: string, local: string): Array<Record<string, string>> {
+  const re = new RegExp(`<(?:[\\w-]+:)?${local}\\b([^>]*)>`, 'g');
+  const out: Array<Record<string, string>> = [];
+  for (const match of xml.matchAll(re)) out.push(parseAttrs(match[1] ?? ''));
+  return out;
+}
+
+/** Tolerant where-used parser (usagereferences: namespace; attributes style). */
+function parseWhereUsed(xml: string, objectUri: string): AdtWhereUsedResult {
+  const refs = localAttrs(xml, 'reference')
+    .filter((a) => a.name)
+    .map((a) => ({
+      name: a.name!,
+      type: a.type ?? '',
+      uri: a.uri ?? '',
+      packageName: a.packageName || undefined,
+      responsible: a.responsible || undefined,
+      usageInformation: a.usageInformation || undefined,
+    }));
+  const declared = Number(localText(xml, 'totalReferences') ?? Number.NaN);
+  return {
+    objectUri,
+    totalReferences: Number.isFinite(declared) ? declared : refs.length,
+    references: refs,
+  };
+}
+
+/** Data-preview parser: column-major `dataPreview:` XML → row-major records. */
+function parseDataPreview(xml: string, name: string): AdtDataPreview {
+  const totalRows = Number(localText(xml, 'totalRows') ?? 0) || 0;
+  const queryExecutionTime = Number(localText(xml, 'queryExecutionTime') ?? Number.NaN);
+  const columns = localAttrs(xml, 'metadata')
+    .filter((a) => a.name)
+    .map((a) => ({
+      name: a.name!,
+      type: a.type ?? 'UNKNOWN',
+      description: a.description || undefined,
+      length: a.length !== undefined ? Number(a.length) || undefined : undefined,
+    }));
+  const sections = [...xml.matchAll(/<(?:[\w-]+:)?columns\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?columns>/g)];
+  const byColumn: string[][] = sections.map((s) =>
+    [...s[1]!.matchAll(/<(?:[\w-]+:)?data\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?data>/g)].map((d) =>
+      d[1]!.replace(/<[^>]+>/g, '').trim(),
+    ),
+  );
+  const rows: Array<Record<string, string | null>> = [];
+  const maxRow = byColumn.reduce((max, col) => Math.max(max, col.length), 0);
+  for (let r = 0; r < maxRow; r++) {
+    const row: Record<string, string | null> = {};
+    columns.forEach((c, i) => {
+      row[c.name] = byColumn[i]?.[r] ?? null;
+    });
+    rows.push(row);
+  }
+  const parsed: AdtDataPreview = {
+    name,
+    totalRows,
+    queryExecutionTime: Number.isFinite(queryExecutionTime) ? queryExecutionTime : undefined,
+    columns,
+    rows,
+  };
+  if (columns.length === 0 && xml.trim().length > 0) {
+    parsed.rawXml = xml.slice(0, 2000);
+  }
+  return parsed;
+}
+
+/** Lock-state parser: looks for lockedBy / lockOwner / lockIndicator on the object reference. */
+function parseLockInfo(xml: string): { locked: boolean | undefined; lockedBy?: string; transport?: string } {
+  const attrs = localAttrs(xml, 'objectReference')[0] ?? parseAttrs(xml);
+  const lockedBy = attrs.lockedBy || attrs.lockOwner || undefined;
+  const indicator = attrs.lockIndicator ?? attrs.locked;
+  let locked: boolean | undefined;
+  if (indicator !== undefined) {
+    const value = String(indicator).toLowerCase();
+    locked = value === 'true' || value === '1' || value === 'x' || value === 'locked';
+  } else if (lockedBy !== undefined) {
+    locked = true;
+  }
+  return { locked, lockedBy, transport: attrs.corrnr || attrs.transport || undefined };
+}
 
 function parseLockHandle(xml: string): string | undefined {
   try {
@@ -1702,30 +1940,102 @@ function parseCreatedUri(xml: string): string | undefined {
 
 // --- Transports -------------------------------------------------------------
 
+/**
+ * Depth-first collection of transport request elements (local name `request`
+ * or `transport`) anywhere in a Transport Organizer Tree. Task elements
+ * (`task`, or `request` elements with type `T`) are skipped — only actual
+ * requests are reported.
+ */
+function collectTransportRequests(root: XmlNode): XmlNode[] {
+  const found: XmlNode[] = [];
+  const visit = (node: XmlNode): void => {
+    for (const child of node.children) {
+      if (
+        (child.name === 'request' || child.name.endsWith(':request')) &&
+        attr(child, 'type') !== 'T' &&
+        child.name !== 'task' &&
+        !child.name.endsWith(':task')
+      ) {
+        found.push(child);
+      }
+      visit(child);
+    }
+  };
+  visit(root);
+  return found;
+}
+
+/** `true` when the node itself is a transport request element. */
+function isRequestElement(node: XmlNode): boolean {
+  return (
+    node.name === 'request' ||
+    node.name.endsWith(':request') ||
+    node.name === 'transport' ||
+    node.name.endsWith(':transport')
+  );
+}
+
+/** Depth-first search for the first request/transport element anywhere. */
+function findRequestElement(root: XmlNode): XmlNode | undefined {
+  if (isRequestElement(root)) return root;
+  for (const child of root.children) {
+    const found = findRequestElement(child);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * Collect the `abap_object` entries that belong to a request element. Real
+ * single-request responses nest them under `<tm:all_objects>` while the tree
+ * format lists them directly; task blocks repeat their parent request's
+ * objects and are skipped to avoid duplicates.
+ */
+function collectAbapObjects(requestEl: XmlNode): XmlNode[] {
+  const found: XmlNode[] = [];
+  const visit = (node: XmlNode): void => {
+    for (const child of node.children) {
+      if (child.name === 'task' || child.name.endsWith(':task')) continue;
+      if (child.name === 'abap_object' || child.name.endsWith(':abap_object')) found.push(child);
+      visit(child);
+    }
+  };
+  visit(requestEl);
+  return found;
+}
+
+/** `true` when the request status means "already released" (not open/modifiable). */
+function isReleasedStatus(status: string): boolean {
+  return status === 'R' || status === 'L' || /^released$/i.test(status);
+}
+
+/** Atom link relation marking the transport request a version was saved into. */
+const TRANSPORT_REQUEST_REL = 'http://www.sap.com/adt/relations/transport/request';
+
 function parseTransport(el: XmlNode): AdtTransport {
   const number = attr(el, 'number') ?? attr(el, 'request') ?? attr(el, 'requestId') ?? '';
   const status = attr(el, 'status') ?? attr(el, 'state') ?? '';
   const items: AdtTransportItem[] = [];
-  for (const item of [...children(el, 'item'), ...children(el, 'object')]) {
+  for (const item of [...children(el, 'item'), ...children(el, 'object'), ...collectAbapObjects(el)]) {
     items.push({
       uri: attr(item, 'uri') ?? '',
       type: attr(item, 'type') ?? '',
       name: attr(item, 'name') ?? '',
-      description: attr(item, 'description') ?? '',
+      description: attr(item, 'description') ?? attr(item, 'desc') ?? attr(item, 'obj_desc') ?? '',
       action: attr(item, 'action') ?? '',
     });
   }
   return {
     number,
-    description: attr(el, 'description') ?? '',
+    description: attr(el, 'description') ?? attr(el, 'desc') ?? '',
     status,
     category: attr(el, 'category') ?? attr(el, 'type') ?? '',
     owner: attr(el, 'owner') ?? attr(el, 'user') ?? '',
     system: attr(el, 'system') ?? '',
     client: attr(el, 'client') ?? '',
-    createdAt: attr(el, 'createdAt'),
+    createdAt: attr(el, 'createdAt') ?? attr(el, 'lastchanged_timestamp'),
     target: attr(el, 'target'),
-    modifiable: status !== 'R' && status !== 'L' && status !== 'released',
+    modifiable: !isReleasedStatus(status),
     items,
   };
 }

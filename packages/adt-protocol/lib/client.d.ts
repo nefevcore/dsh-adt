@@ -16,7 +16,7 @@
  * server that exposes the ADT service (classic NetWeaver and ABAP Cloud).
  */
 import { type XmlNode } from './xml.js';
-import type { AdtActivationResult, AdtAtcResult, AdtAtcRunSummary, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtDestination, AdtDiscovery, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtSystemInfo, AdtTransport, AdtUnitRunResult } from './types.js';
+import type { AdtActivationResult, AdtAtcResult, AdtAtcRunSummary, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtDestination, AdtDiscovery, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtObjectVersion, AdtObjectLockInfo, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtSystemInfo, AdtTransport, AdtUnitRunResult, AdtWhereUsedResult, AdtDataPreview } from './types.js';
 /** Error raised for HTTP-level or protocol-level failures. */
 export declare class AdtError extends Error {
     readonly status?: number | undefined;
@@ -176,9 +176,42 @@ export declare class AdtClient {
     listTransports(options?: {
         allUsers?: boolean;
         category?: 'K' | 'C' | 'T';
+        /** Restrict by release state. Semantic values: 'modifiable' (open requests,
+         *  alias 'D'), 'released' (already published, aliases 'R'/'L'), 'all' (no
+         *  filter). Any other value is forwarded to the backend as the `status`
+         *  query parameter and not filtered client-side. */
+        status?: string;
     }): Promise<AdtTransport[]>;
     /** Get one transport request incl. its items. */
     getTransport(number: string): Promise<AdtTransport>;
+    /**
+     * Version history (Atom feed) of a source object. Each version carries the
+     * transport request (or open task) it was saved into — a read-only way to
+     * map objects to transports without locking. Numbers that resolve via
+     * `getTransport` are requests; a version whose transport number does not
+     * resolve is an open task of an unreleased request.
+     */
+    getVersions(objectUri: string): Promise<AdtObjectVersion[]>;
+    /**
+     * Find objects that reference or depend on the given object (where-used).
+     * Hits the `/repository/informationsystem/usageReferences` collection with
+     * the object URI. Parsing is tolerant of the `usagereferences:` prefix.
+     */
+    getWhereUsed(objectUri: string, options?: {
+        enableAllTypes?: boolean;
+    }): Promise<AdtWhereUsedResult>;
+    /** Preview rows of a DDIC entity (table/structure/view) or a CDS view. */
+    dataPreview(name: string, kind: 'ddic' | 'cds', options?: {
+        top?: number;
+    }): Promise<AdtDataPreview>;
+    /** Execute a freestyle SQL SELECT via the data-preview API. */
+    runSqlQuery(sql: string, options?: {
+        top?: number;
+    }): Promise<AdtDataPreview>;
+    /** Fetch the source of one object version by its content URI (from getVersions). */
+    getVersionSource(contentUri: string): Promise<string>;
+    /** Best-effort read of an object's lock state via its metadata. */
+    getObjectLock(objectUri: string): Promise<AdtObjectLockInfo>;
     /** Release a transport request. */
     releaseTransport(number: string): Promise<AdtTransport>;
     /**

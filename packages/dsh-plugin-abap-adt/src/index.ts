@@ -23,6 +23,13 @@ import { atcRunTools } from './tools/atc_runs.js';
 import { transportTools } from './tools/transports.js';
 import { packageTools } from './tools/packages.js';
 import { batchTools } from './tools/batch.js';
+import { localTools } from './tools/local.js';
+import { whereUsedTools } from './tools/whereused.js';
+import { dataPreviewTools } from './tools/datapreview.js';
+import { lockTools } from './tools/lock.js';
+import { versionTools } from './tools/versions.js';
+import { gateTools } from './tools/gate.js';
+import { policyTools } from './tools/policy.js';
 
 const name = 'abap-adt';
 const inject = ['tools', 'fs'];
@@ -31,7 +38,7 @@ const inject = ['tools', 'fs'];
 async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<void>> {
   const registry = await AdtRegistry.create(config);
 
-  const deps = { registry };
+  const deps = { registry, policy: registry.policy };
   const tools = [
     ...systemTools(deps),
     ...searchTools(deps),
@@ -42,6 +49,13 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
     ...transportTools(deps),
     ...packageTools(deps),
     ...batchTools(deps, ctx),
+    ...localTools(deps, ctx),
+    ...whereUsedTools(deps),
+    ...dataPreviewTools(deps),
+    ...lockTools(deps),
+    ...versionTools(deps),
+    ...gateTools(deps),
+    ...policyTools(deps),
   ];
 
   for (const tool of tools) {

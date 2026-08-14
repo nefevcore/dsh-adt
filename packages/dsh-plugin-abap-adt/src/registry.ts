@@ -2,6 +2,7 @@ import { AdtClient, type AdtDestination } from '@abap-adt/protocol';
 import { createMockAdtServer } from '@abap-adt/mock';
 import type { PluginConfig } from './config.js';
 import { resolvePassword } from './config.js';
+import { AdtPolicy } from './policy.js';
 
 export interface RegistryDestination {
   config: AdtDestination;
@@ -19,13 +20,17 @@ export interface RegistryDestination {
  */
 export class AdtRegistry {
   readonly destinations = new Map<string, RegistryDestination>();
+  /** Effective permission policy (config > SAP_* env > defaults). */
+  readonly policy: AdtPolicy;
   private mockServer?: Awaited<ReturnType<typeof createMockAdtServer>>;
   private mockPort?: number;
 
-  private constructor() {}
+  private constructor(policy: AdtPolicy) {
+    this.policy = policy;
+  }
 
   static async create(config: PluginConfig): Promise<AdtRegistry> {
-    const registry = new AdtRegistry();
+    const registry = new AdtRegistry(AdtPolicy.resolve(config));
     if (config.demo) {
       await registry.startMock(config.demoPort);
     }

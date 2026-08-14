@@ -6,6 +6,15 @@
 # point at real SAP systems; passwords are read from config or environment
 # variables (ADT_<DESTINATION_NAME>_PASSWORD / ADT_PASSWORD), never stored
 # in this file.
+#
+# Permission policy (权限管控) — optional config keys, resolved as
+# config > SAP_* env var > default (see src/policy.ts for semantics):
+#   enableTransports        (SAP_ENABLE_TRANSPORTS)          default true
+#   allowedTransports       (SAP_ALLOWED_TRANSPORTS)         default '*'
+#   allowTransportableEdits (SAP_ALLOW_TRANSPORTABLE_EDITS)  default true
+#   allowedPackages         (SAP_ALLOWED_PACKAGES)           default '*'
+# Example lockdown: enableTransports: true, allowedTransports: 'D01K96*',
+# allowTransportableEdits: true, allowedPackages: 'Z*,$TMP'.
 
 - insert:
     - id: abap-adt

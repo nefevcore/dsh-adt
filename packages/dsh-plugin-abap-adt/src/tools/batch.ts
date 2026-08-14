@@ -17,6 +17,23 @@ import { resolveObject } from '../resolve.js';
 export function batchTools(deps: ToolDeps, ctx: Context) {
   const { registry } = deps;
 
+  /**
+   * abaplint-compatible export file name (type-suffixed, e.g. `zcl_demo.clas.abap`),
+   * so exported sources can be fed straight into adt_local_check / abaplint.
+   * Falls back to the plain `<NAME>.abap` for types abaplint does not parse.
+   */
+  function exportFileName(ref: { name: string; type: string }): string {
+    const short = (ref.type.split('/')[0] ?? '').toLowerCase();
+    const suffix: Record<string, string> = {
+      prog: 'prog.abap', clas: 'clas.abap', intf: 'intf.abap',
+      func: 'funcs.abap', fugr: 'fugr.abap', ddls: 'ddls.abap',
+      tabl: 'tabl.abap', stru: 'stru.abap', msag: 'msag.abap',
+      doma: 'doma.abap', dtel: 'dtel.abap', ttyp: 'ttyp.abap',
+    };
+    const named = suffix[short];
+    return named ? `${ref.name}.${named}` : `${ref.name}.abap`;
+  }
+
   const batchChecks = defineTool({
     name: 'adt_batch_checks',
     description:
@@ -276,8 +293,7 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
       for (const ref of refs) {
         try {
           const parsed = await entry.client.readSource(ref.uri);
-          const ext = ref.type.startsWith('DDLS') ? '.acds' : '.abap';
-          const fileName = `${ref.name}${ext}`;
+          const fileName = exportFileName(ref);
           const fileTarget = await fs.resolve(fileName, { cwd: targetDir });
           await fs.writeText(fileTarget, parsed.source, undefined, exec.signal);
           files.push({ name: fileName, path: fileName, chars: parsed.source.length });
