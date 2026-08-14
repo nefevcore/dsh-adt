@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { Context } from '@deepseek-ai/cordis';
+import type { FileSystem } from '@deepseek-ai/dsh-fs';
 import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
 import type { AdtObjectRef } from '@abap-adt/protocol';
 import { resolveObject } from '../resolve.js';
@@ -272,6 +273,21 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
       const fs = ctx.fs;
       if (!fs) throw new Error('adt_export_objects requires the dsh filesystem service');
 
+      // Stamp the calling session's sandbox policy onto every write, exactly
+      // like DSH's own fs tools: without it the fs backend falls back to a
+      // session-less policy whose writable roots deny everything.
+      let sandboxPolicy: Parameters<FileSystem['writeText']>[4];
+      try {
+        const service = ctx.get('sandboxPolicy') as
+          | { resolve?: (o: unknown) => Parameters<FileSystem['writeText']>[4] }
+          | undefined;
+        sandboxPolicy = service?.resolve?.(
+          exec.agent ? { session: (exec.agent as { session?: unknown }).session } : {},
+        );
+      } catch {
+        sandboxPolicy = undefined;
+      }
+
       const targetDir = String(args.targetDir);
       await fs.resolve(targetDir);
 
@@ -295,7 +311,7 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
           const parsed = await entry.client.readSource(ref.uri);
           const fileName = exportFileName(ref);
           const fileTarget = await fs.resolve(fileName, { cwd: targetDir });
-          await fs.writeText(fileTarget, parsed.source, undefined, exec.signal);
+          await fs.writeText(fileTarget, parsed.source, undefined, exec.signal, sandboxPolicy);
           files.push({ name: fileName, path: fileName, chars: parsed.source.length });
         } catch (error) {
           failed++;
