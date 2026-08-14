@@ -11,6 +11,7 @@
     "build": "tsc -b && tsc -p packages/dsh-plugin-abap-adt",
     "test": "pnpm build && node --test --test-timeout=60000 packages/adt-protocol/test/xml.test.ts packages/adt-mock/test/integration.test.ts",
     "mock": "node packages/adt-mock/lib/cli.js",
+    "bundle": "node scripts/bundle.mjs",
     "typecheck": "tsc -b --pretty false && tsc -p packages/dsh-plugin-abap-adt --pretty false"
   },
   "engines": {
@@ -19,7 +20,11 @@
   "devDependencies": {
     "@abap-adt/mock": "workspace:*",
     "@abap-adt/protocol": "workspace:*",
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.0.0",
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.6.0"
   },
   "license": "MIT"
