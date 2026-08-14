@@ -16,25 +16,27 @@ pnpm bundle
 **接收方用法**（无需克隆仓库、无需构建）：
 
 1. 把 `dsh-plugin-abap-adt.bundle.mjs` 放到任意目录（如 `C:\tools\`）
-2. 编辑 `~\.dsh\profiles\web\cordis.patch.yml`，加入：
+2. **推荐：装成 agent preset（按会话启用，不影响其他工作区）**——新建 `~\.dsh\.agent-presets\abap-adt\agent.cordis.yml`，内容为官方 `cordis` 预设完整复制 + 追加插件行：
 
 ```yaml
-- insert:
-    - id: abap-adt
-      name: 'file:///C:/tools/dsh-plugin-abap-adt.bundle.mjs'
-      config:
-        demo: true          # 免 SAP 系统体验
-        defaultDestination: demo
-        destinations:
-          - name: dev
-            url: https://你的SAP主机:端口
-            client: '100'
-            username: 用户名
-            passwordEnv: ADT_DEV_PASSWORD   # 密码走环境变量
-            strictSSL: false                # 自签名证书时
+# 追加在官方 cordis 预设所有行之后
+- id: abap-adt
+  name: 'file:///C:/tools/dsh-plugin-abap-adt.bundle.mjs'
+  config:
+    demo: true          # 免 SAP 系统体验
+    defaultDestination: demo
+    destinations:
+      - name: dev
+        url: https://你的SAP主机:端口
+        client: '100'
+        username: 用户名
+        passwordEnv: ADT_DEV_PASSWORD   # 密码走环境变量
+        strictSSL: false                # 自签名证书时
 ```
 
-3. 重启 DSH（`dsh web`），新建会话即可使用全部 `adt_*` 工具。
+3. 重启 DSH（`dsh web`）；新建会话时在工作区旁的预设 chip 选该预设，即可使用全部 `adt_*` 工具。
+
+> 想要**全局**（所有会话）生效的话，把同样的行放进 `~\.dsh\profiles\web\cordis.patch.yml` 的 `- insert:` 列表即可，两种方式二选一。
 
 > 注意：接收方的 profile 里必须已有 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/schemastery`（标准 dsh profile 自带）。
 
@@ -53,7 +55,7 @@ git clone <repo-url>
 cd dsh-abap-adt
 corepack pnpm install --registry https://registry.npmmirror.com
 corepack pnpm build
-# 然后按方式 1 的步骤 2 配置，name 指向本仓库的
+# 然后按方式 1 的步骤 2 配置（agent preset 方式），name 指向本仓库的
 # packages/dsh-plugin-abap-adt/lib/index.js
 ```
 
@@ -85,6 +87,8 @@ pnpm add @abap-adt/dsh-plugin
 # 自动加入 dsh.profile.bundles（因为包声明了 dsh.bundle.patch）
 # 然后编辑 cordis.patch.yml 按需配置 destinations
 ```
+
+> 注意：方式 3 装进 profile 是**全局**生效（所有会话）。想按会话/工作区隔离，请用方式 1 的 agent preset 方案。
 
 **内网/公司场景**：可搭 [Verdaccio](https://verdaccio.org) 私有源，`pnpm publish --registry http://内网源`，同事 `--registry` 指向内网源安装。
 
