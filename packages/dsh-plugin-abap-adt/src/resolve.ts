@@ -101,6 +101,29 @@ export async function resolveObjects(
   return refs;
 }
 
+/**
+ * Best-effort package lookup for an existing object, used by the permission
+ * policy before write/delete/activate. Prefers an explicit `hint` (the caller
+ * knows the package), then an exact-name search hit carrying `packageName`.
+ * Returns `undefined` when the package cannot be determined — callers must
+ * fail closed (deny) in that case.
+ */
+export async function resolvePackageName(
+  client: AdtClient,
+  ref: AdtObjectRef,
+  hint?: string,
+): Promise<string | undefined> {
+  if (hint && hint.trim().length > 0) return hint.trim().toUpperCase();
+  try {
+    const hits = await client.searchObjects(ref.name, { maxResults: 10 });
+    const exact = hits.find((h) => h.objectName.toUpperCase() === ref.name.toUpperCase());
+    const pkg = exact?.packageName ?? hits[0]?.packageName;
+    return pkg ? pkg.toUpperCase() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Human-readable label for an object type code (best effort). */
 export function typeLabel(type: string): string {
   const key = type.toUpperCase();

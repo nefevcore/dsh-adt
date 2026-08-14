@@ -1,5 +1,6 @@
 import type { AdtObjectRef } from '@abap-adt/protocol';
 import type { AdtRegistry } from '../registry.js';
+import type { AdtPolicy } from '../policy.js';
 
 /** Parameter spec for the destination selector used by every tool. */
 export const DESTINATION_PARAM = {
@@ -19,6 +20,8 @@ export function destinationOf(args: Record<string, unknown>): string | undefined
 /** Register-time helper: name a tool and give it the registry. */
 export interface ToolDeps {
   registry: AdtRegistry;
+  /** Effective permission policy; mutating tools assert rules against it. */
+  policy: AdtPolicy;
 }
 
 /** Render a simple text block. */

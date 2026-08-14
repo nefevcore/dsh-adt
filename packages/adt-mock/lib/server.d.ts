@@ -26,6 +26,7 @@ interface MockState {
     locked: Map<string, {
         handle: string;
         corrnr: string;
+        user?: string;
     }>;
     csrfToken: string;
     sessions: Set<string>;

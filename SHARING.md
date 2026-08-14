@@ -101,7 +101,7 @@ pnpm add @abap-adt/dsh-plugin
 改代码后：
 ```bash
 pnpm build            # 编译
-pnpm test             # 19 项测试
+pnpm test             # 63 项测试
 pnpm bundle           # 重新生成单文件（方式 1 分发时）
 ```
 **接收方加载的是文件 URL → 必须重启 DSH 才会加载新代码**（Node ESM 缓存钉住旧模块，HMR 只重跑配置）。

@@ -59,8 +59,70 @@ function sourceXml(obj: MockObject): string {
   );
 }
 
-function objectRefXml(obj: MockObject): string {
-  return `<adtcore:objectReference adtcore:uri="${obj.uri}" adtcore:type="${obj.type}" adtcore:name="${obj.name}" adtcore:description="${xmlEscape(obj.description)}" adtcore:packageName="${obj.packageName}"/>`;
+function objectRefXml(obj: MockObject, state?: MockState): string {
+  const lock = state?.locked.get(obj.uri);
+  const lockedBy = lock?.user ? ` adtcore:lockedBy="${lock.user}"` : '';
+  return `<adtcore:objectReference adtcore:uri="${obj.uri}" adtcore:type="${obj.type}" adtcore:name="${obj.name}" adtcore:description="${xmlEscape(obj.description)}" adtcore:packageName="${obj.packageName}"${lockedBy}/>`;
+}
+
+/** Lock attribute fragment for metadata responses (empty when unlocked). */
+function lockAttr(state: MockState, obj: MockObject): string {
+  const lock = state.locked.get(obj.uri);
+  return lock?.user ? ` adtcore:lockedBy="${lock.user}"` : '';
+}
+
+/** Sample where-used references keyed by object name (uppercased). */
+const WHERE_USED: Record<string, Array<{ name: string; type: string; uri: string; packageName: string; responsible: string; usageInformation: string }>> = {
+  ZCL_DEMO: [
+    { name: 'ZPROG_DEMO', type: 'PROG/P', uri: '/sap/bc/adt/programs/programs/zprog_demo', packageName: 'ZPACK_DEMO', responsible: 'DEMO', usageInformation: 'method call' },
+    { name: 'ZCL_FLAKY', type: 'CLAS/OC', uri: '/sap/bc/adt/oo/classes/zcl_flaky', packageName: 'ZPACK_DEMO', responsible: 'DEMO', usageInformation: 'instantiation' },
+  ],
+  ZIF_DEMO: [
+    { name: 'ZCL_DEMO', type: 'CLAS/OC', uri: '/sap/bc/adt/oo/classes/zcl_demo', packageName: 'ZPACK_DEMO', responsible: 'DEMO', usageInformation: 'implements' },
+  ],
+};
+
+/** Data-preview sample payload (dataPreview: namespace, column-major layout). */
+function dataPreviewXml(entity: string, query = ''): string {
+  const queryEl = query ? `\n  <dataPreview:query>${xmlEscape(query)}</dataPreview:query>` : '';
+  return `<dataPreview:dataPreview xmlns:dataPreview="http://www.sap.com/adt/datapreview" entity="${xmlEscape(entity)}">
+  <dataPreview:totalRows>2</dataPreview:totalRows>
+  <dataPreview:queryExecutionTime>1.5</dataPreview:queryExecutionTime>
+  <dataPreview:metadata name="MANDT" type="CLNT" description="Client" length="3"/>
+  <dataPreview:metadata name="CARRID" type="CHAR" description="Airline Code" length="3"/>
+  <dataPreview:columns>
+    <dataPreview:data>100</dataPreview:data>
+    <dataPreview:data>200</dataPreview:data>
+  </dataPreview:columns>
+  <dataPreview:columns>
+    <dataPreview:data>LH</dataPreview:data>
+    <dataPreview:data>UA</dataPreview:data>
+  </dataPreview:columns>${queryEl}
+</dataPreview:dataPreview>`;
+}
+
+/** Atom feed of an object's version history. */
+function versionsFeedXml(obj: MockObject): string {
+  const stamp = new Date().toISOString();
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Versions of ${obj.name}</title>
+  <entry>
+    <id>${obj.uri}/source/main/versions/00001</id>
+    <title>${xmlEscape(obj.description)}</title>
+    <updated>${stamp}</updated>
+    <author><name>${obj.changedBy}</name></author>
+    <content src="${obj.uri}/source/main?version=00001"/>
+    <link rel="http://www.sap.com/adt/relations/transportrequest" href="/sap/bc/adt/cts/transportrequests/S4HK900001" name="S4HK900001" title="Demo request 1"/>
+  </entry>
+  <entry>
+    <id>${obj.uri}/source/main/versions/00000</id>
+    <title>Initial version</title>
+    <updated>2026-01-01T00:00:00.000Z</updated>
+    <author><name>DEMO</name></author>
+    <content src="${obj.uri}/source/main?version=00000"/>
+  </entry>
+</feed>`;
 }
 
 function lockResultXml(handle: string, corrnr: string): string {
@@ -78,7 +140,7 @@ function lockResultXml(handle: string, corrnr: string): string {
 
 interface MockState {
   objects: MockObject[];
-  locked: Map<string, { handle: string; corrnr: string }>;
+  locked: Map<string, { handle: string; corrnr: string; user?: string }>;
   csrfToken: string;
   sessions: Set<string>;
   /** ABAP Unit run id → requested object names (uppercased). */
@@ -302,7 +364,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
       (operation === 'quickSearchSource' || operation === 'quickSearch') && !packageFilter
         ? state.objects.filter((o) => o.source.toLowerCase().includes(query)).slice(0, maxResults)
         : [];
-    const objectXml = objectHits.map(objectRefXml).join('\n  ');
+    const objectXml = objectHits.map((o) => objectRefXml(o, state)).join('\n  ');
     const sourceXmlHits = sourceHits
       .map((o) => {
         const idx = o.source.toLowerCase().indexOf(query);
@@ -319,6 +381,61 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
 </adtcore:objectReferences>`,
       ),
     );
+    return;
+  }
+
+  // ---- Where-used (usage references) ----
+  if (path === '/repository/informationsystem/usageReferences') {
+    const uri = url.searchParams.get('uri') ?? '';
+    const obj = findObject(state, uri);
+    const refs = obj ? (WHERE_USED[obj.name.toUpperCase()] ?? []) : [];
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(
+      adtXml(
+        `<usagereferences:usageReferenceResult xmlns:usagereferences="http://www.sap.com/adt/ris/usageReferences">
+  <usagereferences:totalReferences>${refs.length}</usagereferences:totalReferences>
+  <usagereferences:references>
+    ${refs
+      .map(
+        (r) =>
+          `<usagereferences:reference name="${r.name}" type="${r.type}" uri="${r.uri}" packageName="${r.packageName}" responsible="${r.responsible}" usageInformation="${r.usageInformation}"/>`,
+      )
+      .join('\n    ')}
+  </usagereferences:references>
+</usagereferences:usageReferenceResult>`,
+      ),
+    );
+    return;
+  }
+
+  // ---- Data preview (ddic / cds / freestyle SQL) ----
+  const dpDdic = /^\/datapreview\/ddic\/([^/]+)$/.exec(path);
+  const dpCds = /^\/datapreview\/cds\/([^/]+)$/.exec(path);
+  if (dpDdic || dpCds) {
+    const name = (dpDdic?.[1] ?? dpCds?.[1] ?? '').toUpperCase();
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
+    res.end(adtXml(dataPreviewXml(name)));
+    return;
+  }
+  if (path === '/datapreview/freestyle') {
+    const sql = url.searchParams.get('sqlQuery') ?? url.searchParams.get('sql') ?? 'SELECT';
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
+    res.end(adtXml(dataPreviewXml('QUERY', sql)));
+    return;
+  }
+
+  // ---- Object version history (Atom feed) ----
+  if (path.endsWith('/source/main/versions') && req.method === 'GET') {
+    const base = path.slice(0, -'/source/main/versions'.length);
+    const obj = findObject(state, base);
+    if (!obj) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`Version history not available for ${path}`));
+      return;
+    }
+    res.setHeader('Content-Type', 'application/atom+xml;type=feed');
+    res.end(versionsFeedXml(obj));
     return;
   }
 
@@ -444,7 +561,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
     if (!checkCsrf(req, res, state)) return;
     const corrnr = `MOCKK${String(900000 + Math.floor(Math.random() * 99999))}`;
     const handle = randomUUID();
-    state.locked.set(objByUri.uri, { handle, corrnr });
+    const user = parseBasicAuth(req)?.username?.toUpperCase() ?? 'DEMO';
+    state.locked.set(objByUri.uri, { handle, corrnr, user });
     res.setHeader('X-ADT-Lock-Handle', handle);
     res.setHeader('Content-Type', 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result');
     res.end(lockResultXml(handle, corrnr));
@@ -477,8 +595,16 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   if (srcObj) {
     if (req.method === 'GET') {
       if (path.endsWith('/source/main')) {
+        const version = url.searchParams.get('version');
+        const source = version && version !== '00001' ? `* mock version ${version}\n${srcObj.source}` : srcObj.source;
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.end(srcObj.source);
+        res.end(source);
+        return;
+      }
+      // Object metadata (negotiated by Accept): includes lock state.
+      if ((req.headers.accept ?? '').includes('object.v1')) {
+        res.setHeader('Content-Type', 'application/vnd.sap.adt.object.v1+xml');
+        res.end(adtXml(objectRefXml(srcObj, state)));
         return;
       }
       res.setHeader('Content-Type', 'application/xml');

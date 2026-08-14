@@ -90,6 +90,26 @@ export const ENDPOINTS = {
   search: (query: AdtQueryParams) =>
     `${ADT_BASE}/repository/informationsystem/search${toQuery(query)}`,
 
+  /** Where-used references for an object (`?uri=` template). */
+  whereUsed: (query?: AdtQueryParams) =>
+    `${ADT_BASE}/repository/informationsystem/usageReferences${toQuery(query)}`,
+
+  /** Where-used scope (searchable object types) for an object. */
+  whereUsedScope: (query?: AdtQueryParams) =>
+    `${ADT_BASE}/repository/informationsystem/usageReferences/scope${toQuery(query)}`,
+
+  /** Data preview of a DDIC entity (table / structure / view). */
+  dataPreviewDdic: (name: string, query?: AdtQueryParams) =>
+    `${ADT_BASE}/datapreview/ddic/${encodeURIComponent(name)}${toQuery(query)}`,
+
+  /** Data preview of a CDS view. */
+  dataPreviewCds: (name: string, query?: AdtQueryParams) =>
+    `${ADT_BASE}/datapreview/cds/${encodeURIComponent(name)}${toQuery(query)}`,
+
+  /** Freestyle SQL data preview. */
+  dataPreviewFreestyle: (query?: AdtQueryParams) =>
+    `${ADT_BASE}/datapreview/freestyle${toQuery(query)}`,
+
   /** Repository node structure (package contents, tree browsing). */
   nodeStructure: (query?: AdtQueryParams) =>
     `${ADT_BASE}/repository/nodestructure${toQuery(query)}`,

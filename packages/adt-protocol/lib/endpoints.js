@@ -74,6 +74,16 @@ export const ENDPOINTS = {
     informationsystem: (query) => `${ADT_BASE}/repository/informationsystem${toQuery(query)}`,
     /** Quick object / source search. */
     search: (query) => `${ADT_BASE}/repository/informationsystem/search${toQuery(query)}`,
+    /** Where-used references for an object (`?uri=` template). */
+    whereUsed: (query) => `${ADT_BASE}/repository/informationsystem/usageReferences${toQuery(query)}`,
+    /** Where-used scope (searchable object types) for an object. */
+    whereUsedScope: (query) => `${ADT_BASE}/repository/informationsystem/usageReferences/scope${toQuery(query)}`,
+    /** Data preview of a DDIC entity (table / structure / view). */
+    dataPreviewDdic: (name, query) => `${ADT_BASE}/datapreview/ddic/${encodeURIComponent(name)}${toQuery(query)}`,
+    /** Data preview of a CDS view. */
+    dataPreviewCds: (name, query) => `${ADT_BASE}/datapreview/cds/${encodeURIComponent(name)}${toQuery(query)}`,
+    /** Freestyle SQL data preview. */
+    dataPreviewFreestyle: (query) => `${ADT_BASE}/datapreview/freestyle${toQuery(query)}`,
     /** Repository node structure (package contents, tree browsing). */
     nodeStructure: (query) => `${ADT_BASE}/repository/nodestructure${toQuery(query)}`,
     /** Activate a list of objects (POST + `method=activate`). */

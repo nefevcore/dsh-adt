@@ -184,3 +184,70 @@ test('lists existing ATC runs and fetches one result', async () => {
   const mine = await c.listAtcRuns();
   assert.ok(mine.length >= 1);
 });
+
+test('where-used returns referencing objects', async () => {
+  const c = client();
+  const result = await c.getWhereUsed('/sap/bc/adt/oo/classes/zcl_demo');
+  assert.equal(result.objectUri, '/sap/bc/adt/oo/classes/zcl_demo');
+  assert.ok(result.totalReferences >= 2);
+  assert.ok(result.references.some((r) => r.name === 'ZPROG_DEMO'));
+  assert.ok(result.references.some((r) => r.name === 'ZCL_FLAKY'));
+
+  const ifRefs = await c.getWhereUsed('/sap/bc/adt/oo/interfaces/zif_demo');
+  assert.ok(ifRefs.references.some((r) => r.name === 'ZCL_DEMO'));
+
+  // No references for an object nobody uses.
+  const none = await c.getWhereUsed('/sap/bc/adt/ddls/sources/zcds_demo');
+  assert.equal(none.totalReferences, 0);
+});
+
+test('data preview returns columns and rows (ddic + cds + freestyle)', async () => {
+  const c = client();
+  const cds = await c.dataPreview('ZCDS_DEMO', 'cds', { top: 5 });
+  assert.equal(cds.totalRows, 2);
+  assert.ok(cds.columns.some((col) => col.name === 'MANDT'));
+  assert.ok(cds.rows.length >= 2);
+  assert.equal(cds.rows[0]?.CARRID, 'LH');
+
+  const ddic = await c.dataPreview('T001', 'ddic');
+  assert.ok(ddic.columns.some((col) => col.name === 'MANDT'));
+
+  const sql = await c.runSqlQuery('SELECT * FROM t001 WHERE mandt = 100');
+  assert.ok(sql.rows.length >= 2);
+  assert.ok(sql.columns.length >= 2);
+});
+
+test('version history exposes content URIs and version sources', async () => {
+  const c = client();
+  const uri = '/sap/bc/adt/oo/classes/zcl_demo';
+  const versions = await c.getVersions(uri);
+  assert.ok(versions.length >= 2);
+  const current = versions.find((v) => v.contentUri?.includes('version=00001'));
+  assert.ok(current, 'feed should expose a current-version content URI');
+
+  const older = versions.find((v) => v.contentUri?.includes('version=00000'));
+  assert.ok(older, 'feed should expose an older-version content URI');
+
+  const source = await c.getVersionSource(older!.contentUri!);
+  assert.ok(source.includes('mock version 00000'), 'version source should differ from active');
+
+  const active = await c.readSource(uri);
+  assert.ok(!active.source.includes('mock version'), 'active source is unmodified');
+});
+
+test('lock state is exposed via object metadata', async () => {
+  const c = client();
+  const uri = '/sap/bc/adt/oo/classes/zcl_flaky';
+
+  const free = await c.getObjectLock(uri);
+  assert.equal(free.locked, undefined);
+
+  const { handle } = await c.lock(uri);
+  const locked = await c.getObjectLock(uri);
+  assert.equal(locked.locked, true);
+  assert.equal(locked.lockedBy, 'DEMO');
+
+  await c.unlock(uri, handle);
+  const released = await c.getObjectLock(uri);
+  assert.equal(released.locked, undefined);
+});

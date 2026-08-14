@@ -1,8 +1,9 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { DESTINATION_PARAM, destinationOf, text } from './common.js';
-import { resolveObject, typeLabel } from '../resolve.js';
+import { resolveObject, resolvePackageName, typeLabel } from '../resolve.js';
+import { AdtPolicyError } from '../policy.js';
 export function sourceTools(deps) {
-    const { registry } = deps;
+    const { registry, policy } = deps;
     const readObject = defineTool({
         name: 'adt_read_object',
         description: 'Read the source code and metadata of an ABAP development object (class, interface, program, CDS view, ...). ' +
@@ -66,11 +67,16 @@ export function sourceTools(deps) {
         name: 'adt_write_object',
         description: 'Replace the source code of an existing ABAP development object. ' +
             'The object is locked, updated and unlocked automatically. ' +
-            'Use after adt_read_object to edit; call adt_activate afterwards to activate the change.',
+            'Use after adt_read_object to edit; call adt_activate afterwards to activate the change. ' +
+            'Subject to the plugin permission policy (allowedPackages / allowTransportableEdits / allowedTransports).',
         parameters: {
             objectUri: { type: 'string', description: 'Exact ADT object URI (recommended, from search/read).' },
             name: { type: 'string', description: 'Object name (used with type when no objectUri).' },
             type: { type: 'string', description: 'Object type, e.g. CLAS, INTF, PROG, DDLS.' },
+            packageName: {
+                type: 'string',
+                description: 'Optional package of the object (e.g. ZPACK_DEMO, $TMP); used for the permission check when the backend does not expose it.',
+            },
             source: { type: 'string', required: true, description: 'Complete new source text of the object.' },
             unlock: { type: 'boolean', description: 'Unlock after writing (default true).' },
             ...DESTINATION_PARAM,
@@ -95,17 +101,31 @@ export function sourceTools(deps) {
                 name: typeof args.name === 'string' ? args.name : undefined,
                 type: typeof args.type === 'string' ? args.type : undefined,
             });
+            // Permission check: package whitelist + transportable-edit rule.
+            const packageName = await resolvePackageName(entry.client, ref, typeof args.packageName === 'string' ? args.packageName : undefined);
+            if (!packageName) {
+                throw new AdtPolicyError('allowedPackages', `adt_write_object: cannot determine the package of ${ref.name} for the permission check; ` +
+                    'pass `packageName` explicitly or read the object first');
+            }
+            policy.assertEditAllowed(packageName, 'adt_write_object');
             const unlock = args.unlock !== false;
             let unlocked = false;
-            const { handle } = await entry.client.lock(ref.uri);
+            const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri);
             try {
+                // The backend may auto-assign a transport request on lock (CORRNR);
+                // it must be within allowedTransports or the edit is rolled back.
+                policy.assertTransportUsage(assignedTransport, `adt_write_object (${ref.name})`);
                 await entry.client.writeSource(ref.uri, String(args.source ?? ''), { lockHandle: handle });
-            }
-            finally {
                 if (unlock) {
                     await entry.client.unlock(ref.uri, handle).catch(() => undefined);
                     unlocked = true;
                 }
+            }
+            catch (error) {
+                // Policy denial or write failure → always roll back the lock.
+                await entry.client.unlock(ref.uri, handle).catch(() => undefined);
+                unlocked = true;
+                throw error;
             }
             return { uri: ref.uri, name: ref.name, updated: true, unlocked };
         },
@@ -162,12 +182,19 @@ export function sourceTools(deps) {
         },
         execute: async (args) => {
             const entry = registry.require(destinationOf(args));
+            const packageName = String(args.packageName ?? '$TMP').toUpperCase();
+            // Permission check: package whitelist + transportable-edit rule.
+            policy.assertEditAllowed(packageName, 'adt_create_object');
+            if (typeof args.transport === 'string' && args.transport.trim().length > 0) {
+                policy.assertTransportsEnabled('adt_create_object');
+                policy.assertTransportAllowed(args.transport.trim(), 'adt_create_object');
+            }
             const result = await entry.client.createObject({
                 destination: entry.config.name,
                 type: String(args.type),
                 name: String(args.name),
                 description: String(args.description ?? ''),
-                packageName: String(args.packageName ?? '$TMP'),
+                packageName,
                 transport: typeof args.transport === 'string' ? args.transport : undefined,
             });
             return {
@@ -181,11 +208,16 @@ export function sourceTools(deps) {
     });
     const deleteObject = defineTool({
         name: 'adt_delete_object',
-        description: 'Delete an ABAP development object from the system. Irreversible — prefer deactivation or transport-based removal when unsure.',
+        description: 'Delete an ABAP development object from the system. Irreversible — prefer deactivation or transport-based removal when unsure. ' +
+            'Subject to the plugin permission policy (allowedPackages / allowTransportableEdits).',
         parameters: {
             objectUri: { type: 'string', description: 'Exact ADT object URI.' },
             name: { type: 'string', description: 'Object name (with type).' },
             type: { type: 'string', description: 'Object type.' },
+            packageName: {
+                type: 'string',
+                description: 'Optional package of the object; used for the permission check when the backend does not expose it.',
+            },
             ...DESTINATION_PARAM,
         },
         output: {
@@ -206,6 +238,12 @@ export function sourceTools(deps) {
                 name: typeof args.name === 'string' ? args.name : undefined,
                 type: typeof args.type === 'string' ? args.type : undefined,
             });
+            const packageName = await resolvePackageName(entry.client, ref, typeof args.packageName === 'string' ? args.packageName : undefined);
+            if (!packageName) {
+                throw new AdtPolicyError('allowedPackages', `adt_delete_object: cannot determine the package of ${ref.name} for the permission check; ` +
+                    'pass `packageName` explicitly');
+            }
+            policy.assertEditAllowed(packageName, 'adt_delete_object');
             await entry.client.deleteObject(ref.uri);
             return { uri: ref.uri, deleted: true };
         },

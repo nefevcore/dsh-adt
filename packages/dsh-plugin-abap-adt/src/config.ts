@@ -3,7 +3,8 @@ import z from '@deepseek-ai/schemastery';
 /**
  * Plugin configuration schema (schemastery), validated by the Cordis loader.
  * The shipped bundle patch provides safe defaults; users override
- * `destinations` in their profile's `cordis.patch.yml`.
+ * `destinations` and the permission policy in their profile's
+ * `cordis.patch.yml`.
  */
 export const Config = z.object({
   /** Optional in-process demo destination backed by the mock ADT server. */
@@ -11,6 +12,19 @@ export const Config = z.object({
   demoPort: z.number().default(8123),
   /** Default destination name used by tools when none is given. */
   defaultDestination: z.string().default('demo'),
+  /**
+   * Permission policy ("权限管控") knobs. Each is optional: when omitted the
+   * corresponding `SAP_*` environment variable is consulted, then a built-in
+   * default. See `src/policy.ts` for the full semantics.
+   */
+  /** Allow the transport tool family and transport usage (env: SAP_ENABLE_TRANSPORTS). */
+  enableTransports: z.boolean(),
+  /** Comma-separated glob list of allowed transport request numbers, e.g. `D01K96*` (env: SAP_ALLOWED_TRANSPORTS). */
+  allowedTransports: z.string(),
+  /** Allow edits (write/create/delete/activate) on transportable (non-$TMP) packages (env: SAP_ALLOW_TRANSPORTABLE_EDITS). */
+  allowTransportableEdits: z.boolean(),
+  /** Comma-separated glob list of packages that may be edited, e.g. `Z*,$TMP` (env: SAP_ALLOWED_PACKAGES). */
+  allowedPackages: z.string(),
   destinations: z
     .array(
       z.object({

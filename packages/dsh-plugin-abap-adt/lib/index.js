@@ -22,12 +22,19 @@ import { atcRunTools } from './tools/atc_runs.js';
 import { transportTools } from './tools/transports.js';
 import { packageTools } from './tools/packages.js';
 import { batchTools } from './tools/batch.js';
+import { localTools } from './tools/local.js';
+import { whereUsedTools } from './tools/whereused.js';
+import { dataPreviewTools } from './tools/datapreview.js';
+import { lockTools } from './tools/lock.js';
+import { versionTools } from './tools/versions.js';
+import { gateTools } from './tools/gate.js';
+import { policyTools } from './tools/policy.js';
 const name = 'abap-adt';
 const inject = ['tools', 'fs'];
 /** Apply the plugin: build the destination registry and register every tool. */
 async function apply(ctx, config) {
     const registry = await AdtRegistry.create(config);
-    const deps = { registry };
+    const deps = { registry, policy: registry.policy };
     const tools = [
         ...systemTools(deps),
         ...searchTools(deps),
@@ -38,6 +45,13 @@ async function apply(ctx, config) {
         ...transportTools(deps),
         ...packageTools(deps),
         ...batchTools(deps, ctx),
+        ...localTools(deps, ctx),
+        ...whereUsedTools(deps),
+        ...dataPreviewTools(deps),
+        ...lockTools(deps),
+        ...versionTools(deps),
+        ...gateTools(deps),
+        ...policyTools(deps),
     ];
     for (const tool of tools) {
         // Sanitize every tool's output at the registry boundary: strip `undefined`

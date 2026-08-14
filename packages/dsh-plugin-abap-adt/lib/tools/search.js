@@ -37,6 +37,7 @@ export function searchTools(deps) {
                     properties: {
                         query: { type: 'string', required: true },
                         count: { type: 'integer', required: true },
+                        note: { type: 'string' },
                         objects: {
                             type: 'array',
                             required: true,
@@ -79,6 +80,8 @@ export function searchTools(deps) {
                 render: (_args, value) => {
                     const lines = [];
                     lines.push(`Search "${value.query}": ${value.count} hit(s)`);
+                    if (value.note)
+                        lines.push(`Note: ${value.note}`);
                     if (value.objects.length) {
                         lines.push('');
                         lines.push('Objects:');
