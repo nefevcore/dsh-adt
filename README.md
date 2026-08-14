@@ -101,20 +101,38 @@ corepack pnpm build
 corepack pnpm test        # 63 个测试（18 集成 + 6 传输解析 + 17 策略 + 5 XML + 8 本地检查 + 6 版本 diff + 3 门禁）
 ```
 
-### 2. 加载到 DSH web profile
+### 2. 安装到 DSH（agent preset 方式，推荐）
 
-插件已注册到 `C:\Users\xiaofeng\.dsh\profiles\web\cordis.patch.yml`（file URL 直连本仓库构建产物）。
+插件以 **agent preset** 安装：`adt_*` 工具**只出现在用该预设创建的会话里**，其他工作区/会话完全不受影响（作用域为 `agent → preset → global`，最近者遮蔽最远者）。
 
-> ⚠️ **插件代码变更后必须重启 DSH**（`scripts/restart-dsh-web.ps1` 或重新执行 `npx @deepseek-ai/dsh web`）。HMR 只能重跑配置、不能更新已缓存的库模块——本插件以 file URL 加载，Node 的 ESM 缓存会钉住 `@abap-adt/protocol`、`@abap-adt/mock` 与 `tools/*` 的旧代码。**不要**依赖"改配置热更新代码"。
+1. 新建预设目录 `~/.dsh/.agent-presets/abap-adt/`，放入 `agent.cordis.yml`——**基于官方 `cordis` 预设完整复制，再在末尾追加插件行**（预设决定会话的整套工具，不能只放插件一行）：
 
-如需正式安装（pnpm 依赖解析），在 profile 目录执行：
-
-```bash
-# 从本仓库根目录执行（相对路径会被锚定到当前目录）
-corepack pnpm --dir ~/.dsh/profiles/web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/packages/dsh-plugin-abap-adt
-# 或通过 dsh CLI（要求 pnpm 在 PATH）
-dsh plugin --profile web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/packages/dsh-plugin-abap-adt
+```yaml
+# agent.cordis.yml —— 追加在官方 cordis 预设全部行之后
+- id: abap-adt
+  name: 'file:///C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/packages/dsh-plugin-abap-adt/lib/index.js'
+  config:
+    demo: true
+    demoPort: 8123
+    defaultDestination: demo
+    destinations: []   # 真实 SAP 系统见下方「连接真实 SAP 系统」
 ```
+
+2. 可选：同目录 `preset.yml` 写显示名，如 `name: ABAP 开发`
+3. **重启 DSH**（`scripts/restart-dsh-web.ps1` 或重新执行 `npx @deepseek-ai/dsh web`）；新建会话时在工作区选择旁预设 chip 选该预设 → 该会话才有 `adt_*` 工具
+
+本机已配置好该预设（`~/.dsh/.agent-presets/abap-adt/`，含 demo/权限管控/真实系统配置），新建会话直接选「ABAP 开发」即可。
+
+> ⚠️ **插件代码变更后必须重启 DSH**。HMR 只能重跑配置、不能更新已缓存的库模块——本插件以 file URL 加载，Node 的 ESM 缓存会钉住 `@abap-adt/protocol`、`@abap-adt/mock` 与 `tools/*` 的旧代码。**不要**依赖"改配置热更新代码"。
+
+> 备选（全局安装，不推荐用于隔离场景）：以 pnpm 依赖解析方式装进 profile 即所有会话可见——
+>
+> ```bash
+> # 从本仓库根目录执行（相对路径会被锚定到当前目录）
+> corepack pnpm --dir ~/.dsh/profiles/web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/packages/dsh-plugin-abap-adt
+> # 或通过 dsh CLI（要求 pnpm 在 PATH）
+> dsh plugin --profile web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/packages/dsh-plugin-abap-adt
+> ```
 
 ### 3. 体验（零 SAP 系统）
 
@@ -124,14 +142,9 @@ dsh plugin --profile web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/pa
 
 ### 4. 连接真实 SAP 系统
 
-编辑 profile 的 `cordis.patch.yml`，在 `destinations` 增加条目：
+编辑预设文件 `~/.dsh/.agent-presets/abap-adt/agent.cordis.yml` 中插件行的 `destinations`，增加条目（改完重启 DSH）：
 
 ```yaml
-- id: abap-adt
-  name: 'file:///C:/.../dsh-plugin-abap-adt/lib/index.js'
-  config:
-    demo: false
-    defaultDestination: dev
     destinations:
       - name: dev
         url: https://sap.example.com:443     # ABAP 前端的 HTTP(S) 地址
@@ -151,7 +164,7 @@ dsh plugin --profile web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/pa
 
 所有会**修改 SAP 系统状态**的工具（`adt_write_object` / `adt_create_object` / `adt_delete_object` / `adt_activate` / 传输工具族）在执行前都会经过一层权限策略（`src/policy.ts`），不满足即抛 `[POLICY]` 错误并指明具体规则。只读工具（搜索/读取/检查/测试/ATC/导出）不受限制。
 
-四个独立开关，生效值优先级为 **config（`cordis.patch.yml`）> `SAP_*` 环境变量 > 内置默认值**：
+四个独立开关，生效值优先级为 **config（预设 `agent.cordis.yml` 中插件行的 config）> `SAP_*` 环境变量 > 内置默认值**：
 
 | 开关 | config 键 | 环境变量 | 默认 | 含义 |
 |---|---|---|---|---|
