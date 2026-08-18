@@ -13,7 +13,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { ADT_BASE } from '@abap-adt/protocol';
+import { ADT_BASE } from '@nefevcore/abap-adt-protocol';
 import { OBJECTS, PACKAGES, type MockObject } from './data.js';
 
 export interface MockAdtOptions {
@@ -24,6 +24,13 @@ export interface MockAdtOptions {
   password?: string;
   systemId?: string;
   release?: string;
+  /**
+   * Simulate an old / restricted backend (BASIS < 7.5x, verified against a
+   * real NW 7.4x system): the async `/abapunit/runs` service is absent
+   * (404) and ABAP Unit runs only via the synchronous `/abapunit/testruns`
+   * endpoint, which returns `aunit:runResult` directly in the POST response.
+   */
+  legacyUnitOnly?: boolean;
 }
 
 const NS_ADT = 'http://www.sap.com/adt/core';
@@ -32,6 +39,7 @@ const NS_EXC = 'http://www.sap.com/adt/xml/exception';
 const NS_CHKL = 'http://www.sap.com/adt/checkresult';
 const NS_CHKRUN = 'http://www.sap.com/adt/checkrun';
 const NS_AUNIT = 'http://www.sap.com/adt/api/aunit';
+const NS_AUNIT_LEGACY = 'http://www.sap.com/adt/aunit';
 const NS_ATC = 'http://www.sap.com/adt/atc';
 
 function xmlEscape(text: string): string {
@@ -186,6 +194,7 @@ export function createMockAdtServer(options: MockAdtOptions = {}) {
         release,
         username: options.username,
         password: options.password,
+        legacyUnitOnly: options.legacyUnitOnly ?? false,
       });
     } catch (error) {
       res.statusCode = 500;
@@ -277,6 +286,7 @@ interface Ctx {
   release: string;
   username?: string;
   password?: string;
+  legacyUnitOnly: boolean;
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, state: MockState, opts: Ctx): Promise<void> {
@@ -690,6 +700,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
 
   // ---- ABAP Unit (async run) ----
   if (path === '/abapunit/runs' && req.method === 'POST') {
+    if (opts.legacyUnitOnly) {
+      // Old backends (BASIS < 7.5x) never registered the async run service.
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml('Resource not found: /abapunit/runs (legacy backend; use /abapunit/testruns)'));
+      return;
+    }
     if (!checkCsrf(req, res, state)) return;
     const body = await readBody(req);
     const requestedNames = [...body.matchAll(/osl:object name="([^"]+)"/g)].map((m) => m[1]!.toUpperCase());
@@ -762,6 +779,51 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
     ${testCases.join('\n    ')}
   </testsuite>
 </testsuites>`,
+      ),
+    );
+    return;
+  }
+
+  // ---- ABAP Unit (legacy synchronous testruns; BASIS < 7.5x) ----
+  if (path === '/abapunit/testruns' && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const body = await readBody(req);
+    const uris = [...body.matchAll(/adtcore:uri="([^"]+)"/g)].map((m) => m[1]!);
+    const targets = uris
+      .map((u) => findObject(state, u))
+      .filter((o): o is MockObject => Boolean(o?.unit));
+    // Legacy backends execute the run synchronously and answer with
+    // aunit:runResult (ns http://www.sap.com/adt/aunit) — programs →
+    // testClasses → testMethods, alerts carrying severity/title/text.
+    const programs = targets.map((obj) => {
+      const methods: string[] = [];
+      for (let i = 0; i < obj.unit!.total; i++) {
+        const isFailed = i < obj.unit!.failed;
+        const name = isFailed ? obj.unit!.failedMethod ?? `TEST_${i + 1}` : `TEST_${i + 1}`;
+        const alert = isFailed
+          ? `\n        <aunit:alert kind="assert" severity="critical" title="Assertion failed">${xmlEscape(obj.unit!.failedMessage ?? 'expected: <X> but was: <Y>')}</aunit:alert>`
+          : '';
+        methods.push(
+          `<aunit:testMethod name="${name}" duration="0.01" unit="seconds">${alert}
+        </aunit:testMethod>`,
+        );
+      }
+      return `<aunit:program name="${obj.name}" uri="${obj.uri}" type="${obj.category}">
+      <aunit:testClasses>
+        <aunit:testClass name="LTCL_${obj.name.replace(/[~]/g, '_')}" uri="${obj.uri}" riskLevel="harmless">
+          <aunit:testMethods>
+        ${methods.join('\n        ')}
+          </aunit:testMethods>
+        </aunit:testClass>
+      </aunit:testClasses>
+    </aunit:program>`;
+    });
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.end(
+      adtXml(
+        `<aunit:runResult xmlns:aunit="${NS_AUNIT_LEGACY}">
+  ${programs.join('\n  ')}
+</aunit:runResult>`,
       ),
     );
     return;

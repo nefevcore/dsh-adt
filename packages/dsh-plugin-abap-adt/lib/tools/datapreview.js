@@ -4,9 +4,12 @@
  *
  * Note: on ABAP Cloud (BTP) direct preview of database tables is blocked by
  * SAP backend policy — only CDS views / freestyle SQL work there; on-prem
- * systems support all three.
+ * systems support all three. Minimal ADT profiles (e.g. restricted NetWeaver
+ * front-ends) may not expose the datapreview service at all — the tool then
+ * fails with a clear message instead of a raw 404/405.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import { AdtError } from '@nefevcore/abap-adt-protocol';
 import { DESTINATION_PARAM, destinationOf, text } from './common.js';
 export function dataPreviewTools(deps) {
     const { registry } = deps;
@@ -73,8 +76,23 @@ export function dataPreviewTools(deps) {
             execute: async (args) => {
                 const entry = registry.require(destinationOf(args));
                 const top = typeof args.top === 'number' ? args.top : undefined;
-                if (typeof args.sql === 'string' && args.sql.trim()) {
-                    const result = await entry.client.runSqlQuery(args.sql.trim(), { top });
+                const run = async (fn) => {
+                    try {
+                        return await fn();
+                    }
+                    catch (error) {
+                        if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                            throw new Error(`Data Preview is not available on destination '${entry.config.name}' — ` +
+                                'the ADT profile does not expose the datapreview service (HTTP ' +
+                                `${error.status}). Read data another way: export/analyze sources locally, ` +
+                                'or query the table through a program/function module that reads it.');
+                        }
+                        throw error;
+                    }
+                };
+                const sql = typeof args.sql === 'string' ? args.sql.trim() : '';
+                if (sql) {
+                    const result = await run(() => entry.client.runSqlQuery(sql, { top }));
                     return {
                         source: 'sql',
                         name: result.name,
@@ -89,7 +107,7 @@ export function dataPreviewTools(deps) {
                 if (!name)
                     throw new Error('adt_data_preview: provide either `name`+`kind` or `sql`');
                 const kind = args.kind === 'cds' ? 'cds' : 'ddic';
-                const result = await entry.client.dataPreview(name, kind, { top });
+                const result = await run(() => entry.client.dataPreview(name, kind, { top }));
                 return {
                     source: kind,
                     name,

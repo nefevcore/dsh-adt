@@ -8,12 +8,6 @@ importers:
 
   .:
     devDependencies:
-      '@abap-adt/mock':
-        specifier: workspace:*
-        version: link:packages/adt-mock
-      '@abap-adt/protocol':
-        specifier: workspace:*
-        version: link:packages/adt-protocol
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
         version: 4.0.1
@@ -23,6 +17,12 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.0.0
         version: 3.18.1
+      '@nefevcore/abap-adt-mock':
+        specifier: workspace:*
+        version: link:packages/adt-mock
+      '@nefevcore/abap-adt-protocol':
+        specifier: workspace:*
+        version: link:packages/adt-protocol
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
@@ -35,7 +35,7 @@ importers:
 
   packages/adt-mock:
     dependencies:
-      '@abap-adt/protocol':
+      '@nefevcore/abap-adt-protocol':
         specifier: workspace:*
         version: link:../adt-protocol
 
@@ -47,12 +47,6 @@ importers:
 
   packages/dsh-plugin-abap-adt:
     dependencies:
-      '@abap-adt/mock':
-        specifier: workspace:*
-        version: link:../adt-mock
-      '@abap-adt/protocol':
-        specifier: workspace:*
-        version: link:../adt-protocol
       '@abaplint/core':
         specifier: ^2.120.23
         version: 2.120.23
@@ -65,6 +59,12 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.0.0
         version: 3.18.1
+      '@nefevcore/abap-adt-mock':
+        specifier: workspace:*
+        version: link:../adt-mock
+      '@nefevcore/abap-adt-protocol':
+        specifier: workspace:*
+        version: link:../adt-protocol
     devDependencies:
       '@deepseek-ai/dsh-fs':
         specifier: ^0.1.0-rc.6

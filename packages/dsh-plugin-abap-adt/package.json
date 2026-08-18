@@ -1,5 +1,5 @@
 {
-  "name": "@abap-adt/dsh-plugin",
+  "name": "@nefevcore/abap-adt-dsh-plugin",
   "version": "0.1.0",
   "description": "DeepSeek Harness plugin: agent-native access to SAP ABAP systems via the ADT REST protocol — search, edit, activate, unit tests, ATC, transports, packages, plus batch/export features beyond VS Code ADT.",
   "type": "module",
@@ -24,8 +24,8 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@abap-adt/mock": "workspace:*",
-    "@abap-adt/protocol": "workspace:*",
+    "@nefevcore/abap-adt-mock": "workspace:*",
+    "@nefevcore/abap-adt-protocol": "workspace:*",
     "@abaplint/core": "^2.120.23"
   },
   "peerDependencies": {
@@ -44,5 +44,28 @@
   "engines": {
     "node": ">=20"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "keywords": [
+    "abap",
+    "sap",
+    "adt",
+    "deepseek-harness",
+    "dsh",
+    "agent-tools",
+    "ai-agent",
+    "abap-unit",
+    "atc"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nefevcore/dsh-adt.git",
+    "directory": "packages/dsh-plugin-abap-adt"
+  },
+  "bugs": {
+    "url": "https://github.com/nefevcore/dsh-adt/issues"
+  },
+  "homepage": "https://github.com/nefevcore/dsh-adt#readme",
+  "publishConfig": {
+    "access": "public"
+  }
 }

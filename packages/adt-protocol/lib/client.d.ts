@@ -127,6 +127,16 @@ export declare class AdtClient {
     }>;
     /** Unlock an object previously locked with the given handle. */
     unlock(objectUri: string, handle: string): Promise<void>;
+    /**
+     * Unlock with the given handle; when that fails (or no handle is known),
+     * retry WITHOUT a handle. Some backends release the lock on a bare
+     * `_action=UNLOCK` (same user), which lets `unlock_all` clean residual
+     * locks whose handle was never returned (e.g. create-time auto locks).
+     */
+    unlockBestEffort(objectUri: string, handle?: string): Promise<{
+        released: boolean;
+        note?: string;
+    }>;
     /** Lock → write → unlock in one step (safe even if write fails). */
     updateSource(objectUri: string, source: string, options?: {
         transport?: string;
@@ -147,6 +157,12 @@ export declare class AdtClient {
     runUnitTests(objects: AdtObjectRef[], options?: {
         timeoutMs?: number;
     }): Promise<AdtUnitRunResult>;
+    /**
+     * Legacy synchronous ABAP Unit run (old backends, `POST
+     * /abapunit/testruns`). The backend executes the run inside the POST and
+     * answers with `aunit:runResult` — there is no run id and nothing to poll.
+     */
+    private runUnitTestsLegacy;
     /** Run ABAP Test Cockpit checks; polls the async run until completion. */
     runAtc(objects: AdtObjectRef[], options?: {
         variant?: string;
@@ -211,7 +227,14 @@ export declare class AdtClient {
     /** Fetch the source of one object version by its content URI (from getVersions). */
     getVersionSource(contentUri: string): Promise<string>;
     /** Best-effort read of an object's lock state via its metadata. */
-    getObjectLock(objectUri: string): Promise<AdtObjectLockInfo>;
+    getObjectLock(objectUri: string, type?: string): Promise<AdtObjectLockInfo>;
+    /**
+     * Try the transports relationship endpoints for lock state. Some backends
+     * answer `GET {objectUri}/transports` (or the repository
+     * `objectproperties/transports?uri=` collection) with LOCK_HANDLE / CORRNR
+     * data; both are probed read-only and failures degrade silently.
+     */
+    private lockStateViaTransports;
     /** Release a transport request. */
     releaseTransport(number: string): Promise<AdtTransport>;
     /**
@@ -231,8 +254,15 @@ export declare class AdtClient {
      * metadata XML and the `package` query parameter.
      */
     createObject(request: AdtCreateObjectRequest): Promise<AdtCreateObjectResult>;
-    /** Delete an object. */
-    deleteObject(objectUri: string): Promise<void>;
+    /**
+     * Delete an object. Prefers the modern deletion service
+     * (`POST /sap/bc/adt/deletion/delete`, response media type
+     * `deletion.response.v1+xml`) and falls back to the legacy
+     * `_action=DELETE` action on the object URI when the service is absent.
+     */
+    deleteObject(objectUri: string, options?: {
+        transport?: string;
+    }): Promise<void>;
     /** Lightweight reachability + auth probe. */
     ping(): Promise<{
         ok: boolean;

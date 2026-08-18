@@ -88,12 +88,33 @@ export const ENDPOINTS = {
     nodeStructure: (query) => `${ADT_BASE}/repository/nodestructure${toQuery(query)}`,
     /** Activate a list of objects (POST + `method=activate`). */
     activation: (query) => `${ADT_BASE}/repository/activation${toQuery(query)}`,
+    /**
+     * Activation — compatibility path used by older / restricted backends
+     * (e.g. abapGit-era "Compatibility" ADT profiles, NW 7.4x). The service is
+     * registered under `/sap/bc/adt/activation` instead of
+     * `/sap/bc/adt/repository/activation` there; the official Eclipse/VS Code
+     * ADT client falls back to it automatically.
+     */
+    activationCompatibility: (query) => `${ADT_BASE}/activation${toQuery(query)}`,
     /** Check run (syntax / ATC reporters). */
     checkRuns: (query) => `${ADT_BASE}/checkruns${toQuery(query)}`,
     /** ABAP Unit run collection (start + poll). */
     unitRuns: (query) => `${ADT_BASE}/abapunit/runs${toQuery(query)}`,
     /** ABAP Unit results. */
     unitResults: (query) => `${ADT_BASE}/abapunit/results${toQuery(query)}`,
+    /**
+     * ABAP Unit run collection — legacy synchronous path (BASIS < 7.5x).
+     *
+     * Old / restricted backends never shipped the async run API: `POST
+     * /abapunit/runs` is 404 there. They expose only `/abapunit/testruns`,
+     * which executes the run synchronously and returns `aunit:runResult`
+     * (namespace `http://www.sap.com/adt/aunit`) directly in the POST response
+     * — no run id, no polling. Verified on a real NW 7.4x system (D01) and
+     * matching the official Eclipse/VS Code ADT client, whose `com.sap.adt.abapunit`
+     * bundle posts `aunit:runConfiguration` here with plain `application/xml`
+     * (see `AbapUnitRequestContentHandlerV1`).
+     */
+    unitTestRunsLegacy: (query) => `${ADT_BASE}/abapunit/testruns${toQuery(query)}`,
     /** ATC run collection (start + poll). */
     atcRuns: (query) => `${ADT_BASE}/atc/runs${toQuery(query)}`,
     /** ATC results. */
@@ -116,6 +137,10 @@ export const ENDPOINTS = {
     },
     /** Source access for an object: `<uri>/source/main`. */
     objectSource: (objectUri, query) => `${objectUri}/source/main${toQuery(query)}`,
+    /** Modern deletion service (POST + `del:deletionRequest` body). */
+    deletion: (query) => `${ADT_BASE}/deletion/delete${toQuery(query)}`,
+    /** Deletion pre-check service. */
+    deletionCheck: (query) => `${ADT_BASE}/deletion/check${toQuery(query)}`,
     /** System time / ping (lightweight reachability probe). */
     systemTime: () => `${ADT_BASE}/core/system/time`,
 };

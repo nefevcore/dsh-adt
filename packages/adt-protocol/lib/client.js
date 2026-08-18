@@ -242,7 +242,9 @@ export class AdtClient {
     async ensureCsrfToken() {
         if (this.csrfToken)
             return this.csrfToken;
-        const path = ENDPOINTS.discovery();
+        // The session and CSRF token must be bound to the destination client:
+        // multi-client systems reject tokens issued against another client.
+        const path = `${ENDPOINTS.discovery()}${toQuery(this.baseQuery({}))}`;
         const response = await this.request({
             method: 'GET',
             path,
@@ -343,11 +345,30 @@ export class AdtClient {
                 path: ENDPOINTS.search(params),
                 accept: 'application/xml',
             });
-            return parseSearchResult(res.text, query);
+            const parsed = parseSearchResult(res.text, query);
+            // Some backends only match with a wildcard: a bare term is treated as an
+            // exact token and returns zero hits (e.g. 'ZCL_MCP_TOOL' → 0, while
+            // 'ZCL_MCP_TOOL*' → hits). Retry with a trailing '*' and say so.
+            if (parsed.count === 0 && !/[*?]/.test(query)) {
+                const wildcard = await this.search(`${query}*`, {
+                    maxResults: options.maxResults,
+                    objectType: options.objectType,
+                    packageName: options.packageName,
+                    operation: 'quickSearch',
+                });
+                if (wildcard.count > 0) {
+                    wildcard.note = `'${query}' matched nothing; retried as '${query}*' — this backend requires a wildcard for name search`;
+                }
+                return wildcard;
+            }
+            return parsed;
         }
         catch (error) {
-            // Fall back to plain quickSearch when a narrowed operation is rejected.
-            if (error instanceof AdtError && error.status === 500 && operation !== 'quickSearch') {
+            // Fall back to plain quickSearch when a narrowed operation is rejected
+            // (500 on limited search providers; 400/404/405 on minimal profiles).
+            if (error instanceof AdtError &&
+                (error.status === 500 || error.status === 400 || error.status === 404 || error.status === 405) &&
+                operation !== 'quickSearch') {
                 const fallback = await this.search(query, {
                     maxResults: options.maxResults,
                     objectType: options.objectType,
@@ -410,7 +431,9 @@ export class AdtClient {
             path: url,
             body: source,
             contentType: 'text/plain; charset=utf-8',
-            accept: 'application/xml',
+            // Strict backends negotiate the response of /source/main as text/plain;
+            // an `Accept: application/xml` is rejected with HTTP 406 there.
+            accept: 'text/plain',
             stateful: true,
         });
     }
@@ -444,6 +467,42 @@ export class AdtClient {
             stateful: true,
         });
     }
+    /**
+     * Unlock with the given handle; when that fails (or no handle is known),
+     * retry WITHOUT a handle. Some backends release the lock on a bare
+     * `_action=UNLOCK` (same user), which lets `unlock_all` clean residual
+     * locks whose handle was never returned (e.g. create-time auto locks).
+     */
+    async unlockBestEffort(objectUri, handle) {
+        const uri = normalizeUri(objectUri);
+        if (handle) {
+            try {
+                await this.unlock(uri, handle);
+                return { released: true };
+            }
+            catch (error) {
+                // fall through to the handle-less attempt
+                if (error instanceof AdtError && error.status === 403) {
+                    return { released: false, note: `lock held by another user: ${error.message}` };
+                }
+            }
+        }
+        try {
+            await this.request({
+                method: 'POST',
+                path: `${uri}${toQuery(this.baseQuery({ _action: 'UNLOCK' }))}`,
+                accept: 'application/xml',
+                stateful: true,
+            });
+            return { released: true, note: handle ? 'released via handle-less unlock' : 'released (no lock handle was known)' };
+        }
+        catch (error) {
+            return {
+                released: false,
+                note: `unlock failed${handle ? ` with handle ${handle}` : ''} (HTTP ${error.status ?? '?'}): ${error.message}`,
+            };
+        }
+    }
     /** Lock → write → unlock in one step (safe even if write fails). */
     async updateSource(objectUri, source, options = {}) {
         const { handle } = await this.lock(objectUri);
@@ -468,16 +527,31 @@ export class AdtClient {
         const method = options.checkOnly ? 'check' : 'activate';
         const query = this.baseQuery({ method, preauditRequested: 'true' });
         const body = buildActivationRequest(objects, options.transport);
-        const res = await this.request({
-            method: 'POST',
-            path: `${ENDPOINTS.activation()}${toQuery(query)}`,
-            body,
-            contentType: MEDIA.activation,
-            accept: 'application/xml',
-            stateful: true,
-            timeoutMs: 300_000,
-        });
-        return parseActivationResult(res.text);
+        const doActivate = async (path) => {
+            const res = await this.request({
+                method: 'POST',
+                path,
+                body,
+                contentType: MEDIA.activation,
+                accept: 'application/xml',
+                stateful: true,
+                timeoutMs: 300_000,
+            });
+            return parseActivationResult(res.text);
+        };
+        try {
+            return await doActivate(`${ENDPOINTS.activation()}${toQuery(query)}`);
+        }
+        catch (error) {
+            // Compatibility-mode backends (older / restricted ADT profiles) register
+            // the activation service under /sap/bc/adt/activation instead of
+            // /sap/bc/adt/repository/activation. Retry there on 404/405.
+            if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                const compatQuery = { ...query, preauditRequested: 'false' };
+                return await doActivate(`${ENDPOINTS.activationCompatibility()}${toQuery(compatQuery)}`);
+            }
+            throw error;
+        }
     }
     /** Syntax/consistency check via the check-run service (no activation). */
     async check(objects) {
@@ -503,15 +577,29 @@ export class AdtClient {
     async runUnitTests(objects, options = {}) {
         const body = buildUnitRunRequest(objects);
         const query = this.baseQuery({});
-        const start = await this.request({
-            method: 'POST',
-            path: `${ENDPOINTS.unitRuns()}${toQuery(query)}`,
-            body,
-            contentType: MEDIA.abapUnitRun,
-            accept: MEDIA.abapUnitRunStatus,
-            stateful: true,
-            timeoutMs: 60_000,
-        });
+        let start;
+        try {
+            start = await this.request({
+                method: 'POST',
+                path: `${ENDPOINTS.unitRuns()}${toQuery(query)}`,
+                body,
+                contentType: MEDIA.abapUnitRun,
+                accept: MEDIA.abapUnitRunStatus,
+                stateful: true,
+                timeoutMs: 60_000,
+            });
+        }
+        catch (error) {
+            // Old / restricted backends (BASIS < 7.5x, e.g. NW 7.4x compatibility
+            // profiles) never shipped the async run API — POST /abapunit/runs is a
+            // plain 404 there. They only expose the synchronous /abapunit/testruns
+            // service, exactly like the official ADT client's fallback. (Same
+            // pattern as the activation compatibility path above.)
+            if (error instanceof AdtError && error.status === 404) {
+                return await this.runUnitTestsLegacy(objects);
+            }
+            throw error;
+        }
         const runId = extractRunId(start);
         const deadline = Date.now() + (options.timeoutMs ?? 300_000);
         for (;;) {
@@ -533,6 +621,25 @@ export class AdtClient {
             timeoutMs: 60_000,
         });
         return parseUnitRunResult(results.text);
+    }
+    /**
+     * Legacy synchronous ABAP Unit run (old backends, `POST
+     * /abapunit/testruns`). The backend executes the run inside the POST and
+     * answers with `aunit:runResult` — there is no run id and nothing to poll.
+     */
+    async runUnitTestsLegacy(objects) {
+        const body = buildUnitRunRequestLegacy(objects);
+        const res = await this.request({
+            method: 'POST',
+            path: `${ENDPOINTS.unitTestRunsLegacy()}${toQuery(this.baseQuery({}))}`,
+            body,
+            contentType: 'application/xml',
+            accept: 'application/xml',
+            stateful: true,
+            // The run executes synchronously; allow generous time for big suites.
+            timeoutMs: 300_000,
+        });
+        return parseUnitRunResult(res.text);
     }
     // ---------------------------------------------------------------------------
     // ATC (async run flow)
@@ -718,23 +825,51 @@ export class AdtClient {
     async dataPreview(name, kind, options = {}) {
         const top = Math.min(Math.max(options.top ?? 100, 1), 5000);
         const params = this.baseQuery({ rowNumber: top });
-        const res = await this.request({
-            path: kind === 'cds' ? ENDPOINTS.dataPreviewCds(name, params) : ENDPOINTS.dataPreviewDdic(name, params),
-            accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
-            timeoutMs: 60_000,
-        });
-        return parseDataPreview(res.text, name);
+        try {
+            const res = await this.request({
+                path: kind === 'cds' ? ENDPOINTS.dataPreviewCds(name, params) : ENDPOINTS.dataPreviewDdic(name, params),
+                accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
+                timeoutMs: 60_000,
+            });
+            return parseDataPreview(res.text, name);
+        }
+        catch (error) {
+            // Older / restricted ADT profiles do not expose the ddic/cds preview
+            // collection; fall back to the freestyle SQL endpoint.
+            if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                return this.runSqlQuery(`SELECT * FROM ${name} UP TO ${top} ROWS`, { top });
+            }
+            throw error;
+        }
     }
     /** Execute a freestyle SQL SELECT via the data-preview API. */
     async runSqlQuery(sql, options = {}) {
         const top = Math.min(Math.max(options.top ?? 100, 1), 5000);
         const params = this.baseQuery({ sqlQuery: sql, rowNumber: top });
-        const res = await this.request({
-            path: ENDPOINTS.dataPreviewFreestyle(params),
-            accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
-            timeoutMs: 60_000,
-        });
-        return parseDataPreview(res.text, sql);
+        try {
+            const res = await this.request({
+                path: ENDPOINTS.dataPreviewFreestyle(params),
+                accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
+                timeoutMs: 60_000,
+            });
+            return parseDataPreview(res.text, sql);
+        }
+        catch (error) {
+            // Compatibility-mode backends reject GET on /datapreview/freestyle (405)
+            // and expect the SQL as the request body of a POST.
+            if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                const res = await this.request({
+                    method: 'POST',
+                    path: `${ENDPOINTS.dataPreviewFreestyle(this.baseQuery({ rowNumber: top }))}`,
+                    body: sql,
+                    contentType: 'text/plain; charset=utf-8',
+                    accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
+                    timeoutMs: 60_000,
+                });
+                return parseDataPreview(res.text, sql);
+            }
+            throw error;
+        }
     }
     // ---------------------------------------------------------------------------
     // Version sources & lock state
@@ -745,18 +880,77 @@ export class AdtClient {
         return res.text;
     }
     /** Best-effort read of an object's lock state via its metadata. */
-    async getObjectLock(objectUri) {
+    async getObjectLock(objectUri, type) {
         const uri = normalizeUri(objectUri);
-        try {
-            const res = await this.request({ path: uri, accept: MEDIA.object });
-            const info = parseLockInfo(res.text);
-            if (info.locked !== undefined)
-                return info;
-            return { locked: undefined, note: 'backend does not expose lock state in object metadata' };
+        // Strict backends negotiate object metadata by the TYPE-specific media
+        // type (e.g. application/vnd.sap.adt.oo.classes.v4+xml for a class) and
+        // reject the generic object media type with HTTP 406; other backends (and
+        // the mock) expose lock state only on the generic object representation.
+        const attempts = [];
+        const typed = metadataAccept(type);
+        if (typed !== 'application/xml')
+            attempts.push(typed);
+        attempts.push(MEDIA.object, 'application/xml');
+        for (const accept of attempts) {
+            try {
+                const res = await this.request({ path: uri, accept });
+                const info = parseLockInfo(res.text);
+                if (info.locked !== undefined || info.lockedBy) {
+                    return { ...info, note: undefined };
+                }
+            }
+            catch (error) {
+                if (error instanceof AdtError && (error.status === 406 || error.status === 404 || error.status === 405)) {
+                    continue; // wrong media type / unsupported route → try the next
+                }
+                // A non-negotiation error (e.g. 401/403/500) is authoritative.
+                if (error instanceof AdtError) {
+                    return { locked: undefined, note: `could not read object metadata: ${error.message}` };
+                }
+                continue;
+            }
         }
-        catch (error) {
-            return { locked: undefined, note: `could not read object metadata: ${error.message}` };
+        // Metadata did not expose lock state → try the transports relationship
+        // endpoints (some backends report LOCK_HANDLE/CORRNR there).
+        const viaTransports = await this.lockStateViaTransports(uri);
+        if (viaTransports.locked !== undefined || viaTransports.lockedBy)
+            return viaTransports;
+        return {
+            locked: undefined,
+            note: 'backend does not expose lock state in object metadata',
+        };
+    }
+    /**
+     * Try the transports relationship endpoints for lock state. Some backends
+     * answer `GET {objectUri}/transports` (or the repository
+     * `objectproperties/transports?uri=` collection) with LOCK_HANDLE / CORRNR
+     * data; both are probed read-only and failures degrade silently.
+     */
+    async lockStateViaTransports(objectUri) {
+        const candidates = [];
+        const relation = `${objectUri}/transports`;
+        if (relation.startsWith('/sap/bc/adt'))
+            candidates.push(relation);
+        candidates.push(`/sap/bc/adt/repository/informationsystem/objectproperties/transports?uri=${encodeURIComponent(objectUri)}`);
+        for (const path of candidates) {
+            try {
+                const res = await this.request({ path, accept: 'application/xml', timeoutMs: 30_000 });
+                // Element-shaped data: <LOCK_HANDLE>…</LOCK_HANDLE> / <CORRNR>…</CORRNR>.
+                const lockHandle = localText(res.text, 'LOCK_HANDLE') ?? localText(res.text, 'lockHandle');
+                const corr = localText(res.text, 'CORRNR') ?? localText(res.text, 'corrNr');
+                if (lockHandle) {
+                    return {
+                        locked: true,
+                        transport: corr || undefined,
+                        note: `lock handle recoverable via ${path} — use adt_unlock_all to release`,
+                    };
+                }
+            }
+            catch {
+                // endpoint not supported → keep probing / degrade below
+            }
         }
+        return { locked: undefined };
     }
     /** Release a transport request. */
     async releaseTransport(number) {
@@ -863,7 +1057,11 @@ export class AdtClient {
             stateful: true,
             timeoutMs: 120_000,
         });
-        const uri = res.headers.get('location') ?? parseCreatedUri(res.text) ?? '';
+        // Some backends (e.g. minimal NetWeaver ADT profiles) return HTTP 200 with
+        // an EMPTY body and no Location header — derive the URI by convention then.
+        const uri = res.headers.get('location') ??
+            parseCreatedUri(res.text) ??
+            uriForCreated(request.type, request.name);
         const name = uri.split('/').pop()?.toUpperCase() ?? request.name;
         return {
             success: res.status === 201 || res.status === 200,
@@ -872,16 +1070,53 @@ export class AdtClient {
             messages: [],
         };
     }
-    /** Delete an object. */
-    async deleteObject(objectUri) {
+    /**
+     * Delete an object. Prefers the modern deletion service
+     * (`POST /sap/bc/adt/deletion/delete`, response media type
+     * `deletion.response.v1+xml`) and falls back to the legacy
+     * `_action=DELETE` action on the object URI when the service is absent.
+     */
+    async deleteObject(objectUri, options = {}) {
         const uri = normalizeUri(objectUri);
-        const query = this.baseQuery({ _action: 'DELETE', deleteOption: 'deleteAndLocalVersions' });
-        await this.request({
-            method: 'POST',
-            path: `${uri}${toQuery(query)}`,
-            accept: 'application/xml',
-            stateful: true,
-        });
+        // 1) Modern deletion service (NW 7.5x+; strictly negotiated media types).
+        try {
+            const body = `<?xml version="1.0" encoding="UTF-8"?>
+<del:deletionRequest xmlns:del="http://www.sap.com/adt/deletion" xmlns:adtcore="http://www.sap.com/adt/core">
+  <del:object adtcore:uri="${escapeXml(uri)}">
+    ${options.transport ? `<del:transportNumber>${escapeXml(options.transport)}</del:transportNumber>` : '<del:transportNumber/>'}
+  </del:object>
+</del:deletionRequest>`;
+            await this.request({
+                method: 'POST',
+                path: ENDPOINTS.deletion(this.baseQuery()),
+                body,
+                contentType: 'application/vnd.sap.adt.deletion.request.v1+xml',
+                accept: 'application/vnd.sap.adt.deletion.response.v1+xml',
+                stateful: true,
+                timeoutMs: 120_000,
+            });
+            return;
+        }
+        catch (error) {
+            const unsupported = error instanceof AdtError && (error.status === 404 || error.status === 405 || error.status === 406);
+            if (!unsupported)
+                throw error;
+            // 2) Legacy `_action=DELETE` action on the object URI.
+            const query = this.baseQuery({ _action: 'DELETE', deleteOption: 'deleteAndLocalVersions' });
+            try {
+                await this.request({
+                    method: 'POST',
+                    path: `${uri}${toQuery(query)}`,
+                    accept: 'application/xml',
+                    stateful: true,
+                });
+                return;
+            }
+            catch (legacyError) {
+                throw new AdtError(`ADT: deletion service unavailable (${error.status}) and legacy ` +
+                    `_action=DELETE failed (${legacyError.status ?? '?'}): ${legacyError.message}`, legacyError.status, legacyError.adtMessages, legacyError.responseBody);
+            }
+        }
     }
     // ---------------------------------------------------------------------------
     // Diagnostics
@@ -955,6 +1190,32 @@ ${sets}
   </osl:objectSet>
 </aunit:run>`;
 }
+/**
+ * Legacy run request (`aunit:runConfiguration`, namespace
+ * `http://www.sap.com/adt/aunit`) for the synchronous `/abapunit/testruns`
+ * service on old backends (BASIS < 7.5x). Objects travel as
+ * `adtcore:objectReference` URIs inside an inclusive object set — the same
+ * payload the official ADT client's `AbapUnitRequestContentHandlerV1`
+ * serializes (verified live against a NW 7.4x system).
+ */
+function buildUnitRunRequestLegacy(objects) {
+    const refs = objects
+        .map((o) => `        <adtcore:objectReference adtcore:uri="${escapeXml(o.uri)}"/>`)
+        .join('\n');
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<aunit:runConfiguration xmlns:aunit="http://www.sap.com/adt/aunit">
+  <external>
+    <coverage active="false"/>
+  </external>
+  <adtcore:objectSets xmlns:adtcore="http://www.sap.com/adt/core">
+    <objectSet kind="inclusive">
+      <adtcore:objectReferences>
+${refs}
+      </adtcore:objectReferences>
+    </objectSet>
+  </adtcore:objectSets>
+</aunit:runConfiguration>`;
+}
 function buildAtcRunRequest(objects, variant) {
     const sets = objects
         .map((o) => `    <osl:set xsi:type="osl:flatObjectSet"><osl:object name="${escapeXml(o.name)}" type="${escapeXml(o.type.split('/')[0] ?? 'CLAS')}"/></osl:set>`)
@@ -983,18 +1244,39 @@ function createContentType(type) {
     };
     return map[cat] ?? 'application/xml';
 }
+/**
+ * Negotiable metadata media type for an object type. Strict backends answer
+ * `GET {objectUri}` only for the type-specific representation (e.g. classes
+ * want `application/vnd.sap.adt.oo.classes.v4+xml`); the generic object media
+ * type is rejected with HTTP 406 there.
+ */
+function metadataAccept(type) {
+    const cat = (type ?? '').toUpperCase().split('/')[0];
+    const map = {
+        CLAS: 'application/vnd.sap.adt.oo.classes.v4+xml, application/vnd.sap.adt.oo.classes.v3+xml, application/vnd.sap.adt.oo.classes.v2+xml, application/vnd.sap.adt.oo.classes.v1+xml',
+        INTF: 'application/vnd.sap.adt.oo.interfaces.v5+xml, application/vnd.sap.adt.oo.interfaces.v4+xml, application/vnd.sap.adt.oo.interfaces.v3+xml, application/vnd.sap.adt.oo.interfaces.v2+xml, application/vnd.sap.adt.oo.interfaces+xml',
+        PROG: 'application/vnd.sap.adt.programs.programs.v2+xml, application/vnd.sap.adt.programs.programs.v1+xml',
+        FUGR: 'application/vnd.sap.adt.functions.groups.v2+xml, application/vnd.sap.adt.functions.groups.v1+xml',
+        DDLS: 'application/vnd.sap.adt.ddlSource.v2+xml, application/vnd.sap.adt.ddlSource+xml',
+        TABL: 'application/vnd.sap.adt.tables.v2+xml, application/vnd.sap.adt.tables.v1+xml',
+        STRU: 'application/vnd.sap.adt.structures.v2+xml, application/vnd.sap.adt.structures.v1+xml',
+        DEVC: 'application/vnd.sap.adt.packages.v2+xml, application/vnd.sap.adt.packages.v1+xml',
+    };
+    return map[cat] ?? 'application/xml';
+}
 function buildCreateObjectRequest(request) {
     const ns = createNamespace(request.type);
     const tag = createRootTag(request.type);
     const props = Object.entries(request.properties ?? {})
         .map(([k, v]) => `    <adtcore:property adtcore:name="${escapeXml(k)}" adtcore:value="${escapeXml(v)}"/>`)
         .join('\n');
-    const nameAttr = request.type.startsWith('CLAS') || request.type.startsWith('INTF')
-        ? `${ns === 'class' ? 'class' : 'intf'}:name="${escapeXml(request.name)}"`
-        : `adtcore:name="${escapeXml(request.name)}"`;
+    // The object name always travels as `adtcore:name` — including for classes
+    // and interfaces. Older plugin versions emitted `class:name`/`intf:name`,
+    // which strict backends reject with HTTP 400: "expected attribute
+    // {http://www.sap.com/adt/core}name" (ExceptionInvalidData).
     return `<?xml version="1.0" encoding="UTF-8"?>
 <${tag} xmlns:${ns}="http://www.sap.com/adt/${ns === 'class' ? 'oo/classes' : ns === 'intf' ? 'oo/interfaces' : ns === 'prog' ? 'programs/programs' : ns === 'fugr' ? 'functions/groups' : ns === 'ddls' ? 'ddl' : ns}" xmlns:adtcore="http://www.sap.com/adt/core"
-       adtcore:description="${escapeXml(request.description)}" adtcore:language="EN" ${nameAttr}
+       adtcore:description="${escapeXml(request.description)}" adtcore:language="EN" adtcore:name="${escapeXml(request.name)}"
        adtcore:type="${escapeXml(request.type)}" adtcore:masterLanguage="EN">
   <adtcore:packageRef adtcore:name="${escapeXml(request.packageName || '$TMP')}"/>
 ${props}
@@ -1219,10 +1501,46 @@ function parseLockInfo(xml) {
     }
     return { locked, lockedBy, transport: attrs.corrnr || attrs.transport || undefined };
 }
+/** Depth-first search for the text of the first element with the given local name. */
+function findTextDeep(root, name) {
+    if (root.name === name || root.name.endsWith(`:${name}`)) {
+        return root.text || undefined;
+    }
+    for (const child of root.children) {
+        const value = findTextDeep(child, name);
+        if (value)
+            return value;
+    }
+    return undefined;
+}
+/**
+ * Concatenated text of an element INCLUDING its descendants. ADT message
+ * payloads nest the actual text, e.g.
+ * `<chkl:shortText><chkl:txt>…</chkl:txt></chkl:shortText>`, where the outer
+ * element has no direct character data — `childText()` alone yields ''.
+ */
+function deepText(node) {
+    const parts = [];
+    const walk = (n) => {
+        if (n.text)
+            parts.push(n.text);
+        for (const child of n.children)
+            walk(child);
+    };
+    walk(node);
+    return parts.join('').trim();
+}
 function parseLockHandle(xml) {
     try {
         const root = parseXml(xml);
-        return childText(root, 'LOCK_HANDLE') ?? childText(root, 'lockHandle') ?? undefined;
+        // ABAP backends commonly nest the handle under <asx:abap><asx:values>
+        // <LOCK_HANDLE>…</LOCK_HANDLE>, so search the whole tree (not only direct
+        // children) and also accept an attribute on the root element.
+        const nested = findTextDeep(root, 'LOCK_HANDLE') ?? findTextDeep(root, 'lockHandle');
+        if (nested)
+            return nested;
+        const attr = root.attributes['lockHandle'] ?? root.attributes['LOCK_HANDLE'];
+        return attr ?? undefined;
     }
     catch {
         return undefined;
@@ -1231,7 +1549,11 @@ function parseLockHandle(xml) {
 function parseLockTransport(xml) {
     try {
         const root = parseXml(xml);
-        return childText(root, 'CORRNR') ?? undefined;
+        const nested = findTextDeep(root, 'CORRNR') ?? findTextDeep(root, 'corrNr');
+        if (nested)
+            return nested;
+        const attr = root.attributes['corrNr'] ?? root.attributes['CORRNR'];
+        return attr ?? undefined;
     }
     catch {
         return undefined;
@@ -1254,10 +1576,10 @@ function parseActivationResult(xml) {
             const severity = severityOf(attr(msg, 'type'));
             const parsed = {
                 severity,
-                text: childText(msg, 'shortText') ?? childText(msg, 'text') ?? '',
+                text: deepText(child(msg, 'shortText') ?? child(msg, 'text') ?? msg) || '',
                 id: attr(msg, 'id'),
                 code: attr(msg, 'code'),
-                longText: childText(msg, 'longText'),
+                longText: deepText(child(msg, 'longText') ?? msg) || undefined,
                 line: attr(msg, 'line') ? Number(attr(msg, 'line')) : undefined,
                 offset: attr(msg, 'offset') ? Number(attr(msg, 'offset')) : undefined,
             };
@@ -1303,19 +1625,19 @@ function collectMessages(root) {
             const severity = severityOf(attr(el, 'type'));
             out.push({
                 severity,
-                text: childText(el, 'shortText') ?? childText(el, 'text') ?? '',
+                text: deepText(child(el, 'shortText') ?? child(el, 'text') ?? el) || '',
                 id: attr(el, 'id'),
                 code: attr(el, 'code'),
-                longText: childText(el, 'longText'),
+                longText: deepText(child(el, 'longText') ?? el) || undefined,
             });
         }
         for (const el of children(node, 'message')) {
             out.push({
                 severity: severityOf(attr(el, 'type')),
-                text: childText(el, 'shortText') ?? childText(el, 'text') ?? '',
+                text: deepText(child(el, 'shortText') ?? child(el, 'text') ?? el) || '',
                 id: attr(el, 'id'),
                 code: attr(el, 'code'),
-                longText: childText(el, 'longText'),
+                longText: deepText(child(el, 'longText') ?? el) || undefined,
             });
         }
         for (const childNode of node.children)
@@ -1421,6 +1743,19 @@ function isAtcRunComplete(xml) {
     }
 }
 // --- Unit result (JUnit XML) ------------------------------------------------
+/** All descendant elements with the given local name, in document order. */
+function descendantsByName(root, name) {
+    const out = [];
+    const walk = (el) => {
+        for (const c of el.children) {
+            if (c.name === name)
+                out.push(c);
+            walk(c);
+        }
+    };
+    walk(root);
+    return out;
+}
 function parseUnitRunResult(xml) {
     let root;
     try {
@@ -1499,6 +1834,74 @@ function parseUnitRunResult(xml) {
                 });
             }
             classes.push({ className, status: failed > 0 ? 'FAILED' : errors > 0 ? 'ERROR' : 'PASSED', tests });
+        }
+    }
+    else if (root.name === 'runResult') {
+        // Legacy synchronous result (aunit:runResult, ns http://www.sap.com/adt/aunit,
+        // BASIS < 7.5x): programs → testClasses → testMethods. A method's verdict
+        // is carried by nested aunit:alert elements (kind/severity/title/text) —
+        // no alerts means the method passed. Element/attribute names mirror the
+        // official ADT client's AbapUnitResponseXmlDeserializer.
+        for (const classEl of descendantsByName(root, 'testClass')) {
+            const className = attr(classEl, 'name') ?? '';
+            const tests = [];
+            const methods = descendantsByName(classEl, 'testMethod');
+            const methodAlerts = new Set();
+            for (const m of methods) {
+                for (const a of descendantsByName(m, 'alert'))
+                    methodAlerts.add(a);
+                const alerts = descendantsByName(m, 'alert');
+                const failed = alerts.some((a) => {
+                    const s = (attr(a, 'severity') ?? attr(a, 'kind') ?? '').toLowerCase();
+                    return s === 'fatal' || s === 'critical' || s === 'error';
+                });
+                const first = alerts[0];
+                const title = first ? attr(first, 'title') ?? '' : '';
+                const body = first ? (first.text || attr(first, 'text') || '') : '';
+                const message = [title, body].filter(Boolean).join(': ') || undefined;
+                const durationRaw = attr(m, 'duration') ?? attr(m, 'executionTime');
+                const unitAttr = (attr(m, 'unit') ?? '').toLowerCase();
+                const durationNum = durationRaw ? Number(durationRaw) || 0 : 0;
+                const durationMs = unitAttr.startsWith('sec') ? Math.round(durationNum * 1000) : Math.round(durationNum);
+                tests.push({
+                    className,
+                    methodName: attr(m, 'name') ?? '',
+                    status: failed ? 'FAILED' : 'PASSED',
+                    durationMs,
+                    message,
+                });
+            }
+            // Alerts directly on the test class (e.g. syntax errors in the test
+            // include) surface as an ERROR entry when no method could run.
+            const classAlerts = descendantsByName(classEl, 'alert').filter((a) => !methodAlerts.has(a));
+            if (classAlerts.length > 0 && methods.length === 0) {
+                const first = classAlerts[0];
+                const title = attr(first, 'title') ?? '';
+                const body = first.text || attr(first, 'text') || '';
+                tests.push({
+                    className,
+                    methodName: '(class alert)',
+                    status: 'ERROR',
+                    durationMs: 0,
+                    message: [title, body].filter(Boolean).join(': ') || undefined,
+                });
+            }
+            for (const t of tests) {
+                total++;
+                if (t.status === 'PASSED')
+                    passed++;
+                else if (t.status === 'SKIPPED' || t.status === 'DISABLED')
+                    skipped++;
+                else if (t.status === 'ERROR')
+                    errors++;
+                else
+                    failed++;
+            }
+            classes.push({
+                className,
+                status: tests.some((t) => t.status === 'ERROR') ? 'ERROR' : tests.some((t) => t.status === 'FAILED') ? 'FAILED' : 'PASSED',
+                tests,
+            });
         }
     }
     else {
@@ -1791,6 +2194,23 @@ function parseCreatedUri(xml) {
     catch {
         return undefined;
     }
+}
+/** Object URI by convention for a freshly created object (fallback when the
+ * backend returns no Location header / body, e.g. minimal ADT profiles). */
+function uriForCreated(type, name) {
+    const cat = type.split('/')[0];
+    const map = {
+        CLAS: '/sap/bc/adt/oo/classes/',
+        INTF: '/sap/bc/adt/oo/interfaces/',
+        PROG: '/sap/bc/adt/programs/programs/',
+        FUNC: '/sap/bc/adt/fugr/',
+        DDLS: '/sap/bc/adt/ddls/sources/',
+        TABL: '/sap/bc/adt/ddic/tables/',
+        STRU: '/sap/bc/adt/ddic/structures/',
+        MSAG: '/sap/bc/adt/msgclass/',
+        DEVC: '/sap/bc/adt/packages/',
+    };
+    return `${map[cat] ?? '/sap/bc/adt/repository/objects/'}${name.toLowerCase()}`;
 }
 // --- Transports -------------------------------------------------------------
 /**

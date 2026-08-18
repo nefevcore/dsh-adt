@@ -2,6 +2,7 @@
   "name": "dsh-abap-adt",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@11.21.0",
   "description": "ABAP Development Tools (ADT) protocol client + DeepSeek Harness plugin: agent-native SAP ABAP access with features beyond VS Code ADT.",
   "type": "module",
   "workspaces": [
@@ -18,8 +19,8 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "@abap-adt/mock": "workspace:*",
-    "@abap-adt/protocol": "workspace:*",
+    "@nefevcore/abap-adt-mock": "workspace:*",
+    "@nefevcore/abap-adt-protocol": "workspace:*",
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.0.0",

@@ -1,0 +1,94 @@
+/**
+ * Persistent lock ledger — the plugin's memory of every ADT edit lock it has
+ * acquired (per destination), so a later session can release locks left behind
+ * by crashed or interrupted tool calls via `adt_unlock_all`.
+ *
+ * SAP ADT only returns a lock handle at LOCK time. If the process dies between
+ * LOCK and UNLOCK (or a create auto-locks without returning a handle), the
+ * enqueue lock survives on the backend and blocks later edits (HTTP 403 EU510)
+ * until it is removed in SM12. Recording every acquired lock (and every object
+ * a create may have auto-locked) in a file that survives process restarts gives
+ * `adt_unlock_all` the object URIs (and handles when known) to clean up.
+ *
+ * The ledger file lives under `${DSH_HOME:-<homedir>/.dsh}/abap-adt-locks.json`
+ * — one file per machine, so any session on the same host can clean up after
+ * any other. All mutations are fire-and-forget (never fail a tool because the
+ * ledger could not be persisted).
+ */
+import { randomUUID } from 'node:crypto';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+/** Resolve the ledger file path (never throws). */
+export function ledgerFilePath() {
+    try {
+        const base = process.env.DSH_HOME || join(homedir(), '.dsh');
+        return join(base, 'abap-adt-locks.json');
+    }
+    catch {
+        return join('.', 'abap-adt-locks.json');
+    }
+}
+export class LockLedger {
+    entries = [];
+    file;
+    constructor(file = ledgerFilePath()) {
+        this.file = file;
+        this.load();
+    }
+    load() {
+        try {
+            if (existsSync(this.file)) {
+                const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
+                if (Array.isArray(parsed.entries))
+                    this.entries = parsed.entries;
+            }
+        }
+        catch {
+            // Corrupt/unreadable ledger → start empty; never crash the plugin.
+            this.entries = [];
+        }
+    }
+    persist() {
+        try {
+            mkdirSync(dirname(this.file), { recursive: true });
+            writeFileSync(this.file, JSON.stringify({ version: 1, entries: this.entries }, null, 2), 'utf8');
+        }
+        catch {
+            // Fire-and-forget: an unwritable ledger must not break tool calls.
+        }
+    }
+    /** Record a lock we acquired (or an object a create may have auto-locked). */
+    register(entry) {
+        const full = {
+            ...entry,
+            id: randomUUID(),
+            acquiredAt: new Date().toISOString(),
+        };
+        // Keep one entry per (destination, uri) — a re-lock replaces the old one.
+        this.entries = this.entries.filter((e) => !(e.destination === entry.destination && e.uri === entry.uri));
+        this.entries.push(full);
+        this.persist();
+        return full;
+    }
+    /** Drop the entry for a released lock. */
+    deregister(destination, uri) {
+        const before = this.entries.length;
+        this.entries = this.entries.filter((e) => !(e.destination === destination && e.uri === uri));
+        if (this.entries.length !== before)
+            this.persist();
+    }
+    /** Every recorded lock for a destination. */
+    forDestination(destination) {
+        return this.entries.filter((e) => e.destination === destination);
+    }
+    /** The recorded handle for one object (undefined when unknown). */
+    handleFor(destination, uri) {
+        return this.entries.find((e) => e.destination === destination && e.uri === uri)?.handle;
+    }
+    /** All entries (for reporting). */
+    all() {
+        return [...this.entries];
+    }
+}
+//# sourceMappingURL=locks.js.map

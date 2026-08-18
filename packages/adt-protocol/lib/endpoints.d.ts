@@ -84,12 +84,33 @@ export declare const ENDPOINTS: {
     readonly nodeStructure: (query?: AdtQueryParams) => string;
     /** Activate a list of objects (POST + `method=activate`). */
     readonly activation: (query?: AdtQueryParams) => string;
+    /**
+     * Activation — compatibility path used by older / restricted backends
+     * (e.g. abapGit-era "Compatibility" ADT profiles, NW 7.4x). The service is
+     * registered under `/sap/bc/adt/activation` instead of
+     * `/sap/bc/adt/repository/activation` there; the official Eclipse/VS Code
+     * ADT client falls back to it automatically.
+     */
+    readonly activationCompatibility: (query?: AdtQueryParams) => string;
     /** Check run (syntax / ATC reporters). */
     readonly checkRuns: (query?: AdtQueryParams) => string;
     /** ABAP Unit run collection (start + poll). */
     readonly unitRuns: (query?: AdtQueryParams) => string;
     /** ABAP Unit results. */
     readonly unitResults: (query?: AdtQueryParams) => string;
+    /**
+     * ABAP Unit run collection — legacy synchronous path (BASIS < 7.5x).
+     *
+     * Old / restricted backends never shipped the async run API: `POST
+     * /abapunit/runs` is 404 there. They expose only `/abapunit/testruns`,
+     * which executes the run synchronously and returns `aunit:runResult`
+     * (namespace `http://www.sap.com/adt/aunit`) directly in the POST response
+     * — no run id, no polling. Verified on a real NW 7.4x system (D01) and
+     * matching the official Eclipse/VS Code ADT client, whose `com.sap.adt.abapunit`
+     * bundle posts `aunit:runConfiguration` here with plain `application/xml`
+     * (see `AbapUnitRequestContentHandlerV1`).
+     */
+    readonly unitTestRunsLegacy: (query?: AdtQueryParams) => string;
     /** ATC run collection (start + poll). */
     readonly atcRuns: (query?: AdtQueryParams) => string;
     /** ATC results. */
@@ -112,6 +133,10 @@ export declare const ENDPOINTS: {
     };
     /** Source access for an object: `<uri>/source/main`. */
     readonly objectSource: (objectUri: string, query?: AdtQueryParams) => string;
+    /** Modern deletion service (POST + `del:deletionRequest` body). */
+    readonly deletion: (query?: AdtQueryParams) => string;
+    /** Deletion pre-check service. */
+    readonly deletionCheck: (query?: AdtQueryParams) => string;
     /** System time / ping (lightweight reachability probe). */
     readonly systemTime: () => string;
 };

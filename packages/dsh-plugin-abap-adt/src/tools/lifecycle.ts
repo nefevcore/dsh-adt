@@ -2,7 +2,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
 import { resolveObjects, resolvePackageName, typeLabel } from '../resolve.js';
 import { AdtPolicyError } from '../policy.js';
-import type { AdtObjectRef } from '@abap-adt/protocol';
+import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 
 export function lifecycleTools(deps: ToolDeps) {
   const { registry, policy } = deps;

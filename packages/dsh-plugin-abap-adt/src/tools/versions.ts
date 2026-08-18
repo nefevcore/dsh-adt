@@ -3,6 +3,7 @@
  * version (or two past versions), returning a unified diff. Read-only.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import { AdtError } from '@nefevcore/abap-adt-protocol';
 import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
 
@@ -169,7 +170,18 @@ export function versionTools(deps: ToolDeps) {
           type: typeof args.type === 'string' ? args.type : undefined,
         });
 
-        const versions = await entry.client.getVersions(ref.uri);
+        let versions;
+        try {
+          versions = await entry.client.getVersions(ref.uri);
+        } catch (error) {
+          if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+            throw new Error(
+              `Version history is not available for ${ref.name} on this backend (HTTP ${error.status}); ` +
+                'cannot compute a version diff. Export the source (adt_export_objects) and diff locally instead.',
+            );
+          }
+          throw error;
+        }
         const byId = (id: string) =>
           versions.find(
             (v) =>
