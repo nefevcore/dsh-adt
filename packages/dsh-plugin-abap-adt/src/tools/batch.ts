@@ -149,16 +149,18 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
         return text(lines.join('\n'));
       },
     },
-    execute: async (args) => {
+    timeoutMs: 960_000,
+    execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
       const packageName = String(args.packageName);
       const maxObjects = Math.min(Number(args.maxObjects ?? 50), 200);
-      const members = await entry.client.packageContent(packageName);
+      const members = await entry.client.packageContent(packageName, { signal: exec.signal });
       const refs = members.slice(0, maxObjects);
 
       // ATC over all members.
       const atc = await entry.client.runAtc(refs, {
         variant: typeof args.atcVariant === 'string' ? args.atcVariant : undefined,
+        signal: exec.signal,
       });
 
       // ABAP Unit: focus on test classes (name contains '~test' or starts with 'ltcl_'), fall back to all.
@@ -176,7 +178,7 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
           (r) => r.name.includes('~TEST') || r.name.toLowerCase().startsWith('ltcl_') || r.name.toUpperCase().startsWith('LTCL_'),
         );
         if (testRefs.length > 0) {
-          const result = await entry.client.runUnitTests(testRefs);
+          const result = await entry.client.runUnitTests(testRefs, { signal: exec.signal });
           unit = {
             success: result.success,
             total: result.total,
@@ -268,6 +270,7 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
           ].join('\n'),
         ),
     },
+    timeoutMs: 600_000,
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
       const fs = ctx.fs;
@@ -289,16 +292,16 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
       }
 
       const targetDir = String(args.targetDir);
-      await fs.resolve(targetDir);
+      await fs.resolve(targetDir, { signal: exec.signal });
 
       let refs: AdtObjectRef[];
       if (typeof args.packageName === 'string' && args.packageName) {
-        const members = await entry.client.packageContent(args.packageName);
+        const members = await entry.client.packageContent(args.packageName, { signal: exec.signal });
         refs = members.slice(0, Math.min(Number(args.maxObjects ?? 100), 500));
       } else if (Array.isArray(args.objects) && args.objects.length > 0) {
         refs = [];
         for (const o of args.objects as Array<{ name: string; type?: string }>) {
-          refs.push(await resolveObject(entry.client, { name: o.name, type: o.type }));
+          refs.push(await resolveObject(entry.client, { name: o.name, type: o.type }, 10, exec.signal));
         }
       } else {
         throw new Error('adt_export_objects: provide either `packageName` or `objects`');
@@ -308,9 +311,9 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
       let failed = 0;
       for (const ref of refs) {
         try {
-          const parsed = await entry.client.readSource(ref.uri);
+          const parsed = await entry.client.readSource(ref.uri, { signal: exec.signal });
           const fileName = exportFileName(ref);
-          const fileTarget = await fs.resolve(fileName, { cwd: targetDir });
+          const fileTarget = await fs.resolve(fileName, { cwd: targetDir, signal: exec.signal });
           await fs.writeText(fileTarget, parsed.source, undefined, exec.signal, sandboxPolicy);
           files.push({ name: fileName, path: fileName, chars: parsed.source.length });
         } catch (error) {

@@ -59,6 +59,7 @@ export function policyTools(deps) {
                     return text(lines.join('\n'));
                 },
             },
+            isConcurrencySafe: () => true,
             execute: async () => policy.describe(),
         }),
     ];

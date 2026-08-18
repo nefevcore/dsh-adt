@@ -3,6 +3,25 @@ import { AdtError } from '@nefevcore/abap-adt-protocol';
 import { DESTINATION_PARAM, destinationOf, text } from './common.js';
 import { resolveObject, resolvePackageName, refFromName, typeLabel } from '../resolve.js';
 import { AdtPolicyError } from '../policy.js';
+/** Upper bound for read-card metadata lines; larger sources fall back to the
+ * generic card instead of persisting a second copy of a huge source. */
+const READ_META_MAX_LINES = 2000;
+function readPresentationMeta(value) {
+    const source = value.source ?? '';
+    const rawLines = source.split('\n');
+    if (rawLines.length > READ_META_MAX_LINES)
+        return null;
+    // A trailing newline yields one phantom empty line — do not number it.
+    const count = source.endsWith('\n') ? rawLines.length - 1 : rawLines.length;
+    const shortType = value.type.split('/')[0]?.toLowerCase() ?? 'object';
+    return {
+        path: `${value.name.toLowerCase()}.${shortType}.abap`,
+        offset: 1,
+        lines: rawLines.slice(0, count).map((l, i) => ({ number: i + 1, text: l })),
+        totalLines: count,
+        lang: 'abap',
+    };
+}
 export function sourceTools(deps, ctx) {
     const { registry, policy, ledger } = deps;
     /** True when the backend answers GET on the object URI (object exists). */
@@ -125,15 +144,31 @@ export function sourceTools(deps, ctx) {
             ]
                 .filter((l) => l !== '')
                 .join('\n')),
+            presentationMeta: (_args, value) => readPresentationMeta(value),
         },
-        execute: async (args) => {
+        presentResult: (_args, result) => {
+            const meta = result.meta;
+            if (!meta || !Array.isArray(meta.lines))
+                return undefined; // replay of an old/absent shape
+            return {
+                card: 'read',
+                title: meta.path,
+                path: meta.path,
+                offset: meta.offset,
+                lines: meta.lines,
+                totalLines: meta.totalLines,
+                lang: meta.lang,
+            };
+        },
+        isConcurrencySafe: () => true,
+        execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
             const ref = await resolveObject(entry.client, {
                 objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
                 name: typeof args.name === 'string' ? args.name : undefined,
                 type: typeof args.type === 'string' ? args.type : undefined,
-            });
-            const parsed = await entry.client.readSource(ref.uri);
+            }, 10, exec.signal);
+            const parsed = await entry.client.readSource(ref.uri, { signal: exec.signal });
             const properties = {};
             for (const p of parsed.properties)
                 properties[p.key] = p.value;
@@ -184,15 +219,15 @@ export function sourceTools(deps, ctx) {
             },
             render: (_args, value) => text(`${value.name} (${value.uri}): source ${value.updated ? 'updated' : 'NOT updated'}${value.unlocked === false ? ' (still locked)' : ''}`),
         },
-        execute: async (args) => {
+        execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
             const ref = await resolveObject(entry.client, {
                 objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
                 name: typeof args.name === 'string' ? args.name : undefined,
                 type: typeof args.type === 'string' ? args.type : undefined,
-            });
+            }, 10, exec.signal);
             // Permission check: package whitelist + transportable-edit rule.
-            const packageName = await resolvePackageName(entry.client, ref, typeof args.packageName === 'string' ? args.packageName : undefined);
+            const packageName = await resolvePackageName(entry.client, ref, typeof args.packageName === 'string' ? args.packageName : undefined, exec.signal);
             if (!packageName) {
                 throw new AdtPolicyError('allowedPackages', `adt_write_object: cannot determine the package of ${ref.name} for the permission check; ` +
                     'pass `packageName` explicitly or read the object first');
@@ -200,14 +235,14 @@ export function sourceTools(deps, ctx) {
             policy.assertEditAllowed(packageName, 'adt_write_object');
             const unlock = args.unlock !== false;
             let unlocked = false;
-            const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri);
+            const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri, { signal: exec.signal });
             ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: assignedTransport });
             try {
                 // The backend may auto-assign a transport request on lock (CORRNR);
                 // it must be within allowedTransports or the edit is rolled back.
                 policy.assertTransportUsage(assignedTransport, `adt_write_object (${ref.name})`);
                 const src = await resolveSourceInput(args);
-                await entry.client.writeSource(ref.uri, src, { lockHandle: handle, transport: assignedTransport ?? undefined });
+                await entry.client.writeSource(ref.uri, src, { lockHandle: handle, transport: assignedTransport ?? undefined, signal: exec.signal });
                 if (unlock) {
                     await entry.client.unlock(ref.uri, handle).catch(() => undefined);
                     ledger.deregister(entry.config.name, ref.uri);
@@ -290,14 +325,14 @@ export function sourceTools(deps, ctx) {
                 `${value.activated ? ' · activated' : ''}` +
                 `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}`),
         },
-        execute: async (args) => {
+        execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
             const ref = await resolveObject(entry.client, {
                 objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
                 name: typeof args.name === 'string' ? args.name : undefined,
                 type: typeof args.type === 'string' ? args.type : undefined,
-            });
-            const packageName = await resolvePackageName(entry.client, ref, typeof args.packageName === 'string' ? args.packageName : undefined);
+            }, 10, exec.signal);
+            const packageName = await resolvePackageName(entry.client, ref, typeof args.packageName === 'string' ? args.packageName : undefined, exec.signal);
             if (!packageName) {
                 throw new AdtPolicyError('allowedPackages', `adt_edit_object: cannot determine the package of ${ref.name} for the permission check; ` +
                     'pass `packageName` explicitly or read the object first');
@@ -314,15 +349,15 @@ export function sourceTools(deps, ctx) {
             let activated = false;
             let activationResult;
             let replaced;
-            const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri);
+            const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri, { signal: exec.signal });
             ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: assignedTransport });
             try {
                 policy.assertTransportUsage(assignedTransport, `adt_edit_object (${ref.name})`);
-                const current = (await entry.client.readSource(ref.uri)).source;
+                const current = (await entry.client.readSource(ref.uri, { signal: exec.signal })).source;
                 replaced = replaceSourceBlock(current, startText, endText, replacement);
-                await entry.client.writeSource(ref.uri, replaced.full, { lockHandle: handle, transport: assignedTransport ?? undefined });
+                await entry.client.writeSource(ref.uri, replaced.full, { lockHandle: handle, transport: assignedTransport ?? undefined, signal: exec.signal });
                 if (args.activate === true) {
-                    const act = await entry.client.activate([ref], { transport: assignedTransport ?? undefined });
+                    const act = await entry.client.activate([ref], { transport: assignedTransport ?? undefined, signal: exec.signal });
                     activated = act.success;
                     activationResult = {
                         success: act.success,
@@ -403,7 +438,7 @@ export function sourceTools(deps, ctx) {
                 ...value.messages.map((m) => `  ${m.severity}: ${m.text}`),
             ].join('\n')),
         },
-        execute: async (args) => {
+        execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
             const packageName = String(args.packageName ?? '$TMP').toUpperCase();
             // Permission check: package whitelist + transportable-edit rule.
@@ -421,7 +456,7 @@ export function sourceTools(deps, ctx) {
                         description: String(args.description ?? ''),
                         packageName,
                         transport: typeof args.transport === 'string' ? args.transport : undefined,
-                    });
+                    }, { signal: exec.signal });
                 }
                 catch (error) {
                     // Minimal ADT profiles (e.g. impc-dev) may CREATE the object but
@@ -519,20 +554,20 @@ export function sourceTools(deps, ctx) {
             },
             render: (_args, value) => text(`${value.uri}: ${value.deleted ? 'deleted' : 'NOT deleted'}`),
         },
-        execute: async (args) => {
+        execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
             const ref = await resolveObject(entry.client, {
                 objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
                 name: typeof args.name === 'string' ? args.name : undefined,
                 type: typeof args.type === 'string' ? args.type : undefined,
-            });
-            const packageName = await resolvePackageName(entry.client, ref, typeof args.packageName === 'string' ? args.packageName : undefined);
+            }, 10, exec.signal);
+            const packageName = await resolvePackageName(entry.client, ref, typeof args.packageName === 'string' ? args.packageName : undefined, exec.signal);
             if (!packageName) {
                 throw new AdtPolicyError('allowedPackages', `adt_delete_object: cannot determine the package of ${ref.name} for the permission check; ` +
                     'pass `packageName` explicitly');
             }
             policy.assertEditAllowed(packageName, 'adt_delete_object');
-            await entry.client.deleteObject(ref.uri);
+            await entry.client.deleteObject(ref.uri, { signal: exec.signal });
             // The object (and any lock on it) is gone — drop the ledger entry.
             ledger.deregister(entry.config.name, ref.uri);
             return { uri: ref.uri, deleted: true };

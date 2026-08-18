@@ -61,15 +61,16 @@ export function whereUsedTools(deps) {
                     return text(lines.join('\n'));
                 },
             },
-            execute: async (args) => {
+            isConcurrencySafe: () => true,
+            execute: async (args, exec) => {
                 const entry = registry.require(destinationOf(args));
                 const ref = await resolveObject(entry.client, {
                     objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
                     name: typeof args.name === 'string' ? args.name : undefined,
                     type: typeof args.type === 'string' ? args.type : undefined,
-                });
+                }, 10, exec.signal);
                 try {
-                    const result = await entry.client.getWhereUsed(ref.uri, { enableAllTypes: args.enableAllTypes === true });
+                    const result = await entry.client.getWhereUsed(ref.uri, { enableAllTypes: args.enableAllTypes === true, signal: exec.signal });
                     return {
                         objectUri: ref.uri,
                         totalReferences: result.totalReferences,

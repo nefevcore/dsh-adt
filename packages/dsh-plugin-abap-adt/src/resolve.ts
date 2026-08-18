@@ -61,6 +61,7 @@ export async function resolveObject(
   client: AdtClient,
   input: { objectUri?: string; name?: string; type?: string },
   maxResults = 10,
+  signal?: AbortSignal,
 ): Promise<AdtObjectRef> {
   if (input.objectUri) {
     const uri = input.objectUri.startsWith('/sap/bc/adt')
@@ -75,7 +76,7 @@ export async function resolveObject(
   if (t.uriPrefix) {
     return { uri: `${t.uriPrefix}${name.toLowerCase()}`, type: t.type, name, category: t.type.split('/')[0] };
   }
-  const hits = await client.searchObjects(name, { maxResults });
+  const hits = await client.searchObjects(name, { maxResults, signal });
   const exact = hits.find((h) => h.objectName.toUpperCase() === name);
   const hit: AdtObjectSearchHit | undefined = exact ?? hits[0];
   if (hit) {
@@ -93,10 +94,11 @@ export async function resolveObject(
 export async function resolveObjects(
   client: AdtClient,
   inputs: Array<{ objectUri?: string; name?: string; type?: string }>,
+  signal?: AbortSignal,
 ): Promise<AdtObjectRef[]> {
   const refs: AdtObjectRef[] = [];
   for (const input of inputs) {
-    refs.push(await resolveObject(client, input));
+    refs.push(await resolveObject(client, input, 10, signal));
   }
   return refs;
 }
@@ -112,10 +114,11 @@ export async function resolvePackageName(
   client: AdtClient,
   ref: AdtObjectRef,
   hint?: string,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   if (hint && hint.trim().length > 0) return hint.trim().toUpperCase();
   try {
-    const hits = await client.searchObjects(ref.name, { maxResults: 10 });
+    const hits = await client.searchObjects(ref.name, { maxResults: 10, signal });
     const exact = hits.find((h) => h.objectName.toUpperCase() === ref.name.toUpperCase());
     const pkg = exact?.packageName ?? hits[0]?.packageName;
     return pkg ? pkg.toUpperCase() : undefined;

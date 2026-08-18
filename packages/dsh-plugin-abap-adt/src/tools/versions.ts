@@ -3,6 +3,7 @@
  * version (or two past versions), returning a unified diff. Read-only.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import type { JsonValue } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
 import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
@@ -80,6 +81,38 @@ export function unifiedDiff(from: string, to: string, context = 3): string {
     }
   }
   return out.join('\n') + '\n';
+}
+
+
+/** Char budget per side for diff-card metadata; larger sources fall back to the
+ * generic card (the unified-diff text stays model-visible either way). */
+const DIFF_META_MAX_CHARS = 100_000;
+
+interface DiffMeta {
+  kind: 'diff';
+  path: string;
+  oldText: string | null;
+  newText: string;
+}
+
+function diffPresentationMeta(value: {
+  objectUri: string;
+  identical: boolean;
+  from: { label: string; source: string };
+  to: { label: string; source: string };
+}): DiffMeta | null {
+  if (value.identical) return null; // nothing to render as a change
+  if (value.from.source.length > DIFF_META_MAX_CHARS || value.to.source.length > DIFF_META_MAX_CHARS) {
+    return null;
+  }
+  const name = value.objectUri.split('/').pop() ?? value.objectUri;
+  const short = (label: string) => label.split('/').pop() ?? label;
+  return {
+    kind: 'diff',
+    path: `${name.toLowerCase()} (${short(value.from.label)} -> ${short(value.to.label)})`,
+    oldText: value.from.source,
+    newText: value.to.source,
+  };
 }
 
 export function versionTools(deps: ToolDeps) {
@@ -161,18 +194,31 @@ export function versionTools(deps: ToolDeps) {
             `Diff of ${value.objectUri} (${value.from.label} -> ${value.to.label}):\n${value.diff}`,
           );
         },
+        presentationMeta: (_args, value) =>
+          (diffPresentationMeta(value) as DiffMeta | null) as unknown as JsonValue,
       },
-      execute: async (args) => {
+      presentResult: (_args, result) => {
+        // Replay the diff card from persisted metadata; identical/oversized
+        // results have no meta and fall back to the generic presentation.
+        const meta = result.meta as DiffMeta | undefined;
+        if (!meta || meta.kind !== 'diff' || typeof meta.oldText !== 'string') return undefined;
+        return {
+          card: 'diff',
+          diffs: [{ path: meta.path, oldText: meta.oldText, newText: meta.newText }],
+        };
+      },
+      isConcurrencySafe: () => true,
+      execute: async (args, exec) => {
         const entry = registry.require(destinationOf(args));
         const ref = await resolveObject(entry.client, {
           objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
           name: typeof args.name === 'string' ? args.name : undefined,
           type: typeof args.type === 'string' ? args.type : undefined,
-        });
+        }, 10, exec.signal);
 
         let versions;
         try {
-          versions = await entry.client.getVersions(ref.uri);
+          versions = await entry.client.getVersions(ref.uri, { signal: exec.signal });
         } catch (error) {
           if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
             throw new Error(
@@ -195,11 +241,11 @@ export function versionTools(deps: ToolDeps) {
         if (typeof args.versionFrom === 'string' && args.versionFrom) {
           const v = byId(args.versionFrom);
           if (!v?.contentUri) throw new Error(`adt_version_diff: version '${args.versionFrom}' not found in history`);
-          from = { label: v.versionId, source: await entry.client.getVersionSource(v.contentUri) };
+          from = { label: v.versionId, source: await entry.client.getVersionSource(v.contentUri, { signal: exec.signal }) };
         } else {
           const latest = versions[0];
           if (!latest?.contentUri) throw new Error('adt_version_diff: no version history available for this object');
-          from = { label: latest.versionId, source: await entry.client.getVersionSource(latest.contentUri) };
+          from = { label: latest.versionId, source: await entry.client.getVersionSource(latest.contentUri, { signal: exec.signal }) };
         }
 
         // Compare side: explicit version or the active source.
@@ -207,9 +253,9 @@ export function versionTools(deps: ToolDeps) {
         if (typeof args.versionTo === 'string' && args.versionTo && args.versionTo !== 'active') {
           const v = byId(args.versionTo);
           if (!v?.contentUri) throw new Error(`adt_version_diff: version '${args.versionTo}' not found in history`);
-          to = { label: v.versionId, source: await entry.client.getVersionSource(v.contentUri) };
+          to = { label: v.versionId, source: await entry.client.getVersionSource(v.contentUri, { signal: exec.signal }) };
         } else {
-          to = { label: 'active', source: (await entry.client.readSource(ref.uri)).source };
+          to = { label: 'active', source: (await entry.client.readSource(ref.uri, { signal: exec.signal })).source };
         }
 
         const identical = from.source === to.source;

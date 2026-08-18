@@ -87,7 +87,8 @@ export function atcRunTools(deps) {
                 }),
             ].join('\n')),
         },
-        execute: async (args) => {
+        isConcurrencySafe: () => true,
+        execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
             const runs = await entry.client.listAtcRuns({
                 createdBy: typeof args.createdBy === 'string' && args.createdBy ? args.createdBy : undefined,
@@ -96,6 +97,7 @@ export function atcRunTools(deps) {
                 central: args.central === true,
                 active: args.active === true,
                 sysId: typeof args.sysId === 'string' ? args.sysId : undefined,
+                signal: exec.signal,
             });
             return {
                 count: runs.length,
@@ -202,10 +204,12 @@ export function atcRunTools(deps) {
                 return text(lines.join('\n'));
             },
         },
-        execute: async (args) => {
+        isConcurrencySafe: () => true,
+        execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
             const result = await entry.client.getAtcResult(String(args.displayId), {
                 includeExemptedFindings: args.includeExemptedFindings === true,
+                signal: exec.signal,
             });
             return {
                 displayId: String(args.displayId),

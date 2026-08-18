@@ -95,12 +95,13 @@ export function lifecycleTools(deps: ToolDeps) {
       ...DESTINATION_PARAM,
     },
     output: activationOutput,
-    execute: async (args) => {
+    execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
       const checkOnly = args.checkOnly === true;
       const refs: AdtObjectRef[] = await resolveObjects(
         entry.client,
         args.objects as Array<{ objectUri?: string; name: string; type?: string; packageName?: string }>,
+        exec.signal,
       );
 
       // Permission checks. checkOnly (syntax pre-audit) changes nothing and is
@@ -115,7 +116,7 @@ export function lifecycleTools(deps: ToolDeps) {
         for (let i = 0; i < refs.length; i++) {
           const ref = refs[i]!;
           const hint = inputs[i]?.packageName;
-          const packageName = await resolvePackageName(entry.client, ref, hint);
+          const packageName = await resolvePackageName(entry.client, ref, hint, exec.signal);
           if (!packageName) {
             throw new AdtPolicyError(
               'allowedPackages',
@@ -133,6 +134,7 @@ export function lifecycleTools(deps: ToolDeps) {
       const result = await entry.client.activate(refs, {
         transport: typeof args.transport === 'string' ? args.transport : undefined,
         checkOnly,
+        signal: exec.signal,
       });
       return {
         success: result.success,
@@ -191,10 +193,11 @@ export function lifecycleTools(deps: ToolDeps) {
           ].join('\n'),
         ),
     },
-    execute: async (args) => {
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
-      const refs = await resolveObjects(entry.client, args.objects as Array<{ objectUri?: string; name: string; type?: string }>);
-      const result = await entry.client.check(refs);
+      const refs = await resolveObjects(entry.client, args.objects as Array<{ objectUri?: string; name: string; type?: string }>, exec.signal);
+      const result = await entry.client.check(refs, { signal: exec.signal });
       return {
         success: result.success,
         messages: result.messages.map((m) => ({

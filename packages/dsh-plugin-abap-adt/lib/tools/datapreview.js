@@ -73,7 +73,8 @@ export function dataPreviewTools(deps) {
                     return text(lines.join('\n'));
                 },
             },
-            execute: async (args) => {
+            isConcurrencySafe: () => true,
+            execute: async (args, exec) => {
                 const entry = registry.require(destinationOf(args));
                 const top = typeof args.top === 'number' ? args.top : undefined;
                 const run = async (fn) => {
@@ -92,7 +93,7 @@ export function dataPreviewTools(deps) {
                 };
                 const sql = typeof args.sql === 'string' ? args.sql.trim() : '';
                 if (sql) {
-                    const result = await run(() => entry.client.runSqlQuery(sql, { top }));
+                    const result = await run(() => entry.client.runSqlQuery(sql, { top, signal: exec.signal }));
                     return {
                         source: 'sql',
                         name: result.name,
@@ -107,7 +108,7 @@ export function dataPreviewTools(deps) {
                 if (!name)
                     throw new Error('adt_data_preview: provide either `name`+`kind` or `sql`');
                 const kind = args.kind === 'cds' ? 'cds' : 'ddic';
-                const result = await run(() => entry.client.dataPreview(name, kind, { top }));
+                const result = await run(() => entry.client.dataPreview(name, kind, { top, signal: exec.signal }));
                 return {
                     source: kind,
                     name,

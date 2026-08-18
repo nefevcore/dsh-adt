@@ -49,14 +49,15 @@ export function lockTools(deps: ToolDeps) {
         );
       },
     },
-    execute: async (args) => {
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
       const ref = await resolveObject(entry.client, {
         objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
         name: typeof args.name === 'string' ? args.name : undefined,
         type: typeof args.type === 'string' ? args.type : undefined,
-      });
-      const info = await entry.client.getObjectLock(ref.uri, ref.type);
+      }, 10, exec.signal);
+      const info = await entry.client.getObjectLock(ref.uri, ref.type, { signal: exec.signal });
       return {
         objectUri: ref.uri,
         locked: info.locked,
@@ -138,13 +139,13 @@ export function lockTools(deps: ToolDeps) {
         return text(lines.join('\n'));
       },
     },
-    execute: async (args) => {
+    execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
       const destination = entry.config.name;
 
       // Candidate URIs: explicit objects + every ledger entry for the destination.
       const explicitInputs = Array.isArray(args.objects) ? (args.objects as Array<{ objectUri?: string; name?: string; type?: string }>) : [];
-      const explicitRefs = explicitInputs.length ? await resolveObjects(entry.client, explicitInputs) : [];
+      const explicitRefs = explicitInputs.length ? await resolveObjects(entry.client, explicitInputs, exec.signal) : [];
       const ledgerEntries = ledger.forDestination(destination);
 
       const candidates = new Map<string, { uri: string; handle?: string; name?: string }>();
@@ -157,7 +158,7 @@ export function lockTools(deps: ToolDeps) {
       const released: Array<{ objectUri: string; note?: string }> = [];
       const failed: Array<{ objectUri: string; reason: string }> = [];
       for (const cand of candidates.values()) {
-        const result = await entry.client.unlockBestEffort(cand.uri, cand.handle);
+        const result = await entry.client.unlockBestEffort(cand.uri, cand.handle, { signal: exec.signal });
         if (result.released) {
           ledger.deregister(destination, cand.uri);
           released.push({ objectUri: cand.uri, note: result.note });

@@ -56,16 +56,17 @@ export function transportTools(deps: ToolDeps) {
         return text(lines.join('\n'));
       },
     },
-    execute: async (args) => {
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
       const ref = await resolveObject(entry.client, {
         objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
         name: typeof args.name === 'string' ? args.name : undefined,
         type: typeof args.type === 'string' ? args.type : undefined,
-      });
+      }, 10, exec.signal);
       let versions;
       try {
-        versions = await entry.client.getVersions(ref.uri);
+        versions = await entry.client.getVersions(ref.uri, { signal: exec.signal });
       } catch (error) {
         if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
           throw new Error(
@@ -167,12 +168,14 @@ export function transportTools(deps: ToolDeps) {
       ...DESTINATION_PARAM,
     },
     output: transportOutput,
-    execute: async (args) => {
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
       policy.assertTransportsEnabled('adt_list_transports');
       const entry = registry.require(destinationOf(args));
       const transports = await entry.client.listTransports({
         allUsers: args.allUsers === true,
         status: typeof args.status === 'string' ? args.status : 'all',
+        signal: exec.signal,
       });
       return {
         transports: transports.map((t) => ({
@@ -242,12 +245,13 @@ export function transportTools(deps: ToolDeps) {
           ].join('\n'),
         ),
     },
-    execute: async (args) => {
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
       policy.assertTransportsEnabled('adt_get_transport');
       const number = String(args.number);
       policy.assertTransportAllowed(number, 'adt_get_transport');
       const entry = registry.require(destinationOf(args));
-      const t = await entry.client.getTransport(number);
+      const t = await entry.client.getTransport(number, { signal: exec.signal });
       return {
         number: t.number,
         description: t.description,
@@ -290,12 +294,12 @@ export function transportTools(deps: ToolDeps) {
       },
       render: (_args, value) => text(`${value.number}: ${value.released ? 'released' : 'release failed'}${value.status ? ` (status ${value.status})` : ''}`),
     },
-    execute: async (args) => {
+    execute: async (args, exec) => {
       policy.assertTransportsEnabled('adt_release_transport');
       const number = String(args.number);
       policy.assertTransportAllowed(number, 'adt_release_transport');
       const entry = registry.require(destinationOf(args));
-      const t = await entry.client.releaseTransport(number);
+      const t = await entry.client.releaseTransport(number, { signal: exec.signal });
       return { number: t.number, released: !t.modifiable, status: t.status };
     },
   });
