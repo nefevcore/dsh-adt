@@ -10,7 +10,7 @@
 │  │  ├─ AdtRegistry ── 多目的地注册表                     │  │
 │  │  │   ├─ demo → 进程内 Mock ADT 服务器 (node:http)    │  │
 │  │  │   └─ dev/prod → AdtClient ×N                      │  │
-│  │  └─ ctx.tools.register(28 × adt_* 工具)              │  │
+│  │  └─ ctx.tools.register(30 × adt_* 工具)              │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                           │                                │
 │                    adt_* 工具调用                           │
@@ -42,18 +42,18 @@
 
 ## 关键设计决策
 
-1. **直接实现协议，而非桥接 VS Code**：不依赖 IDE 或 SAP 闭源库，可 headless 运行，天然支持批量与自动化
-2. **零配置 demo**：插件内置 mock 服务器，开箱即用；真实系统通过 `destinations` 配置接入
+1. **直接实现协议，而非桥接任何 IDE**：不依赖 IDE 或 SAP 闭源库，可 headless 运行，天然支持批量与自动化
+2. **零配置 demo**：插件内置 mock 服务器，开箱即用；真实系统通过 `destinations` 配置接入（`configFile` 外部文件 `${DSH_HOME:-~/.dsh}/abap-adt.yml`，分层就近覆盖：内联 config > 外部文件 > `SAP_*` 环境变量 > 默认值；`destinations` 按名字合并）
 3. **异步 run 流程**：ABAP Unit / ATC 都是"提交 → 轮询 → 取结果"，客户端完整实现轮询循环与超时
 4. **协议正确性优先**：错误处理覆盖 ADT 特有语义（激活错误在 200 body、exc:exception 错误体、403 CSRF/锁冲突区分、412 ETag）
 5. **沙箱感知**：导出工具走 `ctx.fs` 服务，遵守 DSH 文件沙箱策略
 6. **权限管控（fail-closed）**：修改类工具先过策略再动 SAP；后端在 lock 时自动分配的传输号（CORRNR）同样受 `allowedTransports` 约束，不匹配即回滚；包名无法确定时拒绝而不是放行
 
-## 超集功能（Beyond VS Code ADT）
+## 批量与门禁功能（代理尺度）
 
 | 工具 | 价值 |
 |---|---|
-| `adt_batch_checks` | 一次调用对整个开发包跑 ATC + ABAP Unit，产出聚合质量报告——VS Code 只能逐对象操作 |
+| `adt_batch_checks` | 一次调用对整个开发包跑 ATC + ABAP Unit，产出聚合质量报告 |
 | `adt_release_gate` | 预发布门禁：一次跑完语法 + ABAP Unit + ATC，输出 go/no-go，验证通过才 release |
 | `adt_export_objects` | 把包/对象集源码落盘为 `.abap` 文件（带类型后缀，abaplint 兼容），支持 git 版本化、离线评审、备份 |
 | `adt_local_check` | 导出源码后离线跑 abaplint（语法 + lint 规则），秒级反馈——「先本地验证，再一次性推送 SAP」 |

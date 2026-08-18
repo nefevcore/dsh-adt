@@ -1,172 +1,84 @@
 # dsh-abap-adt — ABAP Development Tools for DeepSeek Harness
 
+[![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
+[![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
+[![tests](https://img.shields.io/badge/tests-86-brightgreen)](#测试)
+[![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
+
+> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **30 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport*, plus agent-scale batch capabilities (whole-package quality reports, local export, offline abaplint, release gates). Ships with a zero-config mock server, so you can try everything without an SAP system.
+
 在 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 上直接访问 SAP ABAP 系统的插件与协议客户端。
 
-本插件**直接实现 SAP ADT（ABAP Development Tools）REST 协议**（`/sap/bc/adt`），不依赖任何 SAP 闭源库，也不需要 VS Code / Eclipse。AI 代理获得了一整套 `adt_*` 原生工具，可以自主完成搜索 → 阅读 → 修改 → 激活 → 测试 → 传输的完整开发闭环，并提供了超越 VS Code ADT 交互式工作流的批量能力。
+本插件**直接实现 SAP ADT（ABAP Development Tools）REST 协议**（`/sap/bc/adt`），不依赖任何 SAP 闭源库，也无需任何 IDE（headless 运行）。AI 代理获得了一整套 `adt_*` 原生工具，可以自主完成搜索 → 阅读 → 修改 → 激活 → 测试 → 传输的完整开发闭环，并提供代理尺度的批量能力（整包质量报告、源码导出、离线检查、发布门禁）。
 
-## 安装（npm）
+> 🔎 **找 DSH 插件？** 本仓库已打上 GitHub Topic [`dsh-plugin`](https://github.com/topics/dsh-plugin)（另见 [`deepseek-harness`](https://github.com/topics/deepseek-harness)）；npm 上检索关键词 `dsh-plugin` 也能找到本插件。
 
-三个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-dsh-plugin` DSH 插件）：
+## 安装与更新
+
+安装和更新只支持 **dsh CLI** 一种方式（要求 pnpm 在 PATH）。三个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-dsh-plugin` DSH 插件）：
 
 ```bash
-cd ~/.dsh/profiles && npm install @nefevcore/abap-adt-dsh-plugin
+# 安装（装进 web profile）
+dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin
+
+# 更新到最新版
+dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin
+
+# 或锁定指定版本
+dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.1.0
 ```
 
-然后在 agent preset 或 `cordis.patch.yml` 中加一行 `name: '@nefevcore/abap-adt-dsh-plugin'`（完整步骤见[插件 README](packages/dsh-plugin-abap-adt/README.md)）。不想走 npm 的话还有单文件 bundle 方式，见 [SHARING.md](SHARING.md)。
+DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新后重启 DSH 生效**（改完配置同理）。
 
-## 为什么比 VS Code ADT 更强
+包内声明了 `dsh.bundle.patch`（`cordis.patch.yml`），安装后自动成为 profile 的 bundle 层（默认 `demo: true`，全局生效）。安装不会创建任何 agent 预设（要按会话隔离工具集，见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md) 模板）；连接真实系统的 `destinations` 与权限开关放在外部配置文件 `~/.dsh/abap-adt.yml`（见下方「配置分层」）。
 
-| 能力 | VS Code ADT 扩展 | 本插件 (dsh-abap-adt) |
-|---|---|---|
-| 使用方式 | 交互式 IDE，人工逐对象操作 | **代理原生**：AI 自主编排多步开发流程 |
-| 批量代码分析 | 无（单对象 ATC） | `adt_batch_checks`：一次对整个包的 ATC + ABAP Unit 聚合质量报告 |
-| 传输自动化 | 手动右键操作 | `adt_list_transports` / `adt_get_transport` / `adt_release_transport` |
-| 本地版本化 | 仅虚拟文件系统 | `adt_export_objects`：把对象源码落盘为 `.abap` 文件（git 化/备份/离线评审） |
-| 本地静态检查 | 无 | `adt_local_check`：导出源码后离线跑 abaplint（语法 + lint），验证通过再一次性推送 SAP |
-| 全链路自动化 | 无 | search → read → write → activate → test → transport 由 AI 一条龙完成 |
-| 工作流编排 | 无 | 可配合 DSH 的 `workflow`/`subagent` 做大规模多目标分析 |
-| 定时任务 | 无 | 可配合 `dsh-schedule` 做夜间 ATC/质量巡检 |
-| 上手门槛 | 需要配 VS Code + 扩展 | **零配置 demo 模式**：内置 mock ADT 服务器，无需任何 SAP 系统即可端到端体验 |
+## 核心能力
 
-## 项目结构
-
-```
-adt/
-├── packages/
-│   ├── adt-protocol/            # @nefevcore/abap-adt-protocol — 纯 TS 的 ADT 协议客户端
-│   │   └── src/
-│   │       ├── client.ts        # AdtClient：认证/CSRF/session/搜索/源码/激活/单测/ATC/传输
-│   │       ├── endpoints.ts     # 端点与媒体类型目录
-│   │       ├── xml.ts           # 零依赖 XML 解析器（ADT 载荷专用）
-│   │       └── types.ts         # 协议类型
-│   ├── adt-mock/                # @nefevcore/abap-adt-mock — 内存版 ADT 服务器（测试/demo）
-│   │   └── src/
-│   │       ├── server.ts        # Mock 端点实现（发现/搜索/锁/激活/单测/ATC/传输/创建）
-│   │       ├── data.ts          # 示例对象（类/接口/程序/CDS/单测/ATC 数据）
-│   │       └── cli.ts           # 独立启动：pnpm mock
-│   └── dsh-plugin-abap-adt/     # @nefevcore/abap-adt-dsh-plugin — DSH (Cordis) 插件
-│       ├── cordis.patch.yml     # bundle 层声明（dsh.bundle.patch）
-│       └── src/
-│           ├── index.ts         # 插件入口：注册 30 个 adt_* 工具
-│           ├── config.ts        # schemastery 配置 schema（含权限策略键）
-│           ├── registry.ts      # 多目的地注册表 + demo mock 生命周期
-│           ├── policy.ts        # 权限策略（权限管控）：glob 匹配 / SAP_* 环境变量 / 规则断言
-│           ├── resolve.ts       # 对象名/类型 → ADT URI 解析（含包名解析）
-│           └── tools/           # 工具实现（system/search/source/lifecycle/testing/transport/packages/batch/policy）
-├── docs/                        # 文档（协议笔记、架构、SAP 连接指南）
-└── .research/                   # 协议调研原始资料（社区仓库克隆与笔记）
-```
-
-## 工具清单（30 个 `adt_*` 工具）
-
-**系统与连接**
-- `adt_list_destinations` — 列出已配置的 SAP 目标及连通性
-- `adt_system_info` — 系统 ID / 版本 / ABAP Cloud 状态 / feature flags
-- `adt_ping` — 可达性与认证探测
-- `adt_permissions` — 查看当前生效的权限策略（权限管控）：传输开关 / 允许的传输号 / 可传输编辑 / 允许的包
-
-**搜索与浏览**
-- `adt_search` — 对象搜索 + 源码全文搜索（quickSearch / objectSearch / quickSearchSource）
-- `adt_package_content` — 包的直接成员列表
-- `adt_where_used` — 影响分析：谁引用了/依赖该对象（usageReferences，改代码前评估爆炸半径）
-
-**对象操作**
-- `adt_read_object` — 读取对象源码与元数据
-- `adt_write_object` — 锁定 → 写入 → 解锁 原子更新
-- `adt_edit_object` — 只替换源码中「起始行 → 结束行」之间的一个代码块（方法/FORM/函数模块/MODULE），不必整对象上传
-- `adt_create_object` — 创建类/接口/程序/CDS/表/结构/消息类/函数组/包（`$TMP` 免传输；创建后自动清理后端残留锁）
-- `adt_delete_object` — 删除对象（优先现代 deletion 服务，回退 `_action=DELETE`）
-- `adt_activate` — 激活（支持传输号、check-only 预审）
-- `adt_check` — 语法/一致性检查（check run，不激活）
-- `adt_lock_info` — 只读查询对象锁状态（谁持有编辑锁，写之前先查）
-- `adt_unlock_all` — **解锁工具**：释放本插件曾获取的残留编辑锁（持久锁账本跨会话），避免锁残留只能 SM12 删
-
-**测试与质量**
-- `adt_run_unit_tests` — ABAP Unit（异步 run 流程，JUnit 结果解析）
-- `adt_run_atc` — ABAP Test Cockpit（异步 run，checkstyle 结果解析）
-- `adt_list_atc_runs` — 列出系统上已存储的 ATC run（按创建者/时间/central/active 过滤）
-- `adt_get_atc_result` — 按 displayId 取回单个 ATC run 的完整结果（findings/严重级别/源码位置/聚合计数）
-- `adt_batch_checks` — **超集功能**：整包 ATC + 单测聚合质量报告
-- `adt_release_gate` — **超集功能**：一次跑完 语法+单测+ATC，输出 go/no-go 预发布质量门禁
-
-**数据预览**
-- `adt_data_preview` — 表/CDS 内容查询与 freestyle SQL（Data Preview API，改完数据层直接验证；⚠️ BTP 上表预览被禁，CDS/SQL 可用）
-
-**本地检查（离线，超集功能）**
-- `adt_local_check` — 用 [abaplint](https://github.com/abaplint/abaplint) 对本地 `.abap` 源码跑静态检查（语法 + lint 规则），零 SAP 依赖、秒级反馈；配合 `adt_export_objects` 实现「导出 → 本地验证 → 修复 → 一次性推送 SAP」。真实 ATC 无法离线运行（检查在后端），abaplint 是其本地替身
-
-**传输**
-- `adt_list_transports` / `adt_get_transport` / `adt_release_transport`
-- `adt_object_versions` — 对象版本历史（Atom feed），只读地映射 对象 → 传输请求（无需加锁）
-- `adt_version_diff` — 当前 vs 历史版本 unified diff（评审/回滚前看改动）
-
-**本地化**
-- `adt_export_objects` — **超集功能**：对象源码导出到本地目录（沙箱感知；文件名带类型后缀如 `zcl_demo.clas.abap`，可直接喂给 `adt_local_check`）
+- **代理原生工具**：30 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **批量代码分析**：`adt_batch_checks` 一次对整个包跑 ATC + ABAP Unit 聚合质量报告
+- **传输自动化**：`adt_list_transports` / `adt_get_transport` / `adt_release_transport`
+- **本地版本化**：`adt_export_objects` 把对象源码落盘为 `.abap` 文件（git 化/备份/离线评审）
+- **本地静态检查**：`adt_local_check` 导出源码后离线跑 abaplint（语法 + lint），验证通过再一次性推送 SAP
+- **全链路自动化**：search → read → write → activate → test → transport 由 AI 一条龙完成
+- **工作流编排**：可配合 DSH 的 `workflow`/`subagent` 做大规模多目标分析
+- **定时任务**：可配合 `dsh-schedule` 做夜间 ATC/质量巡检
+- **零配置 demo 模式**：内置 mock ADT 服务器，无需任何 SAP 系统即可端到端体验
 
 ## 快速开始
 
-### 1. 构建
-
-```bash
-corepack pnpm install --registry https://registry.npmmirror.com   # 国内镜像
-corepack pnpm build
-corepack pnpm test        # 65 个测试（20 集成 + 6 传输解析 + 17 策略 + 5 XML + 8 本地检查 + 6 版本 diff + 3 门禁）
-```
-
-### 2. 安装到 DSH（agent preset 方式，推荐）
-
-插件以 **agent preset** 安装：`adt_*` 工具**只出现在用该预设创建的会话里**，其他工作区/会话完全不受影响（作用域为 `agent → preset → global`，最近者遮蔽最远者）。
-
-1. 新建预设目录 `~/.dsh/.agent-presets/abap-adt/`，放入 `agent.cordis.yml`——**基于官方 `cordis` 预设完整复制，再在末尾追加插件行**（预设决定会话的整套工具，不能只放插件一行）：
-
-```yaml
-# agent.cordis.yml —— 追加在官方 cordis 预设全部行之后
-- id: abap-adt
-  name: 'file:///C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/packages/dsh-plugin-abap-adt/lib/index.js'
-  config:
-    demo: true
-    demoPort: 8123
-    defaultDestination: demo
-    destinations: []   # 真实 SAP 系统见下方「连接真实 SAP 系统」
-```
-
-2. 可选：同目录 `preset.yml` 写显示名，如 `name: ABAP 开发`
-3. **重启 DSH**（`scripts/restart-dsh-web.ps1` 或重新执行 `npx @deepseek-ai/dsh web`）；新建会话时在工作区选择旁预设 chip 选该预设 → 该会话才有 `adt_*` 工具
-
-本机已配置好该预设（`~/.dsh/.agent-presets/abap-adt/`，含 demo/权限管控/真实系统配置），新建会话直接选「ABAP 开发」即可。
-
-> ⚠️ **插件代码变更后必须重启 DSH**。HMR 只能重跑配置、不能更新已缓存的库模块——本插件以 file URL 加载，Node 的 ESM 缓存会钉住 `@nefevcore/abap-adt-protocol`、`@nefevcore/abap-adt-mock` 与 `tools/*` 的旧代码。**不要**依赖"改配置热更新代码"。
-
-> 备选（全局安装，不推荐用于隔离场景）：以 pnpm 依赖解析方式装进 profile 即所有会话可见——
->
-> ```bash
-> # 从本仓库根目录执行（相对路径会被锚定到当前目录）
-> corepack pnpm --dir ~/.dsh/profiles/web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/packages/dsh-plugin-abap-adt
-> # 或通过 dsh CLI（要求 pnpm 在 PATH）
-> dsh plugin --profile web add link:C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/packages/dsh-plugin-abap-adt
-> ```
-
-### 3. 体验（零 SAP 系统）
-
-插件默认 `demo: true`：进程内启动 mock ADT 服务器并注册 `demo` 目的地。直接对代理说：
+安装并重启 DSH 后，插件默认 `demo: true`（进程内 mock ADT 服务器，`demo` 目的地）。直接对代理说：
 
 > 列出 ADT 目的地 → 搜索 ZCL_DEMO → 读取其源码 → 修改它 → 激活 → 跑它的单元测试和 ATC → 导出整个 ZPACK_DEMO 包到本地 → 本地静态检查导出的源码
 
-### 4. 连接真实 SAP 系统
-
-编辑预设文件 `~/.dsh/.agent-presets/abap-adt/agent.cordis.yml` 中插件行的 `destinations`，增加条目（改完重启 DSH）：
+连真实系统：把 [`presets/abap-adt.example/abap-adt.yml.example`](presets/abap-adt.example/abap-adt.yml.example) 复制为 `~/.dsh/abap-adt.yml` 并填入目的地（改完重启 DSH）：
 
 ```yaml
-    destinations:
-      - name: dev
-        url: https://sap.example.com:443     # ABAP 前端的 HTTP(S) 地址
-        client: '100'                        # 集团
-        language: EN
-        username: DEVELOPER
-        passwordEnv: ADT_DEV_PASSWORD        # 从环境变量读密码（推荐）
+defaultDestination: dev
+destinations:
+  - name: dev
+    url: https://sap.example.com:443     # ABAP 前端的 HTTP(S) 地址
+    client: '100'                        # 集团
+    language: EN
+    username: DEVELOPER
+    passwordEnv: ADT_DEV_PASSWORD        # 从环境变量读密码（推荐）
+    strictSSL: false                     # 自签名证书（SAP 内网常见）时必须关
 ```
 
-密码解析优先级：`config.password` > `passwordEnv` 指定变量 > `ADT_<NAME>_PASSWORD` > `ADT_PASSWORD`。**切勿把密码写进配置文件。**
+### 配置分层（config layering）
+
+连接与权限等环境信息放独立的外部文件，不写进预设/patch；生效值**就近覆盖**：
+
+```
+① 预设/patch 中插件行的内联 config          （agent.cordis.yml / cordis.patch.yml）
+② 外部配置文件 configFile                   （默认自动发现 ~/.dsh/abap-adt.yml）
+③ SAP_* 环境变量                            （仅权限四开关）
+④ 内置默认                                   （demo 开、8123、defaultDestination=demo、无目的地）
+```
+
+- `configFile` 未显式配置时自动发现 `${DSH_HOME:-~/.dsh}/abap-adt.yml`；配置后以它为准（`~` 会展开，相对路径锚定到 dsh home）
+- `destinations` 按名字合并：内联同名条目覆盖文件条目，其余追加——随包发布的 `destinations: []` 永远不会挡住外部文件
+- 外部文件写错键名会**明确报错**（含文件路径与未知键名），YAML 语法错误同理；显式指定的 `configFile` 不存在则告警并回退内联配置
+- 密码解析优先级：`config.password` > `passwordEnv` 指定变量 > `ADT_<NAME>_PASSWORD` > `ADT_PASSWORD`。**切勿把密码写进配置文件。**
 
 认证说明：
 - **on-prem 经典 ABAP**：Basic Auth（支持自签名证书时设 `strictSSL: false`）
@@ -176,7 +88,7 @@ corepack pnpm test        # 65 个测试（20 集成 + 6 传输解析 + 17 策�
 
 所有会**修改 SAP 系统状态**的工具（`adt_write_object` / `adt_create_object` / `adt_delete_object` / `adt_activate` / 传输工具族）在执行前都会经过一层权限策略（`src/policy.ts`），不满足即抛 `[POLICY]` 错误并指明具体规则。只读工具（搜索/读取/检查/测试/ATC/导出）不受限制。
 
-四个独立开关，生效值优先级为 **config（预设 `agent.cordis.yml` 中插件行的 config）> `SAP_*` 环境变量 > 内置默认值**：
+四个独立开关，生效值优先级为 **config（内联 `agent.cordis.yml`/`cordis.patch.yml` 插件行 > 外部 `~/.dsh/abap-adt.yml`）> `SAP_*` 环境变量 > 内置默认值**：
 
 | 开关 | config 键 | 环境变量 | 默认 | 含义 |
 |---|---|---|---|---|
@@ -214,23 +126,16 @@ corepack pnpm test        # 65 个测试（20 集成 + 6 传输解析 + 17 策�
 
 ## 测试
 
-- `packages/adt-protocol/test/xml.test.ts` — XML 解析器单测
-- `packages/adt-mock/test/integration.test.ts` — 客户端 ↔ mock 端到端（认证/发现/搜索/读/写/锁/激活/检查/单测/ATC/传输/包/创建/删除/ATC run/where-used/数据预览/版本源码/锁状态，18 项全绿）
-- `packages/adt-protocol/test/transports.test.ts` — 传输请求与版本历史（Atom feed）解析（6 项）
-- `packages/dsh-plugin-abap-adt/test/policy.test.ts` — 权限策略单测（17 项）
-- `packages/dsh-plugin-abap-adt/test/local_check.test.ts` — abaplint 本地检查（文件名推断/语法错误/自定义配置/severity 过滤，8 项）
-- `packages/dsh-plugin-abap-adt/test/versions.test.ts` — 版本 diff（行 diff/unified hunk，6 项）
-- `packages/dsh-plugin-abap-adt/test/gate.test.ts` — 发布门禁聚合（3 项）
-- `packages/adt-protocol/test/xml.test.ts` — XML 解析器单测（5 项）
+共 **86 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、abaplint 本地检查、版本 diff、发布门禁、配置分层。
 
 ## 路线图（可扩展方向）
 
-- JWT/OAuth2（ABAP Cloud）认证支持
-- where-used / 依赖分析工具
+- JWT/OAuth2（ABAP Cloud / BTP 服务键）认证支持——`auth` 类型扩展点已预留，目前仅 `'basic'`
 - ABAP Debugger REST API 工具（断点/栈/变量）
-- 数据预览（Data Preview）SQL 查询工具
-- 对象结构 / 版本历史（versions）工具
 - RAP 对象（BDEF/DDLX/SRVD）专项工具
+- ATC 豁免/基线（exemptions）管理
+
+> 已落地（早期路线图项）：`adt_where_used`（影响分析）、`adt_data_preview`（CDS/SQL 数据预览）、`adt_object_versions` / `adt_version_diff`（版本历史与 diff）、`adt_lock_info` / `adt_unlock_all`（锁状态查询与残留锁清理）。
 
 ## 许可证
 
