@@ -39,6 +39,17 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 
 System/permission settings live in the `abap-adt:` section of `${DSH_HOME:-~/.dsh}/settings.yaml` (the DSH settings user layer): edits hot-apply without restarting DSH.
 
+### Upgrading from 0.1.0
+
+0.2.0 activates nothing by default (the global bundle layer auto-drops via reconcile) and moved config into settings, so two one-time steps after updating:
+
+```bash
+dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin
+dsh plugin --profile web exec abap-adt-preset --force   # rebuild the preset (add --force over a 0.1.0-era manual one)
+```
+
+Then merge `~/.dsh/abap-adt.yml` (the deprecated 0.1.0 config file) into the `abap-adt:` section of `~/.dsh/settings.yaml` — indent every key two spaces — and delete the old file (it warns until removed). Restart DSH once and pick the preset on new sessions.
+
 ### Enable per session (agent preset — the intended way)
 
 After installing, generate the preset with the bundled CLI:
