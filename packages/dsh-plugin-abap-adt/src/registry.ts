@@ -1,6 +1,6 @@
 import { AdtClient, type AdtDestination } from '@nefevcore/abap-adt-protocol';
 import { createMockAdtServer } from '@nefevcore/abap-adt-mock';
-import type { PluginConfig } from './config.js';
+import type { DestinationConfig, EffectiveConfig, PluginConfig } from './config.js';
 import { resolvePassword } from './config.js';
 import { AdtPolicy } from './policy.js';
 
@@ -29,7 +29,8 @@ export class AdtRegistry {
     this.policy = policy;
   }
 
-  static async create(config: PluginConfig): Promise<AdtRegistry> {
+  /** Accepts the fully-resolved config from `resolveEffectiveConfig`. */
+  static async create(config: EffectiveConfig): Promise<AdtRegistry> {
     const registry = new AdtRegistry(AdtPolicy.resolve(config));
     if (config.demo) {
       await registry.startMock(config.demoPort);
@@ -91,7 +92,7 @@ export class AdtRegistry {
     });
   }
 
-  private add(dest: PluginConfig['destinations'][number]): void {
+  private add(dest: DestinationConfig): void {
     const password = resolvePassword(dest);
     const adtDest: AdtDestination = {
       name: dest.name,
@@ -113,14 +114,26 @@ export class AdtRegistry {
 
   defaultName = 'demo';
 
-  /** Get a client by destination name; falls back to the default. */
+  /** Get a client by destination name; empty/undefined uses the default. */
   require(name?: string): RegistryDestination {
-    const key = name && this.destinations.has(name) ? name : this.defaultName;
-    const entry = this.destinations.get(key);
+    // An explicitly-given name MUST exist: silently falling back to the
+    // default destination would point a typo at the wrong SAP system.
+    if (name) {
+      const named = this.destinations.get(name);
+      if (!named) {
+        const availableNames = [...this.destinations.keys()].join(', ') || '(none)';
+        throw new Error(
+          `Unknown ADT destination '${name}'. Configured destinations: ${availableNames}. ` +
+            'Pass no `destination` to use the default, or fix the name in the tool call / plugin config.',
+        );
+      }
+      return named;
+    }
+    const entry = this.destinations.get(this.defaultName);
     if (!entry) {
       const available = [...this.destinations.keys()].join(', ') || '(none)';
       throw new Error(
-        `No ADT destination '${key}'. Configured destinations: ${available}. ` +
+        `No ADT destination '${this.defaultName}' (default). Configured destinations: ${available}. ` +
           'Add one via the plugin config (cordis.patch.yml) or enable demo mode.',
       );
     }
@@ -128,10 +141,10 @@ export class AdtRegistry {
   }
 
   /** Probe every destination; updates cached status. */
-  async pingAll(): Promise<Array<{ name: string; mock: boolean; ok: boolean; detail: string }>> {
+  async pingAll(signal?: AbortSignal): Promise<Array<{ name: string; mock: boolean; ok: boolean; detail: string }>> {
     const results = [];
     for (const [name, entry] of this.destinations) {
-      const status = await entry.client.ping();
+      const status = await entry.client.ping({ signal });
       entry.status = { ...status, checkedAt: new Date().toISOString() };
       results.push({ name, mock: entry.mock, ok: status.ok, detail: status.detail ?? '' });
     }
@@ -148,4 +161,4 @@ export class AdtRegistry {
 }
 
 /** Not used at runtime; exported for tool typing. */
-export type { PluginConfig };
+export type { PluginConfig, EffectiveConfig, DestinationConfig };

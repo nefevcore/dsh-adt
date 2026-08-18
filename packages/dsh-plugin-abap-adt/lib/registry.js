@@ -16,6 +16,7 @@ export class AdtRegistry {
     constructor(policy) {
         this.policy = policy;
     }
+    /** Accepts the fully-resolved config from `resolveEffectiveConfig`. */
     static async create(config) {
         const registry = new AdtRegistry(AdtPolicy.resolve(config));
         if (config.demo) {
@@ -99,22 +100,32 @@ export class AdtRegistry {
         });
     }
     defaultName = 'demo';
-    /** Get a client by destination name; falls back to the default. */
+    /** Get a client by destination name; empty/undefined uses the default. */
     require(name) {
-        const key = name && this.destinations.has(name) ? name : this.defaultName;
-        const entry = this.destinations.get(key);
+        // An explicitly-given name MUST exist: silently falling back to the
+        // default destination would point a typo at the wrong SAP system.
+        if (name) {
+            const named = this.destinations.get(name);
+            if (!named) {
+                const availableNames = [...this.destinations.keys()].join(', ') || '(none)';
+                throw new Error(`Unknown ADT destination '${name}'. Configured destinations: ${availableNames}. ` +
+                    'Pass no `destination` to use the default, or fix the name in the tool call / plugin config.');
+            }
+            return named;
+        }
+        const entry = this.destinations.get(this.defaultName);
         if (!entry) {
             const available = [...this.destinations.keys()].join(', ') || '(none)';
-            throw new Error(`No ADT destination '${key}'. Configured destinations: ${available}. ` +
+            throw new Error(`No ADT destination '${this.defaultName}' (default). Configured destinations: ${available}. ` +
                 'Add one via the plugin config (cordis.patch.yml) or enable demo mode.');
         }
         return entry;
     }
     /** Probe every destination; updates cached status. */
-    async pingAll() {
+    async pingAll(signal) {
         const results = [];
         for (const [name, entry] of this.destinations) {
-            const status = await entry.client.ping();
+            const status = await entry.client.ping({ signal });
             entry.status = { ...status, checkedAt: new Date().toISOString() };
             results.push({ name, mock: entry.mock, ok: status.ok, detail: status.detail ?? '' });
         }

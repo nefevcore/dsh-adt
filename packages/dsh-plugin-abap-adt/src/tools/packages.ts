@@ -51,9 +51,10 @@ export function packageTools(deps: ToolDeps) {
             ].join('\n'),
           ),
       },
-      execute: async (args) => {
+      isConcurrencySafe: () => true,
+      execute: async (args, exec) => {
         const entry = registry.require(destinationOf(args));
-        const refs = await entry.client.packageContent(String(args.packageName));
+        const refs = await entry.client.packageContent(String(args.packageName), { signal: exec.signal });
         return {
           packageName: String(args.packageName),
           count: refs.length,

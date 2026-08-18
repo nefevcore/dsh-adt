@@ -91,10 +91,11 @@ export function testingTools(deps: ToolDeps) {
         return text(lines.join('\n'));
       },
     },
-    execute: async (args) => {
+    timeoutMs: 330_000,
+    execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
-      const refs: AdtObjectRef[] = await resolveObjects(entry.client, args.objects as Array<{ objectUri?: string; name: string; type?: string }>);
-      const result = await entry.client.runUnitTests(refs);
+      const refs: AdtObjectRef[] = await resolveObjects(entry.client, args.objects as Array<{ objectUri?: string; name: string; type?: string }>, exec.signal);
+      const result = await entry.client.runUnitTests(refs, { signal: exec.signal });
       return {
         success: result.success,
         overall: result.overall,
@@ -200,10 +201,14 @@ export function testingTools(deps: ToolDeps) {
         return text(lines.join('\n'));
       },
     },
-    execute: async (args) => {
+    timeoutMs: 660_000,
+    execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
-      const refs = await resolveObjects(entry.client, args.objects as Array<{ objectUri?: string; name: string; type?: string }>);
-      const result = await entry.client.runAtc(refs, { variant: typeof args.variant === 'string' ? args.variant : undefined });
+      const refs = await resolveObjects(entry.client, args.objects as Array<{ objectUri?: string; name: string; type?: string }>, exec.signal);
+      const result = await entry.client.runAtc(refs, {
+        variant: typeof args.variant === 'string' ? args.variant : undefined,
+        signal: exec.signal,
+      });
       return {
         clean: result.clean,
         findings: result.findings.map((f) => ({

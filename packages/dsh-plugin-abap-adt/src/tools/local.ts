@@ -26,16 +26,16 @@ export interface FsReader {
 }
 
 /** Adapter over the DSH filesystem service — reads stay sandbox-aware like adt_export_objects. */
-export function fsReaderFromCtx(fs: FileSystem): FsReader {
+export function fsReaderFromCtx(fs: FileSystem, signal?: AbortSignal): FsReader {
   return {
     async readDir(absPath) {
-      const target = await fs.resolve(absPath);
-      const entries = await fs.listDir(target);
+      const target = await fs.resolve(absPath, { signal });
+      const entries = await fs.listDir(target, signal);
       return entries.map((e) => ({ name: e.name, type: e.type }));
     },
     async readFile(absPath) {
-      const target = await fs.resolve(absPath);
-      return fs.readText(target);
+      const target = await fs.resolve(absPath, { signal });
+      return fs.readText(target, signal);
     },
   };
 }
@@ -339,7 +339,8 @@ export function localTools(_deps: ToolDeps, ctx: Context) {
         },
         render: (args, value: LocalCheckResult) => text(renderLocalCheck(args ?? {}, value)),
       },
-      execute: async (args) => {
+      timeoutMs: 300_000,
+      execute: async (args, exec) => {
         const fs = ctx.fs;
         if (!fs) throw new Error('adt_local_check requires the dsh filesystem service');
         return runLocalCheck(String(args.dir), {
@@ -347,7 +348,7 @@ export function localTools(_deps: ToolDeps, ctx: Context) {
           maxFiles: typeof args.maxFiles === 'number' ? args.maxFiles : undefined,
           maxIssues: typeof args.maxIssues === 'number' ? args.maxIssues : undefined,
           configPath: typeof args.configPath === 'string' && args.configPath ? args.configPath : undefined,
-        }, fsReaderFromCtx(fs));
+        }, fsReaderFromCtx(fs, exec.signal));
       },
     }),
   ];

@@ -71,17 +71,18 @@ export function gateTools(deps) {
                     return text(lines.join('\n'));
                 },
             },
-            execute: async (args) => {
+            timeoutMs: 1_200_000,
+            execute: async (args, exec) => {
                 const entry = registry.require(destinationOf(args));
                 const cap = Math.min(Math.max(Number(args.maxObjects ?? 100), 1), 500);
                 let refs;
                 if (typeof args.packageName === 'string' && args.packageName) {
-                    refs = (await entry.client.packageContent(args.packageName.toUpperCase(), { maxResults: cap })).slice(0, cap);
+                    refs = (await entry.client.packageContent(args.packageName.toUpperCase(), { maxResults: cap, signal: exec.signal })).slice(0, cap);
                 }
                 else if (Array.isArray(args.objects) && args.objects.length > 0) {
                     refs = [];
                     for (const o of args.objects) {
-                        refs.push(await resolveObject(entry.client, { name: o.name, type: o.type }));
+                        refs.push(await resolveObject(entry.client, { name: o.name, type: o.type }, 10, exec.signal));
                     }
                 }
                 else {
@@ -93,7 +94,7 @@ export function gateTools(deps) {
                 const variant = typeof args.variant === 'string' && args.variant ? args.variant : undefined;
                 const stages = [];
                 if (wanted.has('syntax')) {
-                    const check = await entry.client.check(refs);
+                    const check = await entry.client.check(refs, { signal: exec.signal });
                     const errors = check.messages.filter((m) => m.severity === 'E' || m.severity === 'A');
                     stages.push({
                         stage: 'syntax',
@@ -102,7 +103,7 @@ export function gateTools(deps) {
                     });
                 }
                 if (wanted.has('unit')) {
-                    const unit = await entry.client.runUnitTests(refs);
+                    const unit = await entry.client.runUnitTests(refs, { signal: exec.signal });
                     stages.push({
                         stage: 'unit',
                         pass: unit.success,
@@ -110,7 +111,7 @@ export function gateTools(deps) {
                     });
                 }
                 if (wanted.has('atc')) {
-                    const atc = await entry.client.runAtc(refs, { variant });
+                    const atc = await entry.client.runAtc(refs, { variant, signal: exec.signal });
                     stages.push({
                         stage: 'atc',
                         pass: atc.clean,

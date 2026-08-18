@@ -1,5 +1,53 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import type { JsonValue, ToolResultView } from '@deepseek-ai/dsh-tools';
 import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
+
+/** Upper bound for presentation metadata: past this the UI falls back to the
+ * generic card rather than persisting a huge copy of the search result. */
+const SEARCH_META_MAX_ENTRIES = 500;
+
+/** Project an adt_search value into search-card metadata (see presentation.d.ts). */
+export function searchPresentationMeta(value: {
+  query: string;
+  count: number;
+  objects: Array<{ objectName: string; type: string; uri: string }>;
+  sources: Array<{ objectName: string; type: string; uri: string; line: string; lineNumber?: number }>;
+}): ToolResultView | undefined {
+  // (returned as JsonValue at the presentationMeta seam below)
+  const total = Math.max(value.count, value.objects.length + value.sources.length);
+  const retained = value.objects.length + value.sources.length;
+  if (retained > SEARCH_META_MAX_ENTRIES) return undefined;
+  // Source-text hits render as grouped line matches; object-name hits render as
+  // a flat path list. Both keep the capped/total signal honest for the UI.
+  if (value.sources.length > 0) {
+    const byObject = new Map<string, Array<{ lineNumber: number; line: string }>>();
+    for (const s of value.sources) {
+      const key = `${s.objectName} (${s.type})`;
+      const matches = byObject.get(key) ?? [];
+      matches.push({ lineNumber: s.lineNumber ?? 0, line: s.line });
+      byObject.set(key, matches);
+    }
+    return {
+      card: 'search',
+      shape: 'matches',
+      title: `ABAP search "${value.query}"`,
+      files: [...byObject.entries()].map(([path, matches]) => ({ path, matches })),
+      truncated: value.count > retained,
+      total,
+    };
+  }
+  if (value.objects.length > 0) {
+    return {
+      card: 'search',
+      shape: 'paths',
+      title: `ABAP search "${value.query}"`,
+      paths: value.objects.map((o) => `${o.objectName} (${o.type})`),
+      truncated: value.count > retained,
+      total,
+    };
+  }
+  return undefined;
+}
 
 export function searchTools(deps: ToolDeps) {
   const { registry } = deps;
@@ -104,13 +152,25 @@ export function searchTools(deps: ToolDeps) {
           }
           return text(lines.join('\n'));
         },
+        presentationMeta: (_args, value) =>
+          // `null` (legal JsonValue) when the result needs no search card —
+          // presentResult falls back to the generic presentation for it.
+          (searchPresentationMeta(value as Parameters<typeof searchPresentationMeta>[0]) ?? null) as JsonValue,
       },
-      execute: async (args) => {
+      presentResult: (_args, result) => {
+        // presentationMeta returned a ready search view; replay it verbatim.
+        // (Soft-validated: an obsolete logged shape falls back to generic.)
+        const meta = result.meta as ToolResultView | undefined;
+        return meta && typeof meta === 'object' && 'card' in meta && meta.card === 'search' ? meta : undefined;
+      },
+      isConcurrencySafe: () => true,
+      execute: async (args, exec) => {
         const entry = registry.require(destinationOf(args));
         const result = await entry.client.search(String(args.query ?? ''), {
           operation: (args.operation as 'quickSearch' | 'objectSearch' | 'quickSearchSource') ?? 'quickSearch',
           maxResults: Math.min(Number(args.maxResults ?? 25), 100),
           objectType: typeof args.objectType === 'string' ? args.objectType : undefined,
+          signal: exec.signal,
         });
         return result;
       },

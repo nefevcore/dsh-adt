@@ -52,7 +52,7 @@ export function refFromName(name, type) {
  *   - otherwise `name` (+ optional `type`) is resolved by search, preferring
  *     an exact name match; falls back to the by-convention URI.
  */
-export async function resolveObject(client, input, maxResults = 10) {
+export async function resolveObject(client, input, maxResults = 10, signal) {
     if (input.objectUri) {
         const uri = input.objectUri.startsWith('/sap/bc/adt')
             ? input.objectUri
@@ -67,7 +67,7 @@ export async function resolveObject(client, input, maxResults = 10) {
     if (t.uriPrefix) {
         return { uri: `${t.uriPrefix}${name.toLowerCase()}`, type: t.type, name, category: t.type.split('/')[0] };
     }
-    const hits = await client.searchObjects(name, { maxResults });
+    const hits = await client.searchObjects(name, { maxResults, signal });
     const exact = hits.find((h) => h.objectName.toUpperCase() === name);
     const hit = exact ?? hits[0];
     if (hit) {
@@ -81,10 +81,10 @@ export async function resolveObject(client, input, maxResults = 10) {
     return refFromName(name, t.type);
 }
 /** Resolve a list of refs; one bad entry fails the whole call loudly. */
-export async function resolveObjects(client, inputs) {
+export async function resolveObjects(client, inputs, signal) {
     const refs = [];
     for (const input of inputs) {
-        refs.push(await resolveObject(client, input));
+        refs.push(await resolveObject(client, input, 10, signal));
     }
     return refs;
 }
@@ -95,11 +95,11 @@ export async function resolveObjects(client, inputs) {
  * Returns `undefined` when the package cannot be determined — callers must
  * fail closed (deny) in that case.
  */
-export async function resolvePackageName(client, ref, hint) {
+export async function resolvePackageName(client, ref, hint, signal) {
     if (hint && hint.trim().length > 0)
         return hint.trim().toUpperCase();
     try {
-        const hits = await client.searchObjects(ref.name, { maxResults: 10 });
+        const hits = await client.searchObjects(ref.name, { maxResults: 10, signal });
         const exact = hits.find((h) => h.objectName.toUpperCase() === ref.name.toUpperCase());
         const pkg = exact?.packageName ?? hits[0]?.packageName;
         return pkg ? pkg.toUpperCase() : undefined;

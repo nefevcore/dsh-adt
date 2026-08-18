@@ -41,8 +41,9 @@ export function systemTools(deps: ToolDeps) {
               .join('\n'),
           ),
       },
-      execute: async () => {
-        const results = await registry.pingAll();
+      isConcurrencySafe: () => true,
+      execute: async (_args, exec) => {
+        const results = await registry.pingAll(exec.signal);
         return { destinations: results };
       },
     }),
@@ -83,9 +84,10 @@ export function systemTools(deps: ToolDeps) {
             ].join('\n'),
           ),
       },
-      execute: async (args) => {
+      isConcurrencySafe: () => true,
+      execute: async (args, exec) => {
         const entry = registry.require(destinationOf(args));
-        return entry.client.systemInfo();
+        return entry.client.systemInfo({ signal: exec.signal });
       },
     }),
 
@@ -108,10 +110,11 @@ export function systemTools(deps: ToolDeps) {
         },
         render: (_args, value) => text(`${value.destination}: ${value.ok ? 'OK' : 'FAILED'} — ${value.detail}`),
       },
-      execute: async (args) => {
+      isConcurrencySafe: () => true,
+      execute: async (args, exec) => {
         const name = destinationOf(args) ?? registry.defaultName;
         const entry = registry.require(name);
-        const status = await entry.client.ping();
+        const status = await entry.client.ping({ signal: exec.signal });
         return { destination: name, ok: status.ok, detail: status.detail ?? '' };
       },
     }),

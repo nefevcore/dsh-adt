@@ -79,6 +79,13 @@ interface AdtRequestOptions {
   timeoutMs?: number;
   /** Send `x-sap-adt-sessiontype: stateful` (write chains). */
   stateful?: boolean;
+  /**
+   * Cooperative cancellation, aborting the underlying fetch. The caller-owned
+   * signal is linked with the per-request timeout controller: whichever fires
+   * first aborts the request. An abort surfaces as an `AdtError` whose message
+   * says `aborted`; a timeout as one that says `timed out`.
+   */
+  signal?: AbortSignal;
 }
 
 interface AdtResponse {
@@ -232,9 +239,10 @@ export class AdtClient {
    * invalidates the session token (403 + CSRF hint or 401 on a write).
    */
   async request(options: AdtRequestOptions): Promise<AdtResponse> {
-    const { method = 'GET', path, body, accept, contentType, headers, noCsrf, raw, timeoutMs, stateful } = options;
+    const { method = 'GET', path, body, accept, contentType, headers, noCsrf, raw, timeoutMs, stateful, signal } =
+      options;
     const needsCsrf = !noCsrf && method !== 'GET';
-    let csrf = needsCsrf ? await this.ensureCsrfToken() : undefined;
+    let csrf = needsCsrf ? await this.ensureCsrfToken(signal) : undefined;
 
     for (let attempt = 0; attempt < 2; attempt++) {
       const reqHeaders: Record<string, string> = {
@@ -257,6 +265,17 @@ export class AdtClient {
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs ?? this.destination.timeoutMs ?? 60_000);
+      // Link the caller's cooperative-cancellation signal: whichever fires
+      // first (timeout or abort) cancels the fetch. Passing `signal` on the
+      // listener options removes it again once the controller aborts, so a
+      // long-lived caller signal never accumulates listeners across requests.
+      if (signal) {
+        if (signal.aborted) controller.abort(signal.reason);
+        else signal.addEventListener('abort', () => controller.abort(signal.reason), {
+          once: true,
+          signal: controller.signal,
+        });
+      }
       let response: Response;
       try {
         const init: RequestInit = {
@@ -274,6 +293,14 @@ export class AdtClient {
         }
         response = await this.fetchImpl(this.buildUrl(path), init);
       } catch (cause) {
+        if (controller.signal.aborted && signal?.aborted) {
+          throw new AdtError(`ADT ${method} ${path} aborted: ${(cause as Error).message ?? cause}`);
+        }
+        if (controller.signal.aborted) {
+          throw new AdtError(
+            `ADT ${method} ${path} timed out after ${timeoutMs ?? this.destination.timeoutMs ?? 60_000} ms`,
+          );
+        }
         throw new AdtError(`ADT request failed: ${(cause as Error).message}`);
       } finally {
         clearTimeout(timer);
@@ -291,7 +318,7 @@ export class AdtClient {
         if ((csrfRequired(response.status, csrfHint, csrfError) || sessionLost) && attempt === 0) {
           // Session/token was rejected; refresh and retry once.
           this.resetSession();
-          csrf = await this.ensureCsrfToken();
+          csrf = await this.ensureCsrfToken(signal);
           continue;
         }
         throw new AdtError(
@@ -308,7 +335,7 @@ export class AdtClient {
   }
 
   /** Fetch (and cache) the CSRF token via the standard discovery probe. */
-  private async ensureCsrfToken(): Promise<string> {
+  private async ensureCsrfToken(signal?: AbortSignal): Promise<string> {
     if (this.csrfToken) return this.csrfToken;
     // The session and CSRF token must be bound to the destination client:
     // multi-client systems reject tokens issued against another client.
@@ -319,6 +346,7 @@ export class AdtClient {
       accept: 'application/atomsvc+xml, application/xml',
       noCsrf: true,
       headers: { 'X-CSRF-Token': 'fetch' },
+      signal,
     });
     const token = response.headers.get('x-csrf-token');
     if (!token || token.toLowerCase() === 'required') {
@@ -339,10 +367,11 @@ export class AdtClient {
   // ---------------------------------------------------------------------------
 
   /** Fetch the discovery document (AtomPub service doc; tolerant of simple XML). */
-  async discover(): Promise<AdtDiscovery> {
+  async discover(options: { signal?: AbortSignal } = {}): Promise<AdtDiscovery> {
     const res = await this.request({
       path: ENDPOINTS.discovery(),
       accept: 'application/atomsvc+xml, application/xml',
+      signal: options.signal,
     });
     return parseDiscovery(res.text);
   }
@@ -354,7 +383,7 @@ export class AdtClient {
    * client, language, user); falls back to discovery feature flags when the
    * endpoint is unavailable.
    */
-  async systemInfo(): Promise<AdtSystemInfo> {
+  async systemInfo(options: { signal?: AbortSignal } = {}): Promise<AdtSystemInfo> {
     let systemId = '';
     let userName = '';
     let client = '';
@@ -363,6 +392,7 @@ export class AdtClient {
       const res = await this.request({
         path: `${ADT_BASE_PATH}/core/http/systeminformation?sap-client=${encodeURIComponent(this.destination.client ?? '')}`,
         accept: 'application/vnd.sap.adt.core.http.systeminformation.v1+json',
+        signal: options.signal,
       });
       const data = JSON.parse(res.text) as {
         systemID?: string;
@@ -374,11 +404,13 @@ export class AdtClient {
       userName = data.userName ?? '';
       client = data.client ?? '';
       language = data.language ?? '';
-    } catch {
+    } catch (error) {
+      // A caller-initiated abort must not be swallowed by this fallback.
+      if (options.signal?.aborted) throw error;
       // Endpoint unavailable → rely on discovery below.
     }
 
-    const discovery = await this.discover();
+    const discovery = await this.discover({ signal: options.signal });
     const features = discovery.features;
     systemId = systemId || features['systemId'] || features['SAP_SYSTEM_ID'] || '';
     const release = features['release'] ?? features['SAP_SYSTEM_RELEASE'] ?? '';
@@ -413,7 +445,7 @@ export class AdtClient {
    */
   async search(
     query: string,
-    options: { maxResults?: number; operation?: string; objectType?: string; packageName?: string } = {},
+    options: { maxResults?: number; operation?: string; objectType?: string; packageName?: string; signal?: AbortSignal } = {},
   ): Promise<AdtSearchResult> {
     const operation = options.operation ?? 'quickSearch';
     const params = this.baseQuery({
@@ -427,6 +459,7 @@ export class AdtClient {
       const res = await this.request({
         path: ENDPOINTS.search(params),
         accept: 'application/xml',
+        signal: options.signal,
       });
       const parsed = parseSearchResult(res.text, query);
       // Some backends only match with a wildcard: a bare term is treated as an
@@ -438,6 +471,7 @@ export class AdtClient {
           objectType: options.objectType,
           packageName: options.packageName,
           operation: 'quickSearch',
+          signal: options.signal,
         });
         if (wildcard.count > 0) {
           wildcard.note = `'${query}' matched nothing; retried as '${query}*' — this backend requires a wildcard for name search`;
@@ -446,6 +480,8 @@ export class AdtClient {
       }
       return parsed;
     } catch (error) {
+      // A caller-initiated abort must not be retried as a degraded search.
+      if (options.signal?.aborted) throw error;
       // Fall back to plain quickSearch when a narrowed operation is rejected
       // (500 on limited search providers; 400/404/405 on minimal profiles).
       if (
@@ -458,6 +494,7 @@ export class AdtClient {
           objectType: options.objectType,
           packageName: options.packageName,
           operation: 'quickSearch',
+          signal: options.signal,
         });
         fallback.note = `search operation '${operation}' unsupported by this backend; results from quickSearch`;
         return fallback;
@@ -467,13 +504,19 @@ export class AdtClient {
   }
 
   /** Search only for objects (name/description), no source search. */
-  async searchObjects(query: string, options: { maxResults?: number; objectType?: string } = {}): Promise<AdtObjectSearchHit[]> {
+  async searchObjects(
+    query: string,
+    options: { maxResults?: number; objectType?: string; signal?: AbortSignal } = {},
+  ): Promise<AdtObjectSearchHit[]> {
     const result = await this.search(query, { ...options, operation: 'objectSearch' });
     return result.objects;
   }
 
   /** Full-text search inside ABAP sources (empty when unsupported). */
-  async searchSource(query: string, options: { maxResults?: number } = {}): Promise<AdtSourceSearchHit[]> {
+  async searchSource(
+    query: string,
+    options: { maxResults?: number; signal?: AbortSignal } = {},
+  ): Promise<AdtSourceSearchHit[]> {
     const result = await this.search(query, { ...options, operation: 'quickSearchSource' });
     return result.sources;
   }
@@ -483,13 +526,13 @@ export class AdtClient {
   // ---------------------------------------------------------------------------
 
   /** Read the main source of an object by its ADT URI. */
-  async readSource(objectUri: string): Promise<AdtSource> {
+  async readSource(objectUri: string, options: { signal?: AbortSignal } = {}): Promise<AdtSource> {
     const uri = normalizeUri(objectUri);
     const attempts = uri.endsWith('/source/main') ? [uri] : [`${uri}/source/main`, uri];
     let lastError: unknown;
     for (const path of attempts) {
       try {
-        const res = await this.request({ path, accept: 'text/plain' });
+        const res = await this.request({ path, accept: 'text/plain', signal: options.signal });
         return parseSourceResponse(res.text, uri, res.headers.get('content-type') ?? '');
       } catch (error) {
         if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
@@ -506,7 +549,11 @@ export class AdtClient {
    * Write the main source of an object. The caller is expected to lock first
    * and pass the lock handle (from {@link lock}) as `lockHandle`.
    */
-  async writeSource(objectUri: string, source: string, options: { lockHandle?: string; transport?: string } = {}): Promise<void> {
+  async writeSource(
+    objectUri: string,
+    source: string,
+    options: { lockHandle?: string; transport?: string; signal?: AbortSignal } = {},
+  ): Promise<void> {
     const uri = normalizeUri(objectUri);
     const path = uri.endsWith('/source/main') ? uri : `${uri}/source/main`;
     const query = this.baseQuery({
@@ -523,6 +570,7 @@ export class AdtClient {
       // an `Accept: application/xml` is rejected with HTTP 406 there.
       accept: 'text/plain',
       stateful: true,
+      signal: options.signal,
     });
   }
 
@@ -530,7 +578,7 @@ export class AdtClient {
    * Lock an object for editing. Returns the lock handle (required by write /
    * unlock) and the transport request the backend assigned (CORRNR).
    */
-  async lock(objectUri: string): Promise<{ handle: string; transport?: string }> {
+  async lock(objectUri: string, options: { signal?: AbortSignal } = {}): Promise<{ handle: string; transport?: string }> {
     const uri = normalizeUri(objectUri);
     const query = this.baseQuery({ _action: 'LOCK', accessMode: 'MODIFY' });
     const res = await this.request({
@@ -538,6 +586,7 @@ export class AdtClient {
       path: `${uri}${toQuery(query)}`,
       accept: 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result',
       stateful: true,
+      signal: options.signal,
     });
     const handle = parseLockHandle(res.text) ?? res.headers.get('x-adt-lock-handle') ?? '';
     const transport = parseLockTransport(res.text);
@@ -546,7 +595,7 @@ export class AdtClient {
   }
 
   /** Unlock an object previously locked with the given handle. */
-  async unlock(objectUri: string, handle: string): Promise<void> {
+  async unlock(objectUri: string, handle: string, options: { signal?: AbortSignal } = {}): Promise<void> {
     const uri = normalizeUri(objectUri);
     const query = this.baseQuery({ _action: 'UNLOCK', lockHandle: handle });
     await this.request({
@@ -554,6 +603,7 @@ export class AdtClient {
       path: `${uri}${toQuery(query)}`,
       accept: 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result',
       stateful: true,
+      signal: options.signal,
     });
   }
 
@@ -563,13 +613,19 @@ export class AdtClient {
    * `_action=UNLOCK` (same user), which lets `unlock_all` clean residual
    * locks whose handle was never returned (e.g. create-time auto locks).
    */
-  async unlockBestEffort(objectUri: string, handle?: string): Promise<{ released: boolean; note?: string }> {
+  async unlockBestEffort(
+    objectUri: string,
+    handle?: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ released: boolean; note?: string }> {
     const uri = normalizeUri(objectUri);
     if (handle) {
       try {
-        await this.unlock(uri, handle);
+        await this.unlock(uri, handle, options);
         return { released: true };
       } catch (error) {
+        // A caller-initiated abort must not be masked as a lock failure.
+        if (options.signal?.aborted) throw error;
         // fall through to the handle-less attempt
         if (error instanceof AdtError && error.status === 403) {
           return { released: false, note: `lock held by another user: ${error.message}` };
@@ -582,6 +638,7 @@ export class AdtClient {
         path: `${uri}${toQuery(this.baseQuery({ _action: 'UNLOCK' }))}`,
         accept: 'application/xml',
         stateful: true,
+        signal: options.signal,
       });
       return { released: true, note: handle ? 'released via handle-less unlock' : 'released (no lock handle was known)' };
     } catch (error) {
@@ -593,12 +650,18 @@ export class AdtClient {
   }
 
   /** Lock → write → unlock in one step (safe even if write fails). */
-  async updateSource(objectUri: string, source: string, options: { transport?: string; unlock?: boolean } = {}): Promise<void> {
-    const { handle } = await this.lock(objectUri);
+  async updateSource(
+    objectUri: string,
+    source: string,
+    options: { transport?: string; unlock?: boolean; signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const { handle } = await this.lock(objectUri, { signal: options.signal });
     try {
-      await this.writeSource(objectUri, source, { lockHandle: handle, transport: options.transport });
+      await this.writeSource(objectUri, source, { lockHandle: handle, transport: options.transport, signal: options.signal });
     } finally {
       if (options.unlock !== false) {
+        // Cleanup deliberately runs WITHOUT the caller signal: an aborted
+        // write must still release the backend lock it acquired.
         await this.unlock(objectUri, handle).catch(() => undefined);
       }
     }
@@ -613,7 +676,10 @@ export class AdtClient {
    * check) instead of activating. Note: activation failures are reported in
    * an HTTP 200 body as `chkl:messages` entries with type="E".
    */
-  async activate(objects: AdtObjectRef[], options: { transport?: string; checkOnly?: boolean } = {}): Promise<AdtActivationResult> {
+  async activate(
+    objects: AdtObjectRef[],
+    options: { transport?: string; checkOnly?: boolean; signal?: AbortSignal } = {},
+  ): Promise<AdtActivationResult> {
     const method = options.checkOnly ? 'check' : 'activate';
     const query = this.baseQuery({ method, preauditRequested: 'true' });
     const body = buildActivationRequest(objects, options.transport);
@@ -626,12 +692,15 @@ export class AdtClient {
         accept: 'application/xml',
         stateful: true,
         timeoutMs: 300_000,
+        signal: options.signal,
       });
       return parseActivationResult(res.text);
     };
     try {
       return await doActivate(`${ENDPOINTS.activation()}${toQuery(query)}`);
     } catch (error) {
+      // A caller-initiated abort must not be retried on the compat route.
+      if (options.signal?.aborted) throw error;
       // Compatibility-mode backends (older / restricted ADT profiles) register
       // the activation service under /sap/bc/adt/activation instead of
       // /sap/bc/adt/repository/activation. Retry there on 404/405.
@@ -644,7 +713,7 @@ export class AdtClient {
   }
 
   /** Syntax/consistency check via the check-run service (no activation). */
-  async check(objects: AdtObjectRef[]): Promise<AdtCheckResult> {
+  async check(objects: AdtObjectRef[], options: { signal?: AbortSignal } = {}): Promise<AdtCheckResult> {
     const query = this.baseQuery({ reporters: 'abapCheckRun' });
     const body = buildCheckRunRequest(objects);
     const res = await this.request({
@@ -655,6 +724,7 @@ export class AdtClient {
       accept: MEDIA.checkMessages,
       stateful: true,
       timeoutMs: 120_000,
+      signal: options.signal,
     });
     const messages = parseCheckMessages(res.text);
     const errors = messages.filter((m) => m.severity === 'E');
@@ -666,7 +736,10 @@ export class AdtClient {
   // ---------------------------------------------------------------------------
 
   /** Run ABAP Unit tests; polls the async run until completion. */
-  async runUnitTests(objects: AdtObjectRef[], options: { timeoutMs?: number } = {}): Promise<AdtUnitRunResult> {
+  async runUnitTests(
+    objects: AdtObjectRef[],
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<AdtUnitRunResult> {
     const body = buildUnitRunRequest(objects);
     const query = this.baseQuery({});
     let start: AdtResponse;
@@ -679,6 +752,7 @@ export class AdtClient {
         accept: MEDIA.abapUnitRunStatus,
         stateful: true,
         timeoutMs: 60_000,
+        signal: options.signal,
       });
     } catch (error) {
       // Old / restricted backends (BASIS < 7.5x, e.g. NW 7.4x compatibility
@@ -687,7 +761,7 @@ export class AdtClient {
       // service, exactly like the official ADT client's fallback. (Same
       // pattern as the activation compatibility path above.)
       if (error instanceof AdtError && error.status === 404) {
-        return await this.runUnitTestsLegacy(objects);
+        return await this.runUnitTestsLegacy(objects, options.signal);
       }
       throw error;
     }
@@ -698,16 +772,18 @@ export class AdtClient {
         path: `${ENDPOINTS.unitRuns()}/${encodeURIComponent(runId)}${toQuery(this.baseQuery({ withLongPolling: 'true' }))}`,
         accept: MEDIA.abapUnitRunStatus,
         timeoutMs: 60_000,
+        signal: options.signal,
       });
       const done = isUnitRunComplete(status.text);
       if (done) break;
       if (Date.now() > deadline) throw new AdtError('ADT: ABAP Unit run timed out');
-      await sleep(1500);
+      await sleep(1500, options.signal);
     }
     const results = await this.request({
       path: `${ENDPOINTS.unitResults()}/${encodeURIComponent(runId)}${toQuery(this.baseQuery())}`,
       accept: MEDIA.abapUnitResult,
       timeoutMs: 60_000,
+      signal: options.signal,
     });
     return parseUnitRunResult(results.text);
   }
@@ -717,7 +793,7 @@ export class AdtClient {
    * /abapunit/testruns`). The backend executes the run inside the POST and
    * answers with `aunit:runResult` — there is no run id and nothing to poll.
    */
-  private async runUnitTestsLegacy(objects: AdtObjectRef[]): Promise<AdtUnitRunResult> {
+  private async runUnitTestsLegacy(objects: AdtObjectRef[], signal?: AbortSignal): Promise<AdtUnitRunResult> {
     const body = buildUnitRunRequestLegacy(objects);
     const res = await this.request({
       method: 'POST',
@@ -728,6 +804,7 @@ export class AdtClient {
       stateful: true,
       // The run executes synchronously; allow generous time for big suites.
       timeoutMs: 300_000,
+      signal,
     });
     return parseUnitRunResult(res.text);
   }
@@ -737,7 +814,10 @@ export class AdtClient {
   // ---------------------------------------------------------------------------
 
   /** Run ABAP Test Cockpit checks; polls the async run until completion. */
-  async runAtc(objects: AdtObjectRef[], options: { variant?: string; timeoutMs?: number } = {}): Promise<AdtAtcResult> {
+  async runAtc(
+    objects: AdtObjectRef[],
+    options: { variant?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<AdtAtcResult> {
     const body = buildAtcRunRequest(objects, options.variant);
     // Some backends reject the start request unless clientWait=false is sent
     // explicitly (error: 'Only "false" is currently supported as
@@ -751,6 +831,7 @@ export class AdtClient {
       accept: MEDIA.atcRun,
       stateful: true,
       timeoutMs: 60_000,
+      signal: options.signal,
     });
     const runId = extractRunId(start);
     const deadline = Date.now() + (options.timeoutMs ?? 600_000);
@@ -760,11 +841,12 @@ export class AdtClient {
         path: `${ENDPOINTS.atcRuns()}/${encodeURIComponent(runId)}${toQuery(this.baseQuery())}`,
         accept: MEDIA.atcRun,
         timeoutMs: 60_000,
+        signal: options.signal,
       });
       displayId = extractDisplayId(status.text) ?? runId;
       if (isAtcRunComplete(status.text)) break;
       if (Date.now() > deadline) throw new AdtError('ADT: ATC run timed out');
-      await sleep(2000);
+      await sleep(2000, options.signal);
     }
     const results = await this.request({
       path: `${ENDPOINTS.atcResults()}/${encodeURIComponent(displayId)}${toQuery(this.baseQuery())}`,
@@ -772,6 +854,7 @@ export class AdtClient {
       // serve the result with plain application/xml.
       accept: 'application/xml',
       timeoutMs: 60_000,
+      signal: options.signal,
     });
     return parseAtcResultBody(results.text, displayId);
   }
@@ -789,6 +872,7 @@ export class AdtClient {
       active?: boolean;
       sysId?: string;
       contactPerson?: string;
+      signal?: AbortSignal;
     } = {},
   ): Promise<AdtAtcRunSummary[]> {
     const params = this.baseQuery({
@@ -805,6 +889,7 @@ export class AdtClient {
     const res = await this.request({
       path: `${ENDPOINTS.atcResults()}${toQuery(params)}`,
       accept: 'application/xml',
+      signal: options.signal,
     });
     return parseAtcResultList(res.text);
   }
@@ -813,13 +898,17 @@ export class AdtClient {
    * Fetch one ATC run result by display id (checkstyle XML on on-prem
    * backends; the raw body is preserved when the format is unknown).
    */
-  async getAtcResult(displayId: string, options: { includeExemptedFindings?: boolean } = {}): Promise<AdtAtcResult> {
+  async getAtcResult(
+    displayId: string,
+    options: { includeExemptedFindings?: boolean; signal?: AbortSignal } = {},
+  ): Promise<AdtAtcResult> {
     const params = this.baseQuery({
       ...(options.includeExemptedFindings ? { includeExemptedFindings: 'true' } : {}),
     });
     const res = await this.request({
       path: `${ENDPOINTS.atcResults()}/${encodeURIComponent(displayId)}${toQuery(params)}`,
       accept: 'application/xml',
+      signal: options.signal,
     });
     return parseAtcResultBody(res.text, displayId);
   }
@@ -837,6 +926,7 @@ export class AdtClient {
      *  filter). Any other value is forwarded to the backend as the `status`
      *  query parameter and not filtered client-side. */
     status?: string;
+    signal?: AbortSignal;
   } = {}): Promise<AdtTransport[]> {
     const params = this.baseQuery({
       ...(options.allUsers ? { user: '*' } : {}),
@@ -846,6 +936,7 @@ export class AdtClient {
     const res = await this.request({
       path: `${ENDPOINTS.transportRequests()}${toQuery(params)}`,
       accept: MEDIA.transportOrganizerTree,
+      signal: options.signal,
     });
     const root = parseXml(res.text);
     const transports: AdtTransport[] = [];
@@ -864,10 +955,11 @@ export class AdtClient {
   }
 
   /** Get one transport request incl. its items. */
-  async getTransport(number: string): Promise<AdtTransport> {
+  async getTransport(number: string, options: { signal?: AbortSignal } = {}): Promise<AdtTransport> {
     const res = await this.request({
       path: `${ENDPOINTS.transportRequests()}/${encodeURIComponent(number)}${toQuery(this.baseQuery())}`,
       accept: MEDIA.transportOrganizer,
+      signal: options.signal,
     });
     const root = parseXml(res.text);
     // Real backends wrap the request in a <tm:root> envelope (the root carries
@@ -887,11 +979,12 @@ export class AdtClient {
    * `getTransport` are requests; a version whose transport number does not
    * resolve is an open task of an unreleased request.
    */
-  async getVersions(objectUri: string): Promise<AdtObjectVersion[]> {
+  async getVersions(objectUri: string, options: { signal?: AbortSignal } = {}): Promise<AdtObjectVersion[]> {
     const uri = normalizeUri(objectUri);
     const res = await this.request({
       path: `${uri}/source/main/versions${toQuery(this.baseQuery())}`,
       accept: 'application/atom+xml;type=feed',
+      signal: options.signal,
     });
     const root = parseXml(res.text);
     const versions: AdtObjectVersion[] = [];
@@ -920,7 +1013,10 @@ export class AdtClient {
    * Hits the `/repository/informationsystem/usageReferences` collection with
    * the object URI. Parsing is tolerant of the `usagereferences:` prefix.
    */
-  async getWhereUsed(objectUri: string, options: { enableAllTypes?: boolean } = {}): Promise<AdtWhereUsedResult> {
+  async getWhereUsed(
+    objectUri: string,
+    options: { enableAllTypes?: boolean; signal?: AbortSignal } = {},
+  ): Promise<AdtWhereUsedResult> {
     const uri = normalizeUri(objectUri);
     const params = this.baseQuery({ uri });
     if (options.enableAllTypes) params.enableAllTypes = true;
@@ -928,6 +1024,7 @@ export class AdtClient {
       path: ENDPOINTS.whereUsed(params),
       accept: 'application/xml',
       timeoutMs: 60_000,
+      signal: options.signal,
     });
     return parseWhereUsed(res.text, uri);
   }
@@ -940,7 +1037,7 @@ export class AdtClient {
   async dataPreview(
     name: string,
     kind: 'ddic' | 'cds',
-    options: { top?: number } = {},
+    options: { top?: number; signal?: AbortSignal } = {},
   ): Promise<AdtDataPreview> {
     const top = Math.min(Math.max(options.top ?? 100, 1), 5000);
     const params = this.baseQuery({ rowNumber: top });
@@ -949,20 +1046,23 @@ export class AdtClient {
         path: kind === 'cds' ? ENDPOINTS.dataPreviewCds(name, params) : ENDPOINTS.dataPreviewDdic(name, params),
         accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
         timeoutMs: 60_000,
+        signal: options.signal,
       });
       return parseDataPreview(res.text, name);
     } catch (error) {
+      // A caller-initiated abort must not fall through to the SQL route.
+      if (options.signal?.aborted) throw error;
       // Older / restricted ADT profiles do not expose the ddic/cds preview
       // collection; fall back to the freestyle SQL endpoint.
       if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
-        return this.runSqlQuery(`SELECT * FROM ${name} UP TO ${top} ROWS`, { top });
+        return this.runSqlQuery(`SELECT * FROM ${name} UP TO ${top} ROWS`, { top, signal: options.signal });
       }
       throw error;
     }
   }
 
   /** Execute a freestyle SQL SELECT via the data-preview API. */
-  async runSqlQuery(sql: string, options: { top?: number } = {}): Promise<AdtDataPreview> {
+  async runSqlQuery(sql: string, options: { top?: number; signal?: AbortSignal } = {}): Promise<AdtDataPreview> {
     const top = Math.min(Math.max(options.top ?? 100, 1), 5000);
     const params = this.baseQuery({ sqlQuery: sql, rowNumber: top });
     try {
@@ -970,9 +1070,12 @@ export class AdtClient {
         path: ENDPOINTS.dataPreviewFreestyle(params),
         accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
         timeoutMs: 60_000,
+        signal: options.signal,
       });
       return parseDataPreview(res.text, sql);
     } catch (error) {
+      // A caller-initiated abort must not be retried via POST.
+      if (options.signal?.aborted) throw error;
       // Compatibility-mode backends reject GET on /datapreview/freestyle (405)
       // and expect the SQL as the request body of a POST.
       if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
@@ -983,6 +1086,7 @@ export class AdtClient {
           contentType: 'text/plain; charset=utf-8',
           accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
           timeoutMs: 60_000,
+          signal: options.signal,
         });
         return parseDataPreview(res.text, sql);
       }
@@ -995,13 +1099,17 @@ export class AdtClient {
   // ---------------------------------------------------------------------------
 
   /** Fetch the source of one object version by its content URI (from getVersions). */
-  async getVersionSource(contentUri: string): Promise<string> {
-    const res = await this.request({ path: contentUri, accept: 'text/plain' });
+  async getVersionSource(contentUri: string, options: { signal?: AbortSignal } = {}): Promise<string> {
+    const res = await this.request({ path: contentUri, accept: 'text/plain', signal: options.signal });
     return res.text;
   }
 
   /** Best-effort read of an object's lock state via its metadata. */
-  async getObjectLock(objectUri: string, type?: string): Promise<AdtObjectLockInfo> {
+  async getObjectLock(
+    objectUri: string,
+    type?: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<AdtObjectLockInfo> {
     const uri = normalizeUri(objectUri);
     // Strict backends negotiate object metadata by the TYPE-specific media
     // type (e.g. application/vnd.sap.adt.oo.classes.v4+xml for a class) and
@@ -1013,12 +1121,13 @@ export class AdtClient {
     attempts.push(MEDIA.object, 'application/xml');
     for (const accept of attempts) {
       try {
-        const res = await this.request({ path: uri, accept });
+        const res = await this.request({ path: uri, accept, signal: options.signal });
         const info = parseLockInfo(res.text);
         if (info.locked !== undefined || info.lockedBy) {
           return { ...info, note: undefined };
         }
       } catch (error) {
+        if (options.signal?.aborted) throw error;
         if (error instanceof AdtError && (error.status === 406 || error.status === 404 || error.status === 405)) {
           continue; // wrong media type / unsupported route → try the next
         }
@@ -1031,7 +1140,7 @@ export class AdtClient {
     }
     // Metadata did not expose lock state → try the transports relationship
     // endpoints (some backends report LOCK_HANDLE/CORRNR there).
-    const viaTransports = await this.lockStateViaTransports(uri);
+    const viaTransports = await this.lockStateViaTransports(uri, options.signal);
     if (viaTransports.locked !== undefined || viaTransports.lockedBy) return viaTransports;
     return {
       locked: undefined,
@@ -1045,7 +1154,7 @@ export class AdtClient {
    * `objectproperties/transports?uri=` collection) with LOCK_HANDLE / CORRNR
    * data; both are probed read-only and failures degrade silently.
    */
-  private async lockStateViaTransports(objectUri: string): Promise<AdtObjectLockInfo> {
+  private async lockStateViaTransports(objectUri: string, signal?: AbortSignal): Promise<AdtObjectLockInfo> {
     const candidates: string[] = [];
     const relation = `${objectUri}/transports`;
     if (relation.startsWith('/sap/bc/adt')) candidates.push(relation);
@@ -1054,7 +1163,7 @@ export class AdtClient {
     );
     for (const path of candidates) {
       try {
-        const res = await this.request({ path, accept: 'application/xml', timeoutMs: 30_000 });
+        const res = await this.request({ path, accept: 'application/xml', timeoutMs: 30_000, signal });
         // Element-shaped data: <LOCK_HANDLE>…</LOCK_HANDLE> / <CORRNR>…</CORRNR>.
         const lockHandle = localText(res.text, 'LOCK_HANDLE') ?? localText(res.text, 'lockHandle');
         const corr = localText(res.text, 'CORRNR') ?? localText(res.text, 'corrNr');
@@ -1073,13 +1182,14 @@ export class AdtClient {
   }
 
   /** Release a transport request. */
-  async releaseTransport(number: string): Promise<AdtTransport> {
+  async releaseTransport(number: string, options: { signal?: AbortSignal } = {}): Promise<AdtTransport> {
     const res = await this.request({
       method: 'POST',
       path: `${ENDPOINTS.transportRequests()}/${encodeURIComponent(number)}/release${toQuery(this.baseQuery())}`,
       accept: MEDIA.transportOrganizer,
       stateful: true,
       timeoutMs: 120_000,
+      signal: options.signal,
     });
     const root = parseXml(res.text);
     const el = isRequestElement(root) ? root : findRequestElement(root);
@@ -1101,7 +1211,10 @@ export class AdtClient {
    * endpoint when the search route is unavailable. The node-structure route is
    * frequently disabled on hardened S/4HANA systems, hence the preference.
    */
-  async packageContent(packageName: string, options: { maxResults?: number } = {}): Promise<AdtObjectRef[]> {
+  async packageContent(
+    packageName: string,
+    options: { maxResults?: number; signal?: AbortSignal } = {},
+  ): Promise<AdtObjectRef[]> {
     const upper = packageName.toUpperCase();
     // 1) Search with packageName filter (returns object references).
     try {
@@ -1109,6 +1222,7 @@ export class AdtClient {
         operation: 'quickSearch',
         packageName: upper,
         maxResults: options.maxResults ?? 500,
+        signal: options.signal,
       });
       if (result.objects.length > 0) {
         return result.objects.map((o) => ({
@@ -1134,6 +1248,7 @@ export class AdtClient {
     const res = await this.request({
       path: `${ENDPOINTS.nodeStructure()}${toQuery(params)}`,
       accept: MEDIA.nodeStructure,
+      signal: options.signal,
     });
     const root = parseXml(res.text);
     const items: AdtObjectRef[] = [];
@@ -1159,7 +1274,10 @@ export class AdtClient {
    * endpoints (e.g. `/sap/bc/adt/oo/classes` for classes) with namespaced
    * metadata XML and the `package` query parameter.
    */
-  async createObject(request: AdtCreateObjectRequest): Promise<AdtCreateObjectResult> {
+  async createObject(
+    request: AdtCreateObjectRequest,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<AdtCreateObjectResult> {
     const category = request.type.split('/')[0]!;
     const endpoint = ENDPOINTS.createByType[category as keyof typeof ENDPOINTS.createByType];
     if (!endpoint) {
@@ -1178,6 +1296,7 @@ export class AdtClient {
       accept: 'application/xml',
       stateful: true,
       timeoutMs: 120_000,
+      signal: options.signal,
     });
     // Some backends (e.g. minimal NetWeaver ADT profiles) return HTTP 200 with
     // an EMPTY body and no Location header — derive the URI by convention then.
@@ -1200,7 +1319,10 @@ export class AdtClient {
    * `deletion.response.v1+xml`) and falls back to the legacy
    * `_action=DELETE` action on the object URI when the service is absent.
    */
-  async deleteObject(objectUri: string, options: { transport?: string } = {}): Promise<void> {
+  async deleteObject(
+    objectUri: string,
+    options: { transport?: string; signal?: AbortSignal } = {},
+  ): Promise<void> {
     const uri = normalizeUri(objectUri);
     // 1) Modern deletion service (NW 7.5x+; strictly negotiated media types).
     try {
@@ -1218,9 +1340,12 @@ export class AdtClient {
         accept: 'application/vnd.sap.adt.deletion.response.v1+xml',
         stateful: true,
         timeoutMs: 120_000,
+        signal: options.signal,
       });
       return;
     } catch (error) {
+      // A caller-initiated abort must not be retried on the legacy route.
+      if (options.signal?.aborted) throw error;
       const unsupported =
         error instanceof AdtError && (error.status === 404 || error.status === 405 || error.status === 406);
       if (!unsupported) throw error;
@@ -1232,6 +1357,7 @@ export class AdtClient {
           path: `${uri}${toQuery(query)}`,
           accept: 'application/xml',
           stateful: true,
+          signal: options.signal,
         });
         return;
       } catch (legacyError) {
@@ -1251,9 +1377,9 @@ export class AdtClient {
   // ---------------------------------------------------------------------------
 
   /** Lightweight reachability + auth probe. */
-  async ping(): Promise<{ ok: boolean; status?: number; detail?: string }> {
+  async ping(options: { signal?: AbortSignal } = {}): Promise<{ ok: boolean; status?: number; detail?: string }> {
     try {
-      const discovery = await this.discover();
+      const discovery = await this.discover({ signal: options.signal });
       return { ok: true, detail: `discovery advertised ${discovery.services.length} services` };
     } catch (error) {
       if (error instanceof AdtError) {
@@ -1268,8 +1394,27 @@ export class AdtClient {
 // Builders & parsers
 // ---------------------------------------------------------------------------
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!signal) {
+      setTimeout(resolve, ms);
+      return;
+    }
+    const sig = signal;
+    if (sig.aborted) {
+      reject(sig.reason ?? new Error('aborted'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      sig.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort(): void {
+      clearTimeout(timer);
+      reject(sig.reason instanceof Error ? sig.reason : new AdtError(`aborted: ${String(sig.reason)}`));
+    }
+    sig.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function csrfRequired(status: number, headerHint: boolean, bodyHint: boolean): boolean {
