@@ -1,5 +1,5 @@
-import { AdtClient } from '@abap-adt/protocol';
-import { createMockAdtServer } from '@abap-adt/mock';
+import { AdtClient } from '@nefevcore/abap-adt-protocol';
+import { createMockAdtServer } from '@nefevcore/abap-adt-mock';
 import { resolvePassword } from './config.js';
 import { AdtPolicy } from './policy.js';
 /**

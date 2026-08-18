@@ -68,22 +68,25 @@ corepack pnpm build
 
 ## 方式 3：npm 发布（最规范，接收方一条命令安装）
 
-三个包按依赖顺序发布（pnpm 会自动把 `workspace:*` 转成实际版本号）：
+三个包（`@nefevcore/abap-adt-protocol` → `abap-adt-mock` → `abap-adt-dsh-plugin`，声明了 dsh.bundle.patch，安装后自动成为 profile bundle 层）。
+
+**首发（v0.1.0）已手动完成**；之后的发版全部走 CI 自动（GitHub Actions Trusted Publishing / OIDC，免 token 免 2FA）：
 
 ```bash
-# 1. 协议客户端
-cd packages/adt-protocol && pnpm publish
-# 2. mock 服务器
-cd ../adt-mock && pnpm publish
-# 3. 插件（声明了 dsh.bundle.patch，安装后自动成为 profile bundle 层）
-cd ../dsh-plugin-abap-adt && pnpm publish
+# 1. 同时 bump 三个 packages/*/package.json 的 version
+# 2. 提交 + 打标签 + 推送
+git add -A && git commit -m "chore(release): v0.1.1"
+git tag v0.1.1 && git push origin main v0.1.1
+# 3. Actions 自动：install → test(66) → pack（workspace:* 自动替换为实际版本号）→ 按依赖顺序发布
 ```
+
+> 前提（各包一次性配置）：npmjs.com 包页面 → Settings → **Trusted Publishing** 添加 `nefevcore / dsh-adt / publish.yml`（environment 留空）——只在包已存在时可配，所以**任何新包的第一次发布必须手动一次**。
 
 **接收方安装（无需克隆、无需构建）：**
 ```bash
 # 要求 pnpm 在 PATH；相对路径会被锚定
 cd ~/.dsh/profiles/web
-pnpm add @abap-adt/dsh-plugin
+pnpm add @nefevcore/abap-adt-dsh-plugin
 # 自动加入 dsh.profile.bundles（因为包声明了 dsh.bundle.patch）
 # 然后编辑 cordis.patch.yml 按需配置 destinations
 ```

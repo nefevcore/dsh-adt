@@ -1,5 +1,5 @@
 {
-  "name": "@abap-adt/mock",
+  "name": "@nefevcore/abap-adt-mock",
   "version": "0.1.0",
   "description": "In-memory mock of the SAP ADT REST service for local end-to-end testing of the ADT protocol client without a real ABAP system.",
   "type": "module",
@@ -19,10 +19,29 @@
     "start": "node lib/cli.js"
   },
   "dependencies": {
-    "@abap-adt/protocol": "workspace:*"
+    "@nefevcore/abap-adt-protocol": "workspace:*"
   },
   "engines": {
     "node": ">=20"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "keywords": [
+    "abap",
+    "sap",
+    "adt",
+    "mock",
+    "testing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nefevcore/dsh-adt.git",
+    "directory": "packages/adt-mock"
+  },
+  "bugs": {
+    "url": "https://github.com/nefevcore/dsh-adt/issues"
+  },
+  "homepage": "https://github.com/nefevcore/dsh-adt#readme",
+  "publishConfig": {
+    "access": "public"
+  }
 }

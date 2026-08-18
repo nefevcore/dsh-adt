@@ -1,6 +1,6 @@
 # ADT 协议技术笔记
 
-> 本文档是 `@abap-adt/protocol` 客户端实现的事实依据，交叉验证自：
+> 本文档是 `@nefevcore/abap-adt-protocol` 客户端实现的事实依据，交叉验证自：
 > - 生产级开源客户端：[`@mcp-abap-adt/adt-clients`](https://www.npmjs.com/package/@mcp-abap-adt/adt-clients)、[`abap-adt-api`](https://github.com/marcellourbani/abap-adt-api)（MIT）、[`vscode_abap_remote_fs`](https://github.com/marcellourbani/vscode_abap_remote_fs)（MIT）、[`abapify/adt-cli`](https://github.com/abapify/adt-cli)（MIT）
 > - SAP 官方 BTP REST 文档：[ABAP Unit](https://help.sap.com/docs/btp/sap-business-technology-platform/executing-abap-unit-test-runs)、[ATC](https://help.sap.com/docs/btp/sap-business-technology-platform/executing-abap-test-cockpit-atc-check-runs)
 > - 真实系统 discovery 捕获：[fr0ster/mcp-abap-adt docs/adt-discovery.xml](https://github.com/fr0ster/mcp-abap-adt/blob/main/docs/adt-discovery.xml)
@@ -69,6 +69,18 @@ CT: application/vnd.sap.adt.activation+xml  Accept: application/xml
 2. `GET .../runs/{runId}?withLongPolling=true` — 轮询状态（`status`/`completed`）
 3. `GET .../results/{runId}` — **JUnit XML**（`testsuites/testsuite/testcase` + `failure/error/skipped`）
 
+### ABAP Unit（legacy 同步，BASIS < 7.5x，如 D01/NW 7.4x）
+老后端没有异步 run API：`POST /abapunit/runs` 直接 404，只有同步的 testruns 服务
+（与官方 Eclipse/VS Code ADT 客户端 `com.sap.adt.abapunit` bundle 的
+`AbapUnitRequestContentHandlerV1` 走法一致，已在真实 D01 上验证）：
+1. `POST /sap/bc/adt/abapunit/testruns` — CT/Accept 均为 `application/xml`，
+   body `aunit:runConfiguration`（ns `http://www.sap.com/adt/aunit`）+ `adtcore:objectReferences`
+2. 响应体即结果：`aunit:runResult` → `program` → `testClass` → `testMethod`，
+   方法无 `aunit:alert` = 通过；`severity="critical|fatal"` = 失败；
+   `title`/元素文本为消息。**无 runId、无需轮询。**
+3. 对象无测试类时返回空 `runResult`（0 tests），不是错误。
+客户端在 `POST /abapunit/runs` 404 时自动回退到该路径（见 `client.runUnitTestsLegacy`）。
+
 ### ATC（异步）
 1. `POST /sap/bc/adt/atc/runs`（on-prem）/ `/sap/bc/adt/api/atc/runs`（BTP）— CT `...atc.run.parameters.v1+xml`，body `atc:runparameters` + `osl:objectSet`（`checkVariant` 属性）
 2. `GET .../runs/{runId}` — 轮询（`state` / phases）
@@ -124,7 +136,7 @@ Accept: application/xml  →  <adtcore:objectReferences><adtcore:objectReference
 | 认证 | Basic | JWT（无 Basic） |
 | discovery | `/discovery` → `/core/discovery` | 必须 `/core/discovery` |
 | 对象 | 全部 | PROG 等经典对象不可用 |
-| 单测 | `/sap/bc/adt/abapunit/runs` | `/sap/bc/adt/api/abapunit/runs` |
+| 单测 | `/sap/bc/adt/abapunit/runs`；老系统（< 7.5x，如 D01）仅 `/sap/bc/adt/abapunit/testruns`（同步，见 §3） | `/sap/bc/adt/api/abapunit/runs` |
 | ATC | `/sap/bc/adt/atc/runs` | `/sap/bc/adt/api/atc/runs` |
 | 传输 | 传统 CTS | 软件组件 + release state 驱动 |
 

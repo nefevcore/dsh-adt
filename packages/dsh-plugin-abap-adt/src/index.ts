@@ -1,5 +1,5 @@
 /**
- * @abap-adt/dsh-plugin — DeepSeek Harness plugin for SAP ABAP Development.
+ * @nefevcore/abap-adt-dsh-plugin — DeepSeek Harness plugin for SAP ABAP Development.
  *
  * Registers the `adt_*` tool family on `ctx.tools`: destinations/system
  * introspection, object search, source read/write/create/delete, activation,
@@ -13,6 +13,7 @@
 import { Context } from '@deepseek-ai/cordis';
 import { Config, type PluginConfig } from './config.js';
 import { AdtRegistry } from './registry.js';
+import { LockLedger } from './locks.js';
 import { deepCompact } from './tools/common.js';
 import { systemTools } from './tools/system.js';
 import { searchTools } from './tools/search.js';
@@ -37,12 +38,15 @@ const inject = ['tools', 'fs'];
 /** Apply the plugin: build the destination registry and register every tool. */
 async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<void>> {
   const registry = await AdtRegistry.create(config);
+  // Persistent lock ledger: survives process restarts so `adt_unlock_all` can
+  // release locks left behind by crashed sessions (see src/locks.ts).
+  const ledger = new LockLedger();
 
-  const deps = { registry, policy: registry.policy };
+  const deps = { registry, policy: registry.policy, ledger };
   const tools = [
     ...systemTools(deps),
     ...searchTools(deps),
-    ...sourceTools(deps),
+    ...sourceTools(deps, ctx),
     ...lifecycleTools(deps),
     ...testingTools(deps),
     ...atcRunTools(deps),
@@ -83,5 +87,5 @@ export { Config, apply, inject, name };
 export type { PluginConfig };
 export { AdtRegistry } from './registry.js';
 export { TYPE_MAP, resolveObject, resolveObjects, refFromName, normalizeType, typeLabel } from './resolve.js';
-export { AdtClient, AdtError } from '@abap-adt/protocol';
-export { createMockAdtServer } from '@abap-adt/mock';
+export { AdtClient, AdtError } from '@nefevcore/abap-adt-protocol';
+export { createMockAdtServer } from '@nefevcore/abap-adt-mock';

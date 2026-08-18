@@ -5,7 +5,7 @@
 │  DeepSeek Harness (dsh web profile)                        │
 │                                                            │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │ @abap-adt/dsh-plugin (Cordis 插件)                    │  │
+│  │ @nefevcore/abap-adt-dsh-plugin (Cordis 插件)                    │  │
 │  │  ├─ Config (schemastery) + AdtPolicy 权限策略          │  │
 │  │  ├─ AdtRegistry ── 多目的地注册表                     │  │
 │  │  │   ├─ demo → 进程内 Mock ADT 服务器 (node:http)    │  │
@@ -25,16 +25,16 @@
 
 ## 分层
 
-### 1. `@abap-adt/protocol` — 协议客户端（零依赖，纯 Node）
+### 1. `@nefevcore/abap-adt-protocol` — 协议客户端（零依赖，纯 Node）
 - `AdtClient`：单目的地 HTTP 客户端。封装认证（Basic）、CSRF 握手与重试、会话 cookie 管理（含 `sap-usercontext` 强制覆盖）、`sap-adt-connection-id` / stateful 会话头
 - 高层操作：discover / systemInfo / search / readSource / writeSource / lock / unlock / updateSource / activate / check / runUnitTests（异步轮询）/ runAtc（异步轮询）/ listAtcRuns / getAtcResult / getVersions / transports / packageContent / createObject / deleteObject / ping
 - `xml.ts`：为 ADT XML 载荷优化的零依赖解析器（命名空间剥离、CDATA、实体）
 
-### 2. `@abap-adt/mock` — 内存版 ADT 服务器
+### 2. `@nefevcore/abap-adt-mock` — 内存版 ADT 服务器
 - 实现协议子集：AtomPub discovery、通配符搜索、`_action=LOCK/UNLOCK`、`/source/main` 读写、激活（HTTP 200 内嵌 `chkl:messages` 错误）、checkruns、ABAP Unit 异步 run（JUnit 结果）、ATC 异步 run（checkstyle 结果）、传输请求、类型专用创建集合、nodestructure
 - 带示例对象库（类/接口/程序/CDS + 单测与 ATC 数据），支持 Basic auth 校验与 CSRF 强制
 
-### 3. `@abap-adt/dsh-plugin` — DSH (Cordis) 插件
+### 3. `@nefevcore/abap-adt-dsh-plugin` — DSH (Cordis) 插件
 - `cordis.patch.yml` 声明 `dsh.bundle.patch`；安装后自动成为 profile bundle 层
 - `apply(ctx, config)`：构建 registry（含 `AdtPolicy` 权限策略）→ 注册全部工具 → 返回 fiber disposer（卸载时关闭 mock）
 - **权限管控（`policy.ts`）**：所有修改类工具在执行前断言策略规则（传输开关 / 允许的传输号 glob / 可传输编辑开关 / 允许的包 glob），生效值来自 config > `SAP_*` 环境变量 > 默认值；拒绝时抛 `[POLICY]` 错误并自动回滚（如写操作解锁）。包名解析优先显式 `packageName`，其次搜索精确命中，无法确定时失败关闭

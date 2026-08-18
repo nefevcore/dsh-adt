@@ -1,11 +1,95 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import type { AdtCreatableObjectType } from '@abap-adt/protocol';
+import { AdtError, type AdtCreatableObjectType } from '@nefevcore/abap-adt-protocol';
+import type { Context } from '@deepseek-ai/cordis';
 import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
-import { resolveObject, resolvePackageName, typeLabel } from '../resolve.js';
+import { resolveObject, resolvePackageName, refFromName, typeLabel } from '../resolve.js';
 import { AdtPolicyError } from '../policy.js';
 
-export function sourceTools(deps: ToolDeps) {
-  const { registry, policy } = deps;
+export function sourceTools(deps: ToolDeps, ctx: Context) {
+  const { registry, policy, ledger } = deps;
+
+  /** True when the backend answers GET on the object URI (object exists). */
+  async function objectExists(client: { readSource(uri: string): Promise<unknown> }, uri: string): Promise<boolean> {
+    try {
+      await client.readSource(uri);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Read a UTF-8 text file through the sandbox-aware DSH filesystem service. */
+  async function readSourceFile(filePath: string): Promise<string> {
+    const fs = ctx.fs;
+    if (!fs) throw new Error('adt: 需要 dsh filesystem 服务(ctx.fs)来读取本地文件');
+    const target = await fs.resolve(filePath);
+    return fs.readText(target);
+  }
+
+  /** 从 args 解析源码：sourceFile(优先, 读本地文件) 或 source(内联)，二者必须提供其一。 */
+  async function resolveSourceInput(args: Record<string, unknown>): Promise<string> {
+    const inline = typeof args.source === 'string' ? args.source : undefined;
+    const file = typeof args.sourceFile === 'string' && args.sourceFile ? args.sourceFile : undefined;
+    if (inline !== undefined && file !== undefined) {
+      throw new Error('adt: `source` 与 `sourceFile` 只能提供其一');
+    }
+    if (file !== undefined) return readSourceFile(file);
+    if (inline !== undefined) return inline;
+    throw new Error('adt: 必须提供 `source` 或 `sourceFile`');
+  }
+
+  /**
+   * 在源码中按 起始行/结束行 定位一个代码块并整体替换，块外字节保持不动；
+   * 行尾风格跟随源文件（CRLF/LF）。end 缺省时按 ABAP 块类型自动推导。
+   */
+  function defaultEndFor(startText: string): string | undefined {
+    const s = startText.trim().toUpperCase();
+    if (/^(?:METHOD|CLASS-METHOD)\b/.test(s)) return 'ENDMETHOD.';
+    if (/^FORM\b/.test(s)) return 'ENDFORM.';
+    if (/^FUNCTION\b/.test(s)) return 'ENDFUNCTION.';
+    if (/^MODULE\b/.test(s)) return 'ENDMODULE.';
+    return undefined;
+  }
+
+  function replaceSourceBlock(
+    source: string,
+    startText: string,
+    endText: string,
+    replacement: string,
+  ): { full: string; oldLines: number; newLines: number } {
+    const nl = source.includes('\r\n') ? '\r\n' : '\n';
+    const lines = source.split(/\r\n|\n/);
+    const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+    const startKey = norm(startText);
+    const endKey = norm(endText);
+    if (!startKey || !endKey) throw new Error('adt_edit_object: start/end 不能为空');
+    let startIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (norm(lines[i] ?? '').includes(startKey)) {
+        startIdx = i;
+        break;
+      }
+    }
+    if (startIdx < 0) throw new Error(`adt_edit_object: 未找到起始行 "${startText}"`);
+    let endIdx = -1;
+    for (let i = startIdx + 1; i < lines.length; i++) {
+      if (norm(lines[i] ?? '').includes(endKey)) {
+        endIdx = i;
+        break;
+      }
+    }
+    if (endIdx < 0) throw new Error(`adt_edit_object: 在 "${startText}" 之后未找到结束行 "${endText}"`);
+    const block = replacement.replace(/\r\n/g, '\n').replace(/\n/g, nl);
+    const before = lines.slice(0, startIdx);
+    const after = lines.slice(endIdx + 1);
+    const prefix = before.length ? before.join(nl) + nl : '';
+    const suffix = after.length ? nl + after.join(nl) : '';
+    return {
+      full: prefix + block + suffix,
+      oldLines: endIdx - startIdx + 1,
+      newLines: block.split(/\r\n|\n/).length,
+    };
+  }
 
   const readObject = defineTool({
     name: 'adt_read_object',
@@ -86,7 +170,13 @@ export function sourceTools(deps: ToolDeps) {
         type: 'string',
         description: 'Optional package of the object (e.g. ZPACK_DEMO, $TMP); used for the permission check when the backend does not expose it.',
       },
-      source: { type: 'string', required: true, description: 'Complete new source text of the object.' },
+      source: { type: 'string', description: 'Complete new source text of the object.' },
+      sourceFile: {
+        type: 'string',
+        description:
+          'Alternative to `source`: absolute path of a local UTF-8 file whose content is uploaded verbatim ' +
+          '(read through the sandbox-aware filesystem). Provide exactly one of source / sourceFile.',
+      },
       unlock: { type: 'boolean', description: 'Unlock after writing (default true).' },
       ...DESTINATION_PARAM,
     },
@@ -130,22 +220,169 @@ export function sourceTools(deps: ToolDeps) {
       const unlock = args.unlock !== false;
       let unlocked = false;
       const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri);
+      ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: assignedTransport });
       try {
         // The backend may auto-assign a transport request on lock (CORRNR);
         // it must be within allowedTransports or the edit is rolled back.
         policy.assertTransportUsage(assignedTransport, `adt_write_object (${ref.name})`);
-        await entry.client.writeSource(ref.uri, String(args.source ?? ''), { lockHandle: handle });
+        const src = await resolveSourceInput(args);
+        await entry.client.writeSource(ref.uri, src, { lockHandle: handle, transport: assignedTransport ?? undefined });
         if (unlock) {
           await entry.client.unlock(ref.uri, handle).catch(() => undefined);
+          ledger.deregister(entry.config.name, ref.uri);
           unlocked = true;
         }
       } catch (error) {
         // Policy denial or write failure → always roll back the lock.
         await entry.client.unlock(ref.uri, handle).catch(() => undefined);
+        ledger.deregister(entry.config.name, ref.uri);
         unlocked = true;
         throw error;
       }
       return { uri: ref.uri, name: ref.name, updated: true, unlocked };
+    },
+  });
+
+  const editSource = defineTool({
+    name: 'adt_edit_object',
+    description:
+      'Replace ONE code block of an existing source object (class method, program FORM, function module, MODULE, ' +
+      'include, or any marker-delimited block) without uploading the whole object. ' +
+      'The tool locks the object, reads its current source, replaces only the block between `start` and `end` lines, ' +
+      'writes the full source back (transport/versioning still record the object; the change is confined to that block), ' +
+      'and optionally activates it. `end` defaults to the matching closing statement for METHOD/ENDMETHOD, FORM/ENDFORM, ' +
+      'FUNCTION/ENDFUNCTION, MODULE/ENDMODULE. Provide the replacement block via `source` or a local file via `sourceFile`. ' +
+      'Subject to the plugin permission policy.',
+    parameters: {
+      objectUri: { type: 'string', description: 'Exact ADT object URI (recommended, from search/read).' },
+      name: { type: 'string', description: 'Object name (used with type when no objectUri).' },
+      type: { type: 'string', description: 'Object type, e.g. CLAS, INTF, PROG, FUGR, DDLS.' },
+      packageName: {
+        type: 'string',
+        description: 'Optional package of the object; used for the permission check when the backend does not expose it.',
+      },
+      start: {
+        type: 'string',
+        required: true,
+        description:
+          'First line of the block to replace, e.g. "METHOD chat_audit." / "FORM frm_xxx." / "FUNCTION zfm_yyy". ' +
+          'Matched case-insensitively as a line substring.',
+      },
+      end: {
+        type: 'string',
+        description:
+          'Last line of the block, e.g. "ENDMETHOD." / "ENDFORM.". Optional: auto-derived from the block type ' +
+          '(METHOD→ENDMETHOD., FORM→ENDFORM., FUNCTION→ENDFUNCTION., MODULE→ENDMODULE.).',
+      },
+      source: { type: 'string', description: 'Replacement block text (the full new block, including its start/end lines).' },
+      sourceFile: {
+        type: 'string',
+        description:
+          'Alternative to `source`: absolute path of a local UTF-8 file holding the replacement block. ' +
+          'Provide exactly one of source / sourceFile.',
+      },
+      activate: { type: 'boolean', description: 'Also activate the object after writing (default false).' },
+      ...DESTINATION_PARAM,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+
+        properties: {
+          uri: { type: 'string', required: true },
+          name: { type: 'string', required: true },
+          start: { type: 'string', required: true },
+          end: { type: 'string', required: true },
+          replaced: { type: 'boolean', required: true },
+          oldLines: { type: 'integer', required: true },
+          newLines: { type: 'integer', required: true },
+          unlocked: { type: 'boolean' },
+          activated: { type: 'boolean' },
+          activation: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              success: { type: 'boolean' },
+              message: { type: 'string' },
+            },
+          },
+        },
+      },
+      render: (_args, value) =>
+        text(
+          `${value.name}: block [${value.start} … ${value.end}] replaced (${value.oldLines} → ${value.newLines} lines)` +
+            `${value.unlocked === false ? ' (still locked)' : ''}` +
+            `${value.activated ? ' · activated' : ''}` +
+            `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}`,
+        ),
+    },
+    execute: async (args) => {
+      const entry = registry.require(destinationOf(args));
+      const ref = await resolveObject(entry.client, {
+        objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
+        name: typeof args.name === 'string' ? args.name : undefined,
+        type: typeof args.type === 'string' ? args.type : undefined,
+      });
+      const packageName = await resolvePackageName(
+        entry.client,
+        ref,
+        typeof args.packageName === 'string' ? args.packageName : undefined,
+      );
+      if (!packageName) {
+        throw new AdtPolicyError(
+          'allowedPackages',
+          `adt_edit_object: cannot determine the package of ${ref.name} for the permission check; ` +
+            'pass `packageName` explicitly or read the object first',
+        );
+      }
+      policy.assertEditAllowed(packageName, 'adt_edit_object');
+
+      const startText = String(args.start ?? '').trim();
+      if (!startText) throw new Error('adt_edit_object: `start` 必填');
+      const endText = String(args.end ?? '').trim() || defaultEndFor(startText) || '';
+      if (!endText) throw new Error(`adt_edit_object: 无法自动推导结束行，请显式提供 \`end\`（起始行: ${startText}）`);
+      const replacement = await resolveSourceInput(args);
+
+      let unlocked = false;
+      let activated = false;
+      let activationResult: { success: boolean; message?: string } | undefined;
+      let replaced: { full: string; oldLines: number; newLines: number } | undefined;
+      const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri);
+      ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: assignedTransport });
+      try {
+        policy.assertTransportUsage(assignedTransport, `adt_edit_object (${ref.name})`);
+        const current = (await entry.client.readSource(ref.uri)).source;
+        replaced = replaceSourceBlock(current, startText, endText, replacement);
+        await entry.client.writeSource(ref.uri, replaced.full, { lockHandle: handle, transport: assignedTransport ?? undefined });
+        if (args.activate === true) {
+          const act = await entry.client.activate([ref], { transport: assignedTransport ?? undefined });
+          activated = act.success;
+          activationResult = {
+            success: act.success,
+            message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ' ' + i.message : ''}`).join('; ') || undefined,
+          };
+        }
+      } finally {
+        const released = await entry.client
+          .unlock(ref.uri, handle)
+          .then(() => true)
+          .catch(() => false);
+        if (released) ledger.deregister(entry.config.name, ref.uri);
+        unlocked = true;
+      }
+      return {
+        uri: ref.uri,
+        name: ref.name,
+        start: startText,
+        end: endText,
+        replaced: true,
+        oldLines: replaced?.oldLines ?? 0,
+        newLines: replaced?.newLines ?? 0,
+        unlocked,
+        activated: activated || undefined,
+        activation: activationResult,
+      };
     },
   });
 
@@ -214,14 +451,79 @@ export function sourceTools(deps: ToolDeps) {
         policy.assertTransportsEnabled('adt_create_object');
         policy.assertTransportAllowed(args.transport.trim(), 'adt_create_object');
       }
-      const result = await entry.client.createObject({
-        destination: entry.config.name,
-        type: String(args.type) as AdtCreatableObjectType,
-        name: String(args.name),
-        description: String(args.description ?? ''),
-        packageName,
-        transport: typeof args.transport === 'string' ? args.transport : undefined,
-      });
+      const result = await (async (): Promise<{
+        success: boolean;
+        uri?: string;
+        object?: { uri: string; type: string; name: string; category?: string };
+        messages: Array<{ severity: string; text: string }>;
+      }> => {
+        try {
+          return await entry.client.createObject({
+            destination: entry.config.name,
+            type: String(args.type) as AdtCreatableObjectType,
+            name: String(args.name),
+            description: String(args.description ?? ''),
+            packageName,
+            transport: typeof args.transport === 'string' ? args.transport : undefined,
+          });
+        } catch (error) {
+          // Minimal ADT profiles (e.g. impc-dev) may CREATE the object but
+          // answer the create call with an error page (HTTP 500 after
+          // auto-assigning a transport request / lock). Detect that and report
+          // success-with-warning instead of a confusing failure.
+          if (error instanceof AdtError && error.status === 500) {
+            const probe = refFromName(String(args.name), String(args.type));
+            if (probe.uri && (await objectExists(entry.client, probe.uri))) {
+              return {
+                success: true,
+                uri: probe.uri,
+                object: probe,
+                messages: [
+                  {
+                    severity: 'W',
+                    text: `backend answered HTTP 500 but the object exists — created (check the auto-generated transport request if any)`,
+                  },
+                ],
+              };
+            }
+          }
+          throw error;
+        }
+      })();
+      // Some backends auto-lock an object right after creation (and assign a
+      // generated transport request) without returning a lock handle. Leaving
+      // that lock behind blocks later edits (HTTP 403 EU510) until SM12. So:
+      //   1. try to LOCK ourselves — if it succeeds the object was free and we
+      //      immediately release OUR handle (clean state);
+      //   2. if the backend already holds the lock, try a handle-less UNLOCK;
+      //   3. if that is also rejected, remember the object in the lock ledger
+      //      so `adt_unlock_all` can retry later.
+      if (result.success && result.uri) {
+        const destination = entry.config.name;
+        let lockResult: { handle: string } | undefined;
+        try {
+          lockResult = await entry.client.lock(result.uri);
+        } catch {
+          // already locked (403) or lock unsupported → handle-less attempt below
+        }
+        if (lockResult) {
+          try {
+            await entry.client.unlock(result.uri, lockResult.handle);
+          } catch {
+            ledger.register({ destination, uri: result.uri, name: result.object?.name ?? String(args.name), handle: lockResult.handle, note: 'create post-check lock' });
+          }
+        } else {
+          const released = await entry.client.unlockBestEffort(result.uri);
+          if (!released.released) {
+            ledger.register({
+              destination,
+              uri: result.uri,
+              name: result.object?.name ?? String(args.name),
+              note: 'create auto-lock (no handle returned by backend)',
+            });
+          }
+        }
+      }
       return {
         success: result.success,
         uri: result.uri ?? '',
@@ -235,7 +537,8 @@ export function sourceTools(deps: ToolDeps) {
   const deleteObject = defineTool({
     name: 'adt_delete_object',
     description:
-      'Delete an ABAP development object from the system. Irreversible — prefer deactivation or transport-based removal when unsure. ' +
+      'Delete an ABAP development object from the system (modern deletion service, legacy _action fallback). ' +
+      'Irreversible — prefer deactivation or transport-based removal when unsure. ' +
       'Subject to the plugin permission policy (allowedPackages / allowTransportableEdits).',
     parameters: {
       objectUri: { type: 'string', description: 'Exact ADT object URI.' },
@@ -280,9 +583,11 @@ export function sourceTools(deps: ToolDeps) {
       }
       policy.assertEditAllowed(packageName, 'adt_delete_object');
       await entry.client.deleteObject(ref.uri);
+      // The object (and any lock on it) is gone — drop the ledger entry.
+      ledger.deregister(entry.config.name, ref.uri);
       return { uri: ref.uri, deleted: true };
     },
   });
 
-  return [readObject, writeObject, createObject, deleteObject];
+  return [readObject, writeObject, editSource, createObject, deleteObject];
 }

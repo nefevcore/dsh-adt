@@ -1,0 +1,56 @@
+# npm 发布 —— Trusted Publishing（OIDC），三包按依赖顺序
+#
+# 无需任何 npm token：npm >= 11.5 在 id-token: write 权限下经 GitHub OIDC
+# 换取一次性短时令牌。前提（npmjs.com 各包页面配置一次，包必须已存在）：
+#   @nefevcore/abap-adt-protocol / abap-adt-mock / abap-adt-dsh-plugin
+#   → Settings → Add Trusted Publisher：
+#     repository owner: nefevcore
+#     repository name:  dsh-adt
+#     workflow:         publish.yml
+#     environment:      留空
+#
+# 触发：推送 v* 标签，或 Actions 页面手动 workflow_dispatch。
+# 发版 = 同时 bump 三个 packages/*/package.json 的 version → commit → tag v* → push。
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  id-token: write # npm trusted publishing（OIDC）必需
+  contents: read
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # 版本取自根 package.json 的 packageManager
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # 自带 npm ≥ 11.5（trusted publishing 最低要求）
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建 + 测试（66 例）
+        run: pnpm test
+
+      - name: 打包（workspace:* 自动替换为实际版本号）
+        run: |
+          mkdir -p dist-tarballs
+          for p in adt-protocol adt-mock dsh-plugin-abap-adt; do
+            (cd "packages/$p" && pnpm pack --pack-destination ../../dist-tarballs)
+          done
+
+      - name: 发布（依赖顺序：protocol → mock → plugin；OIDC 免 token/2FA）
+        run: |
+          npm publish dist-tarballs/nefevcore-abap-adt-protocol-*.tgz
+          npm publish dist-tarballs/nefevcore-abap-adt-mock-*.tgz
+          npm publish dist-tarballs/nefevcore-abap-adt-dsh-plugin-*.tgz

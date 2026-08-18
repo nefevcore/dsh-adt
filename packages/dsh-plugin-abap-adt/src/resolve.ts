@@ -1,4 +1,4 @@
-import type { AdtClient, AdtObjectRef, AdtObjectSearchHit } from '@abap-adt/protocol';
+import type { AdtClient, AdtObjectRef, AdtObjectSearchHit } from '@nefevcore/abap-adt-protocol';
 
 /**
  * Type → ADT object-type + URI-prefix mapping for the object types the tools

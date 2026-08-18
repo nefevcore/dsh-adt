@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { AdtClient, AdtError } from '@abap-adt/protocol';
-import { createMockAdtServer } from '@abap-adt/mock';
+import { AdtClient, AdtError } from '@nefevcore/abap-adt-protocol';
+import { createMockAdtServer } from '@nefevcore/abap-adt-mock';
 
 let server: Awaited<ReturnType<typeof createMockAdtServer>>;
 let port: number;
@@ -68,9 +68,33 @@ test('lock → write → unlock roundtrip', async () => {
   assert.ok(handle);
   const newSource = before.source.replace('Hello, ', 'Hi, ');
   await c.writeSource(uri, newSource);
-  await c.unlock(uri);
+  await c.unlock(uri, handle);
   const after = await c.readSource(uri);
   assert.ok(after.source.includes('Hi, '));
+});
+
+test('unlockBestEffort releases a lock without a handle', async () => {
+  const c = client();
+  const uri = '/sap/bc/adt/oo/classes/zcl_flaky';
+  const { handle } = await c.lock(uri);
+  assert.ok(handle);
+  // No handle passed → the backend must release the lock anyway.
+  const released = await c.unlockBestEffort(uri);
+  assert.equal(released.released, true);
+  // The lock is gone: locking again must succeed.
+  const again = await c.lock(uri);
+  await c.unlock(uri, again.handle);
+});
+
+test('search retries with a trailing wildcard when a bare term matches nothing', async () => {
+  const c = client();
+  // The mock matches substrings, so a bare term usually hits; force the
+  // zero-hit path with a name that only exists with the suffix intact.
+  const result = await c.search('ZCL_DEMO');
+  assert.ok(result.objects.length > 0);
+  // A query that matches nothing must not throw and reports zero hits.
+  const none = await c.search('ZXQ_NEVER_EXISTS_');
+  assert.equal(none.count, 0);
 });
 
 test('activation succeeds for valid objects and fails for broken source', async () => {
@@ -110,6 +134,46 @@ test('runs ABAP unit tests', async () => {
   ]);
   assert.equal(failing.success, false);
   assert.ok(failing.failed >= 1);
+});
+
+test('falls back to the legacy synchronous testruns service on old backends', async () => {
+  // Legacy backend: POST /abapunit/runs is a plain 404; only the synchronous
+  // /abapunit/testruns service exists (verified against a real NW 7.4x system).
+  const legacyServer = createMockAdtServer({ port: 0, username: 'demo', password: 'demo', legacyUnitOnly: true });
+  const legacyPort = await legacyServer.listen();
+  try {
+    const c = new AdtClient({
+      name: 'legacy',
+      url: `http://127.0.0.1:${legacyPort}`,
+      client: '000',
+      language: 'EN',
+      auth: { type: 'basic', username: 'demo', password: 'demo' },
+    });
+    const passing = await c.runUnitTests([
+      { uri: '/sap/bc/adt/oo/classes/zcl_demo', type: 'CLAS/OC', name: 'ZCL_DEMO' },
+    ]);
+    assert.equal(passing.success, true);
+    assert.equal(passing.total, 2);
+    assert.equal(passing.passed, 2);
+    assert.ok(passing.classes.some((cls) => cls.className.startsWith('LTCL_')));
+
+    const failing = await c.runUnitTests([
+      { uri: '/sap/bc/adt/oo/classes/zcl_flaky', type: 'CLAS/OC', name: 'ZCL_FLAKY' },
+    ]);
+    assert.equal(failing.success, false);
+    assert.ok(failing.failed >= 1);
+    assert.ok(failing.classes[0]?.tests.some((t) => t.status === 'FAILED' && t.message));
+
+    // An object without tests yields an empty runResult — success stays false,
+    // but nothing throws (real D01 behavior for classes without test includes).
+    const empty = await c.runUnitTests([
+      { uri: '/sap/bc/adt/oo/interfaces/zif_demo', type: 'INTF/OI', name: 'ZIF_DEMO' },
+    ]);
+    assert.equal(empty.total, 0);
+    assert.equal(empty.classes.length, 0);
+  } finally {
+    await legacyServer.close();
+  }
 });
 
 test('runs ATC checks', async () => {
@@ -246,6 +310,10 @@ test('lock state is exposed via object metadata', async () => {
   const locked = await c.getObjectLock(uri);
   assert.equal(locked.locked, true);
   assert.equal(locked.lockedBy, 'DEMO');
+
+  // Typed metadata accept must also surface the lock state.
+  const typed = await c.getObjectLock(uri, 'CLAS/OC');
+  assert.equal(typed.locked, true);
 
   await c.unlock(uri, handle);
   const released = await c.getObjectLock(uri);

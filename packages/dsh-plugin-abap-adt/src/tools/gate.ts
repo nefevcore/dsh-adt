@@ -4,7 +4,7 @@
  * call and returns a single go/no-go verdict. Read-only (runs checks only).
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import type { AdtObjectRef } from '@abap-adt/protocol';
+import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
 

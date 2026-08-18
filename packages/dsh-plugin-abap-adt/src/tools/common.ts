@@ -1,6 +1,7 @@
-import type { AdtObjectRef } from '@abap-adt/protocol';
+import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 import type { AdtRegistry } from '../registry.js';
 import type { AdtPolicy } from '../policy.js';
+import type { LockLedger } from '../locks.js';
 
 /** Parameter spec for the destination selector used by every tool. */
 export const DESTINATION_PARAM = {
@@ -22,6 +23,8 @@ export interface ToolDeps {
   registry: AdtRegistry;
   /** Effective permission policy; mutating tools assert rules against it. */
   policy: AdtPolicy;
+  /** Persistent lock ledger (see src/locks.ts). */
+  ledger: LockLedger;
 }
 
 /** Render a simple text block. */

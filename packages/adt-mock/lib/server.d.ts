@@ -20,6 +20,13 @@ export interface MockAdtOptions {
     password?: string;
     systemId?: string;
     release?: string;
+    /**
+     * Simulate an old / restricted backend (BASIS < 7.5x, verified against a
+     * real NW 7.4x system): the async `/abapunit/runs` service is absent
+     * (404) and ABAP Unit runs only via the synchronous `/abapunit/testruns`
+     * endpoint, which returns `aunit:runResult` directly in the POST response.
+     */
+    legacyUnitOnly?: boolean;
 }
 interface MockState {
     objects: MockObject[];
