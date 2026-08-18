@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.21.0",
-  "description": "ABAP Development Tools (ADT) protocol client + DeepSeek Harness plugin: agent-native SAP ABAP access with features beyond VS Code ADT.",
+  "description": "ABAP Development Tools (ADT) protocol client + DeepSeek Harness plugin: agent-native SAP ABAP access with agent-scale batch capabilities.",
   "type": "module",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "build": "tsc -b && tsc -p packages/dsh-plugin-abap-adt",
-    "test": "pnpm build && node --test --test-timeout=60000 packages/adt-protocol/test/xml.test.ts packages/adt-protocol/test/transports.test.ts packages/adt-mock/test/integration.test.ts packages/dsh-plugin-abap-adt/test/policy.test.ts packages/dsh-plugin-abap-adt/test/local_check.test.ts packages/dsh-plugin-abap-adt/test/versions.test.ts packages/dsh-plugin-abap-adt/test/gate.test.ts",
+    "test": "pnpm build && node --test --test-timeout=60000 packages/adt-protocol/test/xml.test.ts packages/adt-protocol/test/transports.test.ts packages/adt-mock/test/integration.test.ts packages/dsh-plugin-abap-adt/test/policy.test.ts packages/dsh-plugin-abap-adt/test/local_check.test.ts packages/dsh-plugin-abap-adt/test/versions.test.ts packages/dsh-plugin-abap-adt/test/gate.test.ts packages/dsh-plugin-abap-adt/test/config_file.test.ts",
     "mock": "node packages/adt-mock/lib/cli.js",
     "bundle": "node scripts/bundle.mjs",
     "typecheck": "tsc -b --pretty false && tsc -p packages/dsh-plugin-abap-adt --pretty false"

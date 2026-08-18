@@ -1,0 +1,24 @@
+# 插件行片段 —— 追加到官方 cordis 预设的末尾（不要单独使用！）
+#
+# 用法：
+#   1. 找到官方 cordis 预设的 agent.cordis.yml（预设清单里报了真实路径，
+#      一般在部署目录的 agent-presets/cordis/ 下），完整复制为：
+#      ~/.dsh/.agent-presets/abap-adt/agent.cordis.yml
+#      —— 预设决定会话的整套工具，必须整份复制，不能只放本片段。
+#   2. 把本文件内容追加到那份 agent.cordis.yml 的末尾。
+#   3. 同目录放 preset.yml（可用本目录的模板）写显示名。
+#   4. 重启 DSH，新建会话时在预设 chip 里选它。
+#
+# 连接与权限配置（destinations / 权限管控）**不要写在这里**：
+# 放到 ~/.dsh/abap-adt.yml（复制本目录的 abap-adt.yml.example 改）。
+# 预设文件保持稳定，换系统/改权限只动外部配置文件。
+
+- id: abap-adt
+  # 前提：先装进 profile（见仓库 README「安装与更新」）：
+  #   dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin
+  name: '@nefevcore/abap-adt-dsh-plugin'
+  config:
+    demo: true        # 进程内 mock 目的地（demo），零 SAP 系统即可体验；不用可改 false
+    # configFile: '~/.dsh/abap-adt.yml'
+    # ↑ 默认自动发现 ${DSH_HOME:-~/.dsh}/abap-adt.yml，存在即加载，无需显式写。
+    #   写了就以它为准（~ 会展开；相对路径锚定到 dsh home）。

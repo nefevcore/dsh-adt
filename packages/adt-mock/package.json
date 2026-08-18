@@ -29,7 +29,9 @@
     "abap",
     "sap",
     "adt",
+    "abap-adt",
     "mock",
+    "mock-server",
     "testing"
   ],
   "repository": {
