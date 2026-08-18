@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-93-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-100-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
 > **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **30 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport*, plus agent-scale batch capabilities (whole-package quality reports, local export, offline abaplint, release gates). Ships with a zero-config mock server, so you can try everything without an SAP system.
@@ -15,22 +15,27 @@
 
 ## 安装与更新
 
-安装和更新只支持 **dsh CLI** 一种方式（要求 pnpm 在 PATH）。三个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-dsh-plugin` DSH 插件）：
+安装和更新只支持 **dsh CLI** 一种方式（要求 pnpm 在 PATH——`corepack enable` 或 `npm i -g pnpm`；缺失时 dsh 会明确报错）。三个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-dsh-plugin` DSH 插件）：
 
 ```bash
-# 安装（装进 web profile）
+# ① 安装（装进 web profile；仅安装，不自动加载）
 dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin
 
-# 更新到最新版
+# ② 生成按会话启用的 agent 预设（一次性；复制默认预设并追加插件行）
+dsh plugin --profile web exec abap-adt-preset
+
+# 更新到最新版（更新不会动你的预设与配置）
 dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin
 
 # 或锁定指定版本
 dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.1.0
 ```
 
-DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件后重启 DSH**；之后的配置变更走 DSH settings，免重启热生效。
+**默认不加载，按会话启用（by design）**：包内不声明 `dsh.bundle`，安装只是把包放进 profile 的依赖里——`adt_*` 工具**只出现在用 `abap-adt` 预设创建的会话**，其他会话完全不受影响。安装时 dsh 会提示 `declares no dsh.bundle — installed as a plain dependency`，这正是预期行为。
 
-包内声明了 `dsh.bundle.patch`（`cordis.patch.yml`），安装后自动成为 profile 的 bundle 层（默认 `demo: true`，全局生效）。安装不会创建任何 agent 预设（要按会话隔离工具集，见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md) 模板）；连接真实系统的 `destinations` 与权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
+②生成的预设：复制部署默认预设（`~/.dsh/settings.yaml` 的 `agent-presets.default`，通常是 `cordis`）到 `~/.dsh/.agent-presets/abap-adt/` 并追加插件行；支持 `--id/--from/--name/--force/--dry-run`。重启 DSH 后新建会话，在预设 chip 选「ABAP Development」即可。手工建预设的说明见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md)。
+
+DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更走 DSH settings，免重启热生效。连接真实系统的 `destinations` 与权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
 ## 核心能力
 
@@ -46,7 +51,7 @@ DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.
 
 ## 快速开始
 
-安装并重启 DSH 后，插件默认 `demo: true`（进程内 mock ADT 服务器，`demo` 目的地）。直接对代理说：
+完成上方 ①② 并重启 DSH，新建会话选择「ABAP Development」预设。插件默认 `demo: true`（进程内 mock ADT 服务器，`demo` 目的地）。直接对代理说：
 
 > 列出 ADT 目的地 → 搜索 ZCL_DEMO → 读取其源码 → 修改它 → 激活 → 跑它的单元测试和 ATC → 导出整个 ZPACK_DEMO 包到本地 → 本地静态检查导出的源码
 
@@ -129,7 +134,7 @@ abap-adt:
 
 ## 测试
 
-共 **93 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、abaplint 本地检查、版本 diff、发布门禁、配置分层。
+共 **100 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、abaplint 本地检查、版本 diff、发布门禁、配置分层。
 
 ## 路线图（可扩展方向）
 

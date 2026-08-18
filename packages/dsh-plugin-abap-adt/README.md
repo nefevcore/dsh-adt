@@ -35,25 +35,31 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.1.0
 
 **Restart DSH after install/update** — HMR only re-runs config, not cached library modules.
 
-The package declares `dsh.bundle.patch` (`cordis.patch.yml`), so it automatically becomes a bundle layer of the profile (default `demo: true`, enabled globally). **Installing does not create an agent preset** — to scope the tools to selected sessions, set up a preset (below). System/permission settings live in the `abap-adt:` section of `${DSH_HOME:-~/.dsh}/settings.yaml` (the DSH settings user layer): edits hot-apply without restarting DSH.
+**Not loaded by default, by design.** The package declares no `dsh.bundle`, so `dsh plugin add` installs it as a plain profile dependency and nothing activates: `dsh plugin`'s reconcile only promotes bundle-declaring packages into the global layer, and per-session scoping is exactly what this plugin wants (dsh prints `declares no dsh.bundle — installed as a plain dependency`; that is expected). Activate it through a preset row — or, if you really want it globally, add a row with the same id to your own `~/.dsh/profiles/web/cordis.patch.yml`.
 
-### Enable per session (agent preset — recommended)
+System/permission settings live in the `abap-adt:` section of `${DSH_HOME:-~/.dsh}/settings.yaml` (the DSH settings user layer): edits hot-apply without restarting DSH.
 
-Create `~/.dsh/.agent-presets/abap-adt/agent.cordis.yml` (a full copy of your default preset) and append:
+### Enable per session (agent preset — the intended way)
+
+After installing, generate the preset with the bundled CLI:
+
+```bash
+dsh plugin --profile web exec abap-adt-preset
+```
+
+That copies your deployment default preset (usually `cordis`) to `~/.dsh/.agent-presets/abap-adt/`, appends the plugin row below, and writes a `preset.yml` (`--id/--from/--name/--force/--dry-run` supported). Restart DSH once, then pick the preset from the chip beside your workspace when creating a session.
+
+The appended row (for a manual setup):
 
 ```yaml
 - id: abap-adt
   name: '@nefevcore/abap-adt-dsh-plugin'
   config:
     demo: true              # built-in mock destination — no SAP system needed
-    # destinations / permission policy belong in ~/.dsh/abap-adt.yml (see below)
+    # destinations / permission policy belong in settings.yaml `abap-adt:` (see below)
 ```
 
-Pick the preset from the chip beside your workspace when creating a session. A ready-to-share template lives at [`presets/abap-adt.example/`](../presets/abap-adt.example/README.md) in the repository.
-
-### Enable globally
-
-Installing into the profile already enables it globally via the bundled `cordis.patch.yml` (default: `demo: true`). To change config, put it in `~/.dsh/abap-adt.yml` (see below) or add a row with the same id (`abap-adt`) to `~/.dsh/profiles/web/cordis.patch.yml` under `- insert:` — config layers resolve nearest-wins (agent → preset → global).
+A ready-to-share manual template lives at [`presets/abap-adt.example/`](../presets/abap-adt.example/README.md) in the repository.
 
 ## Config layering
 
