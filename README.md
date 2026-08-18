@@ -28,7 +28,7 @@ dsh plugin --profile web exec abap-adt-preset
 dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin
 
 # 或锁定指定版本
-dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.1.0
+dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 ```
 
 **默认不加载，按会话启用（by design）**：包内不声明 `dsh.bundle`，安装只是把包放进 profile 的依赖里——`adt_*` 工具**只出现在用 `abap-adt` 预设创建的会话**，其他会话完全不受影响。安装时 dsh 会提示 `declares no dsh.bundle — installed as a plain dependency`，这正是预期行为。
