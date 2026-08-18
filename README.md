@@ -37,6 +37,20 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 
 DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更走 DSH settings，免重启热生效。连接真实系统的 `destinations` 与权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
+### 从 0.1.0 升级
+
+0.2.0 改为**默认不加载**（全局层自动退场）且配置迁入 settings，升级后需做两件一次性操作：
+
+```bash
+# ① 更新（reconcile 会自动把插件移出全局 bundle 层——工具从默认会话消失是预期的）
+dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin
+
+# ② 重建预设（若 0.1.0 时代已手工建过 ~/.dsh/.agent-presets/abap-adt/，加 --force 覆盖）
+dsh plugin --profile web exec abap-adt-preset --force
+```
+
+然后把 `~/.dsh/abap-adt.yml`（0.1.0 的外部配置文件，已废弃）的内容**整体缩进两格**并入 `~/.dsh/settings.yaml` 的 `abap-adt:` 段并删除旧文件（不迁会有 deprecation 告警；模板见 [`presets/abap-adt.example/settings-section.example`](presets/abap-adt.example/settings-section.example)）。最后重启 DSH,新会话选「ABAP Development」预设。
+
 ## 核心能力
 
 - **代理原生工具**：30 个 `adt_*` 工具，AI 自主编排多步开发流程
