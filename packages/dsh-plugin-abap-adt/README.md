@@ -30,7 +30,7 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin
 dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin
 
 # or pin an exact version
-dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.1.0
+dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 ```
 
 **Restart DSH after install/update** — HMR only re-runs config, not cached library modules.
