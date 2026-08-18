@@ -9,7 +9,7 @@ import { AdtPolicy } from './policy.js';
  */
 export class AdtRegistry {
     destinations = new Map();
-    /** Effective permission policy (config > SAP_* env > defaults). */
+    /** Effective permission policy (config > SAP_* env > defaults); swapped by reload(). */
     policy;
     mockServer;
     mockPort;
@@ -19,16 +19,40 @@ export class AdtRegistry {
     /** Accepts the fully-resolved config from `resolveEffectiveConfig`. */
     static async create(config) {
         const registry = new AdtRegistry(AdtPolicy.resolve(config));
-        if (config.demo) {
-            await registry.startMock(config.demoPort);
+        await registry.reload(config);
+        return registry;
+    }
+    /**
+     * Re-apply a resolved config in place (settings hot reload): swaps the
+     * policy, rebuilds the destination table, and restarts the mock server
+     * only when its flags actually changed. Object identity is stable, so
+     * every tool holding this registry sees the new state.
+     */
+    async reload(config) {
+        const wantMock = config.demo;
+        const mockChanged = (this.mockServer !== undefined) !== wantMock ||
+            (wantMock && this.mockPort !== undefined && this.mockPort !== config.demoPort);
+        if (mockChanged && this.mockServer) {
+            await this.mockServer.close().catch(() => undefined);
+            this.mockServer = undefined;
+            this.mockPort = undefined;
+            this.destinations.delete('demo');
+        }
+        if (wantMock && this.mockServer === undefined) {
+            await this.startMock(config.demoPort);
+        }
+        // Rebuild the non-mock destinations (fresh clients; dropped names go away).
+        for (const [name, entry] of [...this.destinations]) {
+            if (!entry.mock)
+                this.destinations.delete(name);
         }
         for (const dest of config.destinations) {
-            registry.add(dest);
+            this.add(dest);
         }
         if (config.defaultDestination) {
-            registry.defaultName = config.defaultDestination;
+            this.defaultName = config.defaultDestination;
         }
-        return registry;
+        this.policy = AdtPolicy.resolve(config);
     }
     async startMock(port) {
         const mock = createMockAdtServer({

@@ -1,3 +1,26 @@
+/**
+ * Plugin configuration schema (schemastery) and the DSH-settings layering
+ * pipeline.
+ *
+ * The plugin registers its Config schema as the `abap-adt` settings namespace
+ * via `installSettingsSection` (see index.ts), so the composition entry (the
+ * plugin row's `config:` block) becomes the namespace `base` and the user's
+ * `~/.dsh/settings.yaml` `abap-adt:` section becomes the user layer. The
+ * effective config resolves nearest-wins:
+ *
+ *   1. schema defaults (lowest) — demo on, port 8123, defaultDestination demo
+ *   2. composition base — the plugin row config (preset / cordis.patch.yml)
+ *   3. legacy file — auto-discovered `${DSH_HOME:-~/.dsh}/abap-adt.yml`
+ *      (DEPRECATED: kept one release for migration; warns when present)
+ *   4. settings user section — `abap-adt:` in ~/.dsh/settings.yaml
+ *   5. explicit `configFile` — authoritative team-shared override; its path
+ *      comes from any lower layer
+ *
+ * Policy keys (`enableTransports` / `allowedTransports` /
+ * `allowTransportableEdits` / `allowedPackages`) deliberately carry NO schema
+ * default: when absent in every layer the `SAP_*` environment variables apply
+ * (see policy.ts), and only then the built-in defaults there.
+ */
 import z from '@deepseek-ai/schemastery';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -33,7 +56,7 @@ const destinationSchema = z.object({
     language: z.string(),
     username: z.string(),
     /** Static password (prefer `passwordEnv` / env var conventions). */
-    password: z.string(),
+    password: z.string().role('secret'),
     /** Name of the environment variable holding the password. */
     passwordEnv: z.string(),
     strictSSL: z.boolean().default(true),
@@ -41,17 +64,16 @@ const destinationSchema = z.object({
 });
 export const Config = z.object({
     /**
-     * External config file holding destinations / permission policy, so the
-     * composition (agent.cordis.yml / cordis.patch.yml) stays stable. `~` is
-     * expanded; relative paths anchor to the dsh home. Defaults to
-     * `${DSH_HOME:-~/.dsh}/abap-adt.yml` when that file exists.
+     * Authoritative external config file (team-shared destinations / permission
+     * policy). `~` is expanded; relative paths anchor to the dsh home. Its path
+     * may come from the composition row or the settings user section.
      */
     configFile: z.string(),
-    /** Optional in-process demo destination backed by the mock ADT server. */
-    demo: z.boolean(),
-    demoPort: z.number(),
+    /** In-process demo destination backed by the mock ADT server (default on). */
+    demo: z.boolean().default(true),
+    demoPort: z.number().default(8123),
     /** Default destination name used by tools when none is given. */
-    defaultDestination: z.string(),
+    defaultDestination: z.string().default('demo'),
     /**
      * Permission policy ("权限管控") knobs. Each is optional: when absent in
      * both inline config and the external file, the corresponding `SAP_*`
@@ -70,7 +92,7 @@ export const Config = z.object({
 });
 /** Default external config file name inside the dsh home directory. */
 export const DEFAULT_CONFIG_FILE = 'abap-adt.yml';
-/** Built-in defaults, applied last (must match the values documented in README). */
+/** Built-in defaults, applied last (mirrors the schema defaults above). */
 export function builtinDefaults() {
     return {
         demo: true,
@@ -117,38 +139,43 @@ export function resolveConfigFilePath(p) {
     const expanded = expandHomePath(p);
     return isAbsolute(expanded) ? expanded : resolve(dshHome(), expanded);
 }
-/** Path of the auto-discovered external config file (existence not checked). */
+/**
+ * Path of the DEPRECATED auto-discovered config file (existence not checked).
+ * Kept one release for migration; its contents now belong in the `abap-adt:`
+ * section of `${DSH_HOME:-~/.dsh}/settings.yaml`.
+ */
 export function autoDiscoverConfigFile() {
     return join(dshHome(), DEFAULT_CONFIG_FILE);
 }
 /**
- * Pure merge of config layers: inline > external file > built-in defaults.
- * `destinations` merge by `name` — a same-name inline entry replaces the file
- * entry, new names are appended (so a shipped `destinations: []` never masks
- * the file). Policy keys stay `undefined` when absent in both layers, leaving
+ * Pure nearest-wins composition of config layers, lowest first. Scalar keys:
+ * the last layer that sets a key wins. `destinations` merge by `name` across
+ * every layer — a same-name entry in a later layer replaces the earlier one,
+ * new names are appended (so a shipped `destinations: []` never masks another
+ * layer). Policy keys stay `undefined` when absent in every layer, leaving
  * them to the `SAP_*` env fallback in `AdtPolicy.resolve`.
  */
-export function mergeConfig(inline, file) {
+export function composeLayers(layers) {
     const merged = builtinDefaults();
     // Scalar assignment goes through a widened record view: the loop variable
     // key is a union, so a direct `merged[key] = value` would be `never`.
     const target = merged;
-    const applyLayer = (src) => {
-        if (!src)
-            return;
+    const byName = new Map();
+    for (const layer of layers) {
+        if (!layer)
+            continue;
         for (const key of SCALAR_KEYS) {
-            const value = src[key];
+            const value = layer[key];
             if (value !== undefined)
                 target[key] = value;
         }
-    };
-    applyLayer(file);
-    applyLayer(inline);
-    const byName = new Map();
-    for (const dest of file?.destinations ?? [])
-        byName.set(dest.name, dest);
-    for (const dest of inline.destinations ?? [])
-        byName.set(dest.name, dest);
+        // `configFile` rides along too (nearest layer that sets it wins) so the
+        // first resolution pass can discover the explicit path.
+        if (layer.configFile !== undefined)
+            merged.configFile = layer.configFile;
+        for (const dest of layer.destinations ?? [])
+            byName.set(dest.name, dest);
+    }
     merged.destinations = [...byName.values()];
     return merged;
 }
@@ -203,17 +230,28 @@ export async function loadExternalConfigFile(path) {
     return validated;
 }
 /**
- * Resolve the effective plugin config from the inline config plus the
- * external file (explicit `configFile`, else auto-discovered). A missing
- * explicitly-configured file is a warning, not an error — the plugin stays
- * usable with inline config + defaults.
+ * Resolve the effective plugin config across all layers (nearest wins):
+ * schema defaults < composition entry < legacy file < settings user section <
+ * explicit `configFile`. The legacy `${DSH_HOME:-~/.dsh}/abap-adt.yml` is
+ * auto-discovered and warns when present (deprecated). A missing explicitly
+ * configured file is a warning, not an error — the plugin stays usable.
  */
-export async function resolveEffectiveConfig(inline) {
+export async function resolveEffectiveConfig(source) {
     const warnings = [];
+    // Legacy auto-discovered file (deprecated, migration window).
+    let legacy;
+    const legacyPath = autoDiscoverConfigFile();
+    if (existsSync(legacyPath)) {
+        legacy = await loadExternalConfigFile(legacyPath);
+        warnings.push(`legacy config file ${legacyPath} is deprecated and will be removed in a future release; ` +
+            'move its contents into the `abap-adt:` section of settings.yaml and delete the file');
+    }
+    // First pass resolves the explicit configFile path from the lower layers.
+    const lower = composeLayers([source.entry, legacy, source.resolved]);
     let file;
     let usedPath;
-    if (inline.configFile) {
-        const path = resolveConfigFilePath(inline.configFile);
+    if (lower.configFile) {
+        const path = resolveConfigFilePath(lower.configFile);
         if (existsSync(path)) {
             file = await loadExternalConfigFile(path);
             usedPath = path;
@@ -222,14 +260,7 @@ export async function resolveEffectiveConfig(inline) {
             warnings.push(`configFile not found, ignored: ${path}`);
         }
     }
-    else {
-        const path = autoDiscoverConfigFile();
-        if (existsSync(path)) {
-            file = await loadExternalConfigFile(path);
-            usedPath = path;
-        }
-    }
-    const config = mergeConfig(inline, file);
+    const config = composeLayers([source.entry, legacy, source.resolved, file]);
     if (usedPath)
         config.configFileUsed = usedPath;
     return { config, warnings };

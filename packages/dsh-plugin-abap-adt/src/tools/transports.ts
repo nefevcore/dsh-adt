@@ -4,7 +4,7 @@ import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.
 import { resolveObject } from '../resolve.js';
 
 export function transportTools(deps: ToolDeps) {
-  const { registry, policy } = deps;
+  const { registry } = deps;
 
   const objectVersions = defineTool({
     name: 'adt_object_versions',
@@ -170,7 +170,7 @@ export function transportTools(deps: ToolDeps) {
     output: transportOutput,
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      policy.assertTransportsEnabled('adt_list_transports');
+      registry.policy.assertTransportsEnabled('adt_list_transports');
       const entry = registry.require(destinationOf(args));
       const transports = await entry.client.listTransports({
         allUsers: args.allUsers === true,
@@ -247,9 +247,9 @@ export function transportTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      policy.assertTransportsEnabled('adt_get_transport');
+      registry.policy.assertTransportsEnabled('adt_get_transport');
       const number = String(args.number);
-      policy.assertTransportAllowed(number, 'adt_get_transport');
+      registry.policy.assertTransportAllowed(number, 'adt_get_transport');
       const entry = registry.require(destinationOf(args));
       const t = await entry.client.getTransport(number, { signal: exec.signal });
       return {
@@ -295,9 +295,9 @@ export function transportTools(deps: ToolDeps) {
       render: (_args, value) => text(`${value.number}: ${value.released ? 'released' : 'release failed'}${value.status ? ` (status ${value.status})` : ''}`),
     },
     execute: async (args, exec) => {
-      policy.assertTransportsEnabled('adt_release_transport');
+      registry.policy.assertTransportsEnabled('adt_release_transport');
       const number = String(args.number);
-      policy.assertTransportAllowed(number, 'adt_release_transport');
+      registry.policy.assertTransportAllowed(number, 'adt_release_transport');
       const entry = registry.require(destinationOf(args));
       const t = await entry.client.releaseTransport(number, { signal: exec.signal });
       return { number: t.number, released: !t.modifiable, status: t.status };

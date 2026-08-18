@@ -23,7 +23,7 @@ function readPresentationMeta(value) {
     };
 }
 export function sourceTools(deps, ctx) {
-    const { registry, policy, ledger } = deps;
+    const { registry, ledger } = deps;
     /** True when the backend answers GET on the object URI (object exists). */
     async function objectExists(client, uri) {
         try {
@@ -232,7 +232,7 @@ export function sourceTools(deps, ctx) {
                 throw new AdtPolicyError('allowedPackages', `adt_write_object: cannot determine the package of ${ref.name} for the permission check; ` +
                     'pass `packageName` explicitly or read the object first');
             }
-            policy.assertEditAllowed(packageName, 'adt_write_object');
+            registry.policy.assertEditAllowed(packageName, 'adt_write_object');
             const unlock = args.unlock !== false;
             let unlocked = false;
             const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri, { signal: exec.signal });
@@ -240,7 +240,7 @@ export function sourceTools(deps, ctx) {
             try {
                 // The backend may auto-assign a transport request on lock (CORRNR);
                 // it must be within allowedTransports or the edit is rolled back.
-                policy.assertTransportUsage(assignedTransport, `adt_write_object (${ref.name})`);
+                registry.policy.assertTransportUsage(assignedTransport, `adt_write_object (${ref.name})`);
                 const src = await resolveSourceInput(args);
                 await entry.client.writeSource(ref.uri, src, { lockHandle: handle, transport: assignedTransport ?? undefined, signal: exec.signal });
                 if (unlock) {
@@ -267,7 +267,7 @@ export function sourceTools(deps, ctx) {
             'writes the full source back (transport/versioning still record the object; the change is confined to that block), ' +
             'and optionally activates it. `end` defaults to the matching closing statement for METHOD/ENDMETHOD, FORM/ENDFORM, ' +
             'FUNCTION/ENDFUNCTION, MODULE/ENDMODULE. Provide the replacement block via `source` or a local file via `sourceFile`. ' +
-            'Subject to the plugin permission policy.',
+            'Subject to the plugin permission registry.policy.',
         parameters: {
             objectUri: { type: 'string', description: 'Exact ADT object URI (recommended, from search/read).' },
             name: { type: 'string', description: 'Object name (used with type when no objectUri).' },
@@ -337,7 +337,7 @@ export function sourceTools(deps, ctx) {
                 throw new AdtPolicyError('allowedPackages', `adt_edit_object: cannot determine the package of ${ref.name} for the permission check; ` +
                     'pass `packageName` explicitly or read the object first');
             }
-            policy.assertEditAllowed(packageName, 'adt_edit_object');
+            registry.policy.assertEditAllowed(packageName, 'adt_edit_object');
             const startText = String(args.start ?? '').trim();
             if (!startText)
                 throw new Error('adt_edit_object: `start` 必填');
@@ -352,7 +352,7 @@ export function sourceTools(deps, ctx) {
             const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri, { signal: exec.signal });
             ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: assignedTransport });
             try {
-                policy.assertTransportUsage(assignedTransport, `adt_edit_object (${ref.name})`);
+                registry.policy.assertTransportUsage(assignedTransport, `adt_edit_object (${ref.name})`);
                 const current = (await entry.client.readSource(ref.uri, { signal: exec.signal })).source;
                 replaced = replaceSourceBlock(current, startText, endText, replacement);
                 await entry.client.writeSource(ref.uri, replaced.full, { lockHandle: handle, transport: assignedTransport ?? undefined, signal: exec.signal });
@@ -442,10 +442,10 @@ export function sourceTools(deps, ctx) {
             const entry = registry.require(destinationOf(args));
             const packageName = String(args.packageName ?? '$TMP').toUpperCase();
             // Permission check: package whitelist + transportable-edit rule.
-            policy.assertEditAllowed(packageName, 'adt_create_object');
+            registry.policy.assertEditAllowed(packageName, 'adt_create_object');
             if (typeof args.transport === 'string' && args.transport.trim().length > 0) {
-                policy.assertTransportsEnabled('adt_create_object');
-                policy.assertTransportAllowed(args.transport.trim(), 'adt_create_object');
+                registry.policy.assertTransportsEnabled('adt_create_object');
+                registry.policy.assertTransportAllowed(args.transport.trim(), 'adt_create_object');
             }
             const result = await (async () => {
                 try {
@@ -566,7 +566,7 @@ export function sourceTools(deps, ctx) {
                 throw new AdtPolicyError('allowedPackages', `adt_delete_object: cannot determine the package of ${ref.name} for the permission check; ` +
                     'pass `packageName` explicitly');
             }
-            policy.assertEditAllowed(packageName, 'adt_delete_object');
+            registry.policy.assertEditAllowed(packageName, 'adt_delete_object');
             await entry.client.deleteObject(ref.uri, { signal: exec.signal });
             // The object (and any lock on it) is gone — drop the ledger entry.
             ledger.deregister(entry.config.name, ref.uri);

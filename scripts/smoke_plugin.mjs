@@ -1,23 +1,36 @@
-// Plugin-level smoke: boot apply() with a stub ctx, verify tool registration,
-// P5 (unknown destination), and the three P3 presentation cards.
+// Plugin-level smoke: REAL cordis Context with stub tools/fs services (no
+// settings provider mounted → composition-entry degradation path), verifying
+// tool registration, P5 (unknown destination), and the three P3 cards.
 process.env.DSH_HOME = (await import('node:os')).tmpdir() + '/dsh-smoke-' + Date.now();
 const { mkdirSync } = await import('node:fs');
 mkdirSync(process.env.DSH_HOME, { recursive: true });
 
+const { Context, Service } = await import('@deepseek-ai/cordis');
 const plugin = await import('../packages/dsh-plugin-abap-adt/lib/index.js');
-const registered = [];
-const disposeFns = [];
-const ctx = {
-  logger: undefined,
-  fs: undefined,
-  tools: { register: (def) => { registered.push(def); return () => {}; } },
-};
 
-const disposer = await plugin.apply(ctx, { demo: true, demoPort: 0 });
+class StubToolRuntime extends Service {
+  definitions = new Map();
+  constructor(ctx) { super(ctx, 'tools'); }
+  register(def) { this.definitions.set(def.name, def); return () => this.definitions.delete(def.name); }
+  get(name) { return this.definitions.get(name); }
+}
+class StubFs extends Service {
+  constructor(ctx) { super(ctx, 'fs'); }
+  async resolve(path) { return { path }; }
+}
+
+const root = new Context();
+await root.plugin(StubToolRuntime);
+await root.plugin(StubFs);
+await root.plugin(plugin, { demo: true, demoPort: 0 });
+await new Promise((r) => setTimeout(r, 300));
+
+const registered = [...root.tools.definitions.values()];
+const disposer = async () => { await root.fiber.dispose(); };
 console.log('registered tools:', registered.length);
 
 // --- P5: unknown destination must throw
-const byName = (n) => registered.find((t) => t.name === n);
+const byName = (n) => root.tools.get(n);
 let p5 = 'NO THROW';
 try { await byName('adt_ping').execute({ destination: 'prod-typo' }, { signal: new AbortController().signal }); }
 catch (e) { p5 = e.message.slice(0, 80); }

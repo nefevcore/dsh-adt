@@ -3,7 +3,7 @@ import { AdtError } from '@nefevcore/abap-adt-protocol';
 import { DESTINATION_PARAM, destinationOf, text } from './common.js';
 import { resolveObject } from '../resolve.js';
 export function transportTools(deps) {
-    const { registry, policy } = deps;
+    const { registry } = deps;
     const objectVersions = defineTool({
         name: 'adt_object_versions',
         description: 'Read the version history (Atom feed) of a source object. Each version carries the transport request ' +
@@ -152,7 +152,7 @@ export function transportTools(deps) {
         output: transportOutput,
         isConcurrencySafe: () => true,
         execute: async (args, exec) => {
-            policy.assertTransportsEnabled('adt_list_transports');
+            registry.policy.assertTransportsEnabled('adt_list_transports');
             const entry = registry.require(destinationOf(args));
             const transports = await entry.client.listTransports({
                 allUsers: args.allUsers === true,
@@ -223,9 +223,9 @@ export function transportTools(deps) {
         },
         isConcurrencySafe: () => true,
         execute: async (args, exec) => {
-            policy.assertTransportsEnabled('adt_get_transport');
+            registry.policy.assertTransportsEnabled('adt_get_transport');
             const number = String(args.number);
-            policy.assertTransportAllowed(number, 'adt_get_transport');
+            registry.policy.assertTransportAllowed(number, 'adt_get_transport');
             const entry = registry.require(destinationOf(args));
             const t = await entry.client.getTransport(number, { signal: exec.signal });
             return {
@@ -268,9 +268,9 @@ export function transportTools(deps) {
             render: (_args, value) => text(`${value.number}: ${value.released ? 'released' : 'release failed'}${value.status ? ` (status ${value.status})` : ''}`),
         },
         execute: async (args, exec) => {
-            policy.assertTransportsEnabled('adt_release_transport');
+            registry.policy.assertTransportsEnabled('adt_release_transport');
             const number = String(args.number);
-            policy.assertTransportAllowed(number, 'adt_release_transport');
+            registry.policy.assertTransportAllowed(number, 'adt_release_transport');
             const entry = registry.require(destinationOf(args));
             const t = await entry.client.releaseTransport(number, { signal: exec.signal });
             return { number: t.number, released: !t.modifiable, status: t.status };

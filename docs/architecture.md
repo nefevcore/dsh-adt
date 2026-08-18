@@ -43,7 +43,7 @@
 ## 关键设计决策
 
 1. **直接实现协议，而非桥接任何 IDE**：不依赖 IDE 或 SAP 闭源库，可 headless 运行，天然支持批量与自动化
-2. **零配置 demo**：插件内置 mock 服务器，开箱即用；真实系统通过 `destinations` 配置接入（`configFile` 外部文件 `${DSH_HOME:-~/.dsh}/abap-adt.yml`，分层就近覆盖：内联 config > 外部文件 > `SAP_*` 环境变量 > 默认值；`destinations` 按名字合并）
+2. **零配置 demo**：插件内置 mock 服务器，开箱即用；真实系统通过 `destinations` 配置接入（走 DSH settings：schema 注册为 `abap-adt` 命名空间，插件行 config 为 composition base，`~/.dsh/settings.yaml` 的 `abap-adt:` 段为用户层且**热生效**；显式 `configFile` 为团队共享的最权威层；分层就近覆盖：settings 用户段 > 内联 config > 旧版独立文件（已废弃）> schema 默认值，权限四开关另有 `SAP_*` 环境变量兜底；`destinations` 跨层按名字合并）
 3. **异步 run 流程**：ABAP Unit / ATC 都是"提交 → 轮询 → 取结果"，客户端完整实现轮询循环与超时
 4. **协议正确性优先**：错误处理覆盖 ADT 特有语义（激活错误在 200 body、exc:exception 错误体、403 CSRF/锁冲突区分、412 ETag）
 5. **沙箱感知**：导出工具走 `ctx.fs` 服务，遵守 DSH 文件沙箱策略

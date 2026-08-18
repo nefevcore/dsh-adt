@@ -5,7 +5,7 @@ import { AdtPolicyError } from '../policy.js';
 import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 
 export function lifecycleTools(deps: ToolDeps) {
-  const { registry, policy } = deps;
+  const { registry } = deps;
 
   const objectListParam = {
     objects: {
@@ -109,8 +109,8 @@ export function lifecycleTools(deps: ToolDeps) {
       // policy for every object.
       if (!checkOnly) {
         if (typeof args.transport === 'string' && args.transport.trim().length > 0) {
-          policy.assertTransportsEnabled('adt_activate');
-          policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
+          registry.policy.assertTransportsEnabled('adt_activate');
+          registry.policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
         }
         const inputs = args.objects as Array<{ objectUri?: string; name: string; type?: string; packageName?: string }>;
         for (let i = 0; i < refs.length; i++) {
@@ -124,11 +124,11 @@ export function lifecycleTools(deps: ToolDeps) {
                 'pass `packageName` on the object entry or read the object first',
             );
           }
-          policy.assertEditAllowed(packageName, `adt_activate (${ref.name})`);
+          registry.policy.assertEditAllowed(packageName, `adt_activate (${ref.name})`);
         }
       } else if (typeof args.transport === 'string' && args.transport.trim().length > 0) {
-        policy.assertTransportsEnabled('adt_activate');
-        policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
+        registry.policy.assertTransportsEnabled('adt_activate');
+        registry.policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
       }
 
       const result = await entry.client.activate(refs, {

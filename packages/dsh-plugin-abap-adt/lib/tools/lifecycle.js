@@ -3,7 +3,7 @@ import { DESTINATION_PARAM, destinationOf, text } from './common.js';
 import { resolveObjects, resolvePackageName, typeLabel } from '../resolve.js';
 import { AdtPolicyError } from '../policy.js';
 export function lifecycleTools(deps) {
-    const { registry, policy } = deps;
+    const { registry } = deps;
     const objectListParam = {
         objects: {
             type: 'array',
@@ -92,8 +92,8 @@ export function lifecycleTools(deps) {
             // policy for every object.
             if (!checkOnly) {
                 if (typeof args.transport === 'string' && args.transport.trim().length > 0) {
-                    policy.assertTransportsEnabled('adt_activate');
-                    policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
+                    registry.policy.assertTransportsEnabled('adt_activate');
+                    registry.policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
                 }
                 const inputs = args.objects;
                 for (let i = 0; i < refs.length; i++) {
@@ -104,12 +104,12 @@ export function lifecycleTools(deps) {
                         throw new AdtPolicyError('allowedPackages', `adt_activate: cannot determine the package of ${ref.name} for the permission check; ` +
                             'pass `packageName` on the object entry or read the object first');
                     }
-                    policy.assertEditAllowed(packageName, `adt_activate (${ref.name})`);
+                    registry.policy.assertEditAllowed(packageName, `adt_activate (${ref.name})`);
                 }
             }
             else if (typeof args.transport === 'string' && args.transport.trim().length > 0) {
-                policy.assertTransportsEnabled('adt_activate');
-                policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
+                registry.policy.assertTransportsEnabled('adt_activate');
+                registry.policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
             }
             const result = await entry.client.activate(refs, {
                 transport: typeof args.transport === 'string' ? args.transport : undefined,
