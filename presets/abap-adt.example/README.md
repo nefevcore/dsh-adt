@@ -1,7 +1,17 @@
 # abap-adt agent preset 模板（可安全分享，不含任何密码/内网地址）
 
-给同事配好的三件套。装好插件后（`dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin`，见仓库
-[README](../../README.md#安装与更新)），按下面 3 步启用：
+**推荐：一条命令自动生成**（装好插件后）：
+
+```bash
+dsh plugin --profile web exec abap-adt-preset
+```
+
+它会复制部署默认预设到 `~/.dsh/.agent-presets/abap-adt/`、追加插件行、写
+`preset.yml`（支持 `--id/--from/--name/--force/--dry-run`）。本目录的文件是
+**手工建预设时的模板**（生成器找不到 dsh 安装、或想定制时用），内容与生成
+产物一致。
+
+手工三步：
 
 1. **建预设**：把官方 `cordis` 预设的 `agent.cordis.yml` 整份复制为
    `~/.dsh/.agent-presets/abap-adt/agent.cordis.yml`，再把
