@@ -51,6 +51,9 @@ jobs:
 
       - name: 发布（依赖顺序：protocol → mock → plugin；OIDC 免 token/2FA）
         run: |
-          npm publish dist-tarballs/nefevcore-abap-adt-protocol-*.tgz
-          npm publish dist-tarballs/nefevcore-abap-adt-mock-*.tgz
-          npm publish dist-tarballs/nefevcore-abap-adt-dsh-plugin-*.tgz
+          # file: 前缀必需：npm 11 对裸相对路径 .tgz 会按 git 依赖解析
+          # （git ls-remote ssh://git@github.com/...）而不是本地 tarball。
+          publish() { npm publish "file:$1"; }
+          publish "$(ls dist-tarballs/nefevcore-abap-adt-protocol-*.tgz)"
+          publish "$(ls dist-tarballs/nefevcore-abap-adt-mock-*.tgz)"
+          publish "$(ls dist-tarballs/nefevcore-abap-adt-dsh-plugin-*.tgz)"
