@@ -35,7 +35,7 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.1.0
 
 **Restart DSH after install/update** — HMR only re-runs config, not cached library modules.
 
-The package declares `dsh.bundle.patch` (`cordis.patch.yml`), so it automatically becomes a bundle layer of the profile (default `demo: true`, enabled globally). **Installing does not create an agent preset** — to scope the tools to selected sessions, set up a preset (below). System/permission settings live in an external config file, auto-discovered at `${DSH_HOME:-~/.dsh}/abap-adt.yml`.
+The package declares `dsh.bundle.patch` (`cordis.patch.yml`), so it automatically becomes a bundle layer of the profile (default `demo: true`, enabled globally). **Installing does not create an agent preset** — to scope the tools to selected sessions, set up a preset (below). System/permission settings live in the `abap-adt:` section of `${DSH_HOME:-~/.dsh}/settings.yaml` (the DSH settings user layer): edits hot-apply without restarting DSH.
 
 ### Enable per session (agent preset — recommended)
 

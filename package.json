@@ -19,11 +19,12 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "@nefevcore/abap-adt-mock": "workspace:*",
-    "@nefevcore/abap-adt-protocol": "workspace:*",
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-settings": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.0.0",
+    "@nefevcore/abap-adt-mock": "workspace:*",
+    "@nefevcore/abap-adt-protocol": "workspace:*",
     "@types/node": "^24.0.0",
     "esbuild": "^0.28.2",
     "typescript": "^5.6.0"

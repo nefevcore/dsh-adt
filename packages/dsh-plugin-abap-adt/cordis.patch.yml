@@ -3,14 +3,19 @@
 # Installed into a dsh profile as a bundle layer: registers the ABAP ADT
 # plugin, which exposes the `adt_*` tool family to the agent.
 #
-# Config resolution (nearest wins):
-#   1. inline `config:` of the plugin row (this file / a same-id row in the
+# Config resolution (nearest wins; see README 配置分层):
+#   1. schema defaults (demo mode on, port 8123, no destinations)
+#   2. inline `config:` of the plugin row (this file / a same-id row in the
 #      profile's own cordis.patch.yml / an agent preset's agent.cordis.yml)
-#   2. external config file — `configFile` key, auto-discovered at
-#      `${DSH_HOME:-~/.dsh}/abap-adt.yml` when it exists (this is where
-#      destinations and the permission policy belong; see README)
-#   3. SAP_* environment variables (permission policy only)
-#   4. built-in defaults (demo mode on, port 8123, no destinations)
+#      — the DSH settings composition base
+#   3. legacy `${DSH_HOME:-~/.dsh}/abap-adt.yml` when it exists (deprecated;
+#      warns; contents belong in the settings user section now)
+#   4. settings user section — `abap-adt:` in ~/.dsh/settings.yaml (hot reload)
+#   5. explicit `configFile` key from any layer (team-shared, authoritative)
+#   6. SAP_* environment variables (permission policy only)
+#
+# The plugin registers its schema as the `abap-adt` settings namespace, so
+# editing the settings.yaml section hot-applies without restarting DSH.
 #
 # Passwords are read from config or environment variables
 # (ADT_<DESTINATION_NAME>_PASSWORD / ADT_PASSWORD), never stored in

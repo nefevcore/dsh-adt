@@ -11,7 +11,8 @@
  */
 
 import { Context } from '@deepseek-ai/cordis';
-import { Config, resolveEffectiveConfig, type PluginConfig } from './config.js';
+import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings';
+import { Config, composeLayers, resolveEffectiveConfig, type PluginConfig } from './config.js';
 import { AdtRegistry } from './registry.js';
 import { LockLedger } from './locks.js';
 import { deepCompact } from './tools/common.js';
@@ -35,19 +36,75 @@ import { policyTools } from './tools/policy.js';
 const name = 'abap-adt';
 const inject = ['tools', 'fs'];
 
-/** Apply the plugin: build the destination registry and register every tool. */
+/**
+ * Apply the plugin: build the destination registry and register every tool.
+ *
+ * Configuration follows the DSH settings seam: the plugin row's `config:`
+ * block is the composition `base`, the user's `~/.dsh/settings.yaml`
+ * `abap-adt:` section overrides it, and an explicit `configFile` (team
+ * shared) is authoritative. When the settings service is not mounted the
+ * composition entry alone drives the plugin, exactly as composed. Config
+ * changes hot-reload the registry in place — only code changes need a DSH
+ * restart.
+ */
 async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<void>> {
   const logger = ctx.logger?.(name);
-  // Layered config: inline `config:` block > external file (configFile /
-  // auto-discovered ~/.dsh/abap-adt.yml) > SAP_* env > built-in defaults.
-  const { config: effective, warnings } = await resolveEffectiveConfig(config);
-  for (const warning of warnings) (logger?.warn ?? console.warn)(`abap-adt: ${warning}`);
-  const registry = await AdtRegistry.create(effective);
+  const warn = (message: string) => (logger?.warn ?? console.warn)(`abap-adt: ${message}`);
+  const info = (message: string) => (logger?.info ?? console.info)(`abap-adt: ${message}`);
+  const error = (message: string) => (logger?.error ?? console.error)(`abap-adt: ${message}`);
+
   // Persistent lock ledger: survives process restarts so `adt_unlock_all` can
   // release locks left behind by crashed sessions (see src/locks.ts).
   const ledger = new LockLedger();
 
-  const deps = { registry, policy: registry.policy, ledger };
+  // Settings wiring (optional service): `source()` returns the resolved
+  // namespace value while a provider is attached and falls back to the
+  // composition entry otherwise. Every attach/detach/change fires onChange —
+  // including one synchronously at attach — so all rebuild state and the
+  // registry must exist BEFORE the section is installed.
+  let source: () => PluginConfig = () => config;
+  let rebuildChain: Promise<void> = Promise.resolve();
+  let lastSnapshot = '';
+  const registry = await AdtRegistry.create(composeLayers([config]));
+  async function rebuild(): Promise<void> {
+    rebuildChain = rebuildChain.then(async () => {
+      try {
+        const resolved = source();
+        const settingsAttached = resolved !== config;
+        const { config: effective, warnings } = await resolveEffectiveConfig({
+          entry: config,
+          resolved: settingsAttached ? resolved : undefined,
+        });
+        for (const warning of warnings) warn(warning);
+        const snapshot = JSON.stringify(effective);
+        if (snapshot === lastSnapshot) return;
+        await registry.reload(effective);
+        lastSnapshot = snapshot;
+        info(
+          `config applied: ${registry.destinations.size} destination(s): ` +
+            `${[...registry.destinations.keys()].join(', ') || '(none)'}` +
+            (settingsAttached ? ' [settings]' : '') +
+            (effective.configFileUsed ? `; config file: ${effective.configFileUsed}` : ''),
+        );
+      } catch (err) {
+        error(`config reload failed, keeping last good state: ${(err as Error).message}`);
+      }
+    });
+    return rebuildChain;
+  }
+
+  // Installed last: attach fires onChange immediately, and rebuild() above
+  // is ready for it by this point.
+  installSettingsSection(ctx, settingsNamespace(name), Config, config, {
+    setSource: (current) => {
+      source = current;
+    },
+    onChange: () => {
+      void rebuild();
+    },
+  });
+
+  const deps = { registry, ledger };
   const tools = [
     ...systemTools(deps),
     ...searchTools(deps),
@@ -78,12 +135,7 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
     });
   }
 
-  const log = (logger?.info ?? console.info);
-  log(
-    `abap-adt plugin active: ${tools.length} tools registered, ` +
-      `${registry.destinations.size} destination(s): ${[...registry.destinations.keys()].join(', ') || '(none)'}` +
-      (effective.configFileUsed ? `; config file: ${effective.configFileUsed}` : ' (inline config only)'),
-  );
+  info(`plugin active: ${tools.length} tools registered`);
 
   // Fiber disposer: close the mock server and drop clients on unload.
   return () => registry.dispose();

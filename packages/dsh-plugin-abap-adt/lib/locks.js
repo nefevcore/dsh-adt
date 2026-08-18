@@ -10,17 +10,29 @@
  * a create may have auto-locked) in a file that survives process restarts gives
  * `adt_unlock_all` the object URIs (and handles when known) to clean up.
  *
- * The ledger file lives under `${DSH_HOME:-<homedir>/.dsh}/abap-adt-locks.json`
- * — one file per machine, so any session on the same host can clean up after
- * any other. All mutations are fire-and-forget (never fail a tool because the
- * ledger could not be persisted).
+ * The ledger file lives under `${DSH_HOME:-<homedir>/.dsh}/storages/abap-adt-locks.json`
+ * — the DSH home's per-plugin storage area, one file per machine, so any
+ * session on the same host can clean up after any other. A ledger left by an
+ * older release at `${DSH_HOME}/abap-adt-locks.json` is migrated on first load.
+ * All mutations are fire-and-forget (never fail a tool because the ledger
+ * could not be persisted).
  */
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { copyFileSync, readFileSync, renameSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-/** Resolve the ledger file path (never throws). */
+/** Resolve the ledger file path inside the DSH storages area (never throws). */
 export function ledgerFilePath() {
+    try {
+        const base = process.env.DSH_HOME || join(homedir(), '.dsh');
+        return join(base, 'storages', 'abap-adt-locks.json');
+    }
+    catch {
+        return join('.', 'storages', 'abap-adt-locks.json');
+    }
+}
+/** Pre-storages ledger location used by earlier releases. */
+function legacyLedgerFilePath() {
     try {
         const base = process.env.DSH_HOME || join(homedir(), '.dsh');
         return join(base, 'abap-adt-locks.json');
@@ -29,11 +41,37 @@ export function ledgerFilePath() {
         return join('.', 'abap-adt-locks.json');
     }
 }
+/**
+ * One-time migration from the pre-storages location: move the legacy ledger
+ * into `storages/` when only the legacy file exists. Best effort — any failure
+ * leaves the files untouched and the constructor simply starts from what it
+ * can read.
+ */
+function migrateLegacyLedger(file) {
+    const legacy = legacyLedgerFilePath();
+    if (legacy === file)
+        return;
+    try {
+        if (!existsSync(legacy) || existsSync(file))
+            return;
+        try {
+            mkdirSync(dirname(file), { recursive: true });
+            renameSync(legacy, file);
+        }
+        catch {
+            copyFileSync(legacy, file);
+        }
+    }
+    catch {
+        // Never let ledger bookkeeping disturb the plugin.
+    }
+}
 export class LockLedger {
     entries = [];
     file;
     constructor(file = ledgerFilePath()) {
         this.file = file;
+        migrateLegacyLedger(file);
         this.load();
     }
     load() {

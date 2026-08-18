@@ -7,7 +7,7 @@ import { text, type ToolDeps } from './common.js';
  * instead of discovering them one denial at a time.
  */
 export function policyTools(deps: ToolDeps) {
-  const { policy } = deps;
+  const { registry } = deps;
 
   return [
     defineTool({
@@ -64,7 +64,8 @@ export function policyTools(deps: ToolDeps) {
         },
       },
       isConcurrencySafe: () => true,
-      execute: async () => policy.describe(),
+      // Read via the registry so a settings hot reload is reflected immediately.
+      execute: async () => registry.policy.describe(),
     }),
   ];
 }

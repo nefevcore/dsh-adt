@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-86-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-93-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
 > **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **30 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport*, plus agent-scale batch capabilities (whole-package quality reports, local export, offline abaplint, release gates). Ships with a zero-config mock server, so you can try everything without an SAP system.
@@ -28,9 +28,9 @@ dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin
 dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.1.0
 ```
 
-DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新后重启 DSH 生效**（改完配置同理）。
+DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件后重启 DSH**；之后的配置变更走 DSH settings，免重启热生效。
 
-包内声明了 `dsh.bundle.patch`（`cordis.patch.yml`），安装后自动成为 profile 的 bundle 层（默认 `demo: true`，全局生效）。安装不会创建任何 agent 预设（要按会话隔离工具集，见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md) 模板）；连接真实系统的 `destinations` 与权限开关放在外部配置文件 `~/.dsh/abap-adt.yml`（见下方「配置分层」）。
+包内声明了 `dsh.bundle.patch`（`cordis.patch.yml`），安装后自动成为 profile 的 bundle 层（默认 `demo: true`，全局生效）。安装不会创建任何 agent 预设（要按会话隔离工具集，见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md) 模板）；连接真实系统的 `destinations` 与权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
 ## 核心能力
 
@@ -50,35 +50,38 @@ DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.
 
 > 列出 ADT 目的地 → 搜索 ZCL_DEMO → 读取其源码 → 修改它 → 激活 → 跑它的单元测试和 ATC → 导出整个 ZPACK_DEMO 包到本地 → 本地静态检查导出的源码
 
-连真实系统：把 [`presets/abap-adt.example/abap-adt.yml.example`](presets/abap-adt.example/abap-adt.yml.example) 复制为 `~/.dsh/abap-adt.yml` 并填入目的地（改完重启 DSH）：
+连真实系统：在 `~/.dsh/settings.yaml` 增加 `abap-adt:` 段（保存即热生效，无需重启）：
 
 ```yaml
-defaultDestination: dev
-destinations:
-  - name: dev
-    url: https://sap.example.com:443     # ABAP 前端的 HTTP(S) 地址
-    client: '100'                        # 集团
-    language: EN
-    username: DEVELOPER
-    passwordEnv: ADT_DEV_PASSWORD        # 从环境变量读密码（推荐）
-    strictSSL: false                     # 自签名证书（SAP 内网常见）时必须关
+abap-adt:
+  defaultDestination: dev
+  destinations:
+    - name: dev
+      url: https://sap.example.com:443     # ABAP 前端的 HTTP(S) 地址
+      client: '100'                        # 集团
+      language: EN
+      username: DEVELOPER
+      passwordEnv: ADT_DEV_PASSWORD        # 从环境变量读密码（推荐）
+      strictSSL: false                     # 自签名证书（SAP 内网常见）时必须关
 ```
 
 ### 配置分层（config layering）
 
-连接与权限等环境信息放独立的外部文件，不写进预设/patch；生效值**就近覆盖**：
+配置走 **DSH settings**：插件把自身的配置 schema 注册为 `abap-adt` 命名空间，插件行的内联 config 是 composition base，`~/.dsh/settings.yaml` 的 `abap-adt:` 段是用户层——**保存即热生效**（目的地表与权限策略原地重建，无需重启 DSH）。生效值**就近覆盖**：
 
 ```
-① 预设/patch 中插件行的内联 config          （agent.cordis.yml / cordis.patch.yml）
-② 外部配置文件 configFile                   （默认自动发现 ~/.dsh/abap-adt.yml）
-③ SAP_* 环境变量                            （仅权限四开关）
-④ 内置默认                                   （demo 开、8123、defaultDestination=demo、无目的地）
+① schema 默认值                              （demo 开、8123、defaultDestination=demo、无目的地）
+② 插件行内联 config                          （agent preset / cordis.patch.yml —— composition base）
+③ 旧版独立文件 ~/.dsh/abap-adt.yml            （已废弃，仅迁移期兼容，出现即告警）
+④ settings.yaml 的 abap-adt: 用户段           （用户覆盖层）
+⑤ 显式 configFile（团队共享，最权威）          （路径可来自 ②-④ 任一层；~ 展开、相对路径锚定 dsh home）
+⑥ SAP_* 环境变量                              （仅权限四开关，且仅在 ①-⑤ 均未设置时生效）
 ```
 
-- `configFile` 未显式配置时自动发现 `${DSH_HOME:-~/.dsh}/abap-adt.yml`；配置后以它为准（`~` 会展开，相对路径锚定到 dsh home）
-- `destinations` 按名字合并：内联同名条目覆盖文件条目，其余追加——随包发布的 `destinations: []` 永远不会挡住外部文件
-- 外部文件写错键名会**明确报错**（含文件路径与未知键名），YAML 语法错误同理；显式指定的 `configFile` 不存在则告警并回退内联配置
-- 密码解析优先级：`config.password` > `passwordEnv` 指定变量 > `ADT_<NAME>_PASSWORD` > `ADT_PASSWORD`。**切勿把密码写进配置文件。**
+- `destinations` 跨层按名字合并：高层的同名条目覆盖低层，新名字追加——随包发布的 `destinations: []` 永远不会挡住其他层
+- settings 段/共享文件写错键名会**明确报错**（含路径与未知键名）；显式指定的 `configFile` 不存在则告警并跳过该层
+- 密码在 schema 中标记为 secret（settings 展示时自动脱敏）；解析优先级 `config.password` > `passwordEnv` 指定变量 > `ADT_<NAME>_PASSWORD` > `ADT_PASSWORD`。**切勿把密码明文写进任何配置。**
+- 未挂载 settings 服务的精简 profile 自动降级：仅用插件行 config 解析，行为与组合时一致
 
 认证说明：
 - **on-prem 经典 ABAP**：Basic Auth（支持自签名证书时设 `strictSSL: false`）
@@ -88,7 +91,7 @@ destinations:
 
 所有会**修改 SAP 系统状态**的工具（`adt_write_object` / `adt_create_object` / `adt_delete_object` / `adt_activate` / 传输工具族）在执行前都会经过一层权限策略（`src/policy.ts`），不满足即抛 `[POLICY]` 错误并指明具体规则。只读工具（搜索/读取/检查/测试/ATC/导出）不受限制。
 
-四个独立开关，生效值优先级为 **config（内联 `agent.cordis.yml`/`cordis.patch.yml` 插件行 > 外部 `~/.dsh/abap-adt.yml`）> `SAP_*` 环境变量 > 内置默认值**：
+四个独立开关，生效值优先级为 **settings 用户段/共享文件 > 插件行内联 config > `SAP_*` 环境变量 > 内置默认值**（详见上方「配置分层」）：
 
 | 开关 | config 键 | 环境变量 | 默认 | 含义 |
 |---|---|---|---|---|
@@ -126,7 +129,7 @@ destinations:
 
 ## 测试
 
-共 **86 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、abaplint 本地检查、版本 diff、发布门禁、配置分层。
+共 **93 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、abaplint 本地检查、版本 diff、发布门禁、配置分层。
 
 ## 路线图（可扩展方向）
 

@@ -6,7 +6,7 @@ import { text } from './common.js';
  * instead of discovering them one denial at a time.
  */
 export function policyTools(deps) {
-    const { policy } = deps;
+    const { registry } = deps;
     return [
         defineTool({
             name: 'adt_permissions',
@@ -60,7 +60,8 @@ export function policyTools(deps) {
                 },
             },
             isConcurrencySafe: () => true,
-            execute: async () => policy.describe(),
+            // Read via the registry so a settings hot reload is reflected immediately.
+            execute: async () => registry.policy.describe(),
         }),
     ];
 }

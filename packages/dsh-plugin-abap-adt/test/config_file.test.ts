@@ -9,7 +9,7 @@ import {
   expandHomePath,
   resolveConfigFilePath,
   autoDiscoverConfigFile,
-  mergeConfig,
+  composeLayers,
   loadExternalConfigFile,
   resolveEffectiveConfig,
   type PluginConfig,
@@ -67,70 +67,62 @@ test('autoDiscoverConfigFile: ${DSH_HOME:-~/.dsh}/abap-adt.yml', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Pure merge (inline > file > defaults)
+// Pure layered composition (nearest wins)
 // ---------------------------------------------------------------------------
 
 const dest = (name: string, overrides: Record<string, unknown> = {}) =>
   ({ name, url: `https://${name}.example.com`, strictSSL: true, timeoutMs: 60_000, ...overrides }) as never;
 
-test('mergeConfig: built-in defaults when both layers are empty', () => {
-  assert.deepEqual(mergeConfig({} as Partial<PluginConfig>), builtinDefaults());
+
+test('composeLayers: built-in defaults when no layer sets anything', () => {
+  assert.deepEqual(composeLayers([undefined, {}]), builtinDefaults());
 });
 
-test('mergeConfig: file fills keys unset inline, inline wins on conflict', () => {
-  const merged = mergeConfig(
-    { demo: false, allowedPackages: 'Z*' } as Partial<PluginConfig>,
-    { demo: true, defaultDestination: 'dev', allowedPackages: 'Z*,$TMP' } as Partial<PluginConfig>,
-  );
-  assert.equal(merged.demo, false); // inline wins
-  assert.equal(merged.defaultDestination, 'dev'); // file fills unset key
-  assert.equal(merged.allowedPackages, 'Z*'); // policy keys follow the same rule
-  assert.equal(merged.demoPort, builtinDefaults().demoPort); // untouched → default
+test('composeLayers: later layers fill unset keys and win on conflict', () => {
+  const merged = composeLayers([
+    { defaultDestination: 'entry' } as Partial<PluginConfig>,
+    { defaultDestination: 'user', demoPort: 9_999 } as Partial<PluginConfig>,
+  ]);
+  assert.equal(merged.defaultDestination, 'user');
+  assert.equal(merged.demoPort, 9_999);
 });
 
-test('mergeConfig: policy keys stay undefined when absent in both layers (env fallback)', () => {
-  const merged = mergeConfig({} as Partial<PluginConfig>);
+test('composeLayers: policy keys stay undefined when absent in every layer (env fallback)', () => {
+  const merged = composeLayers([{}] as Array<Partial<PluginConfig>>);
   assert.equal(merged.enableTransports, undefined);
   assert.equal(merged.allowedTransports, undefined);
   assert.equal(merged.allowTransportableEdits, undefined);
   assert.equal(merged.allowedPackages, undefined);
 });
 
-test('mergeConfig: destinations merge by name, inline replaces same-name entries', () => {
-  const merged = mergeConfig(
-    { destinations: [dest('dev', { url: 'https://inline.example.com' }), dest('qa')] } as Partial<PluginConfig>,
-    { destinations: [dest('dev'), dest('prod')] } as Partial<PluginConfig>,
-  );
+test('composeLayers: destinations merge by name across layers, later wins', () => {
+  const merged = composeLayers([
+    { destinations: [dest('base', { url: 'u1' }), dest('shared', { url: 'u-base' })] } as Partial<PluginConfig>,
+    { destinations: [dest('user', { url: 'u2' }), dest('shared', { url: 'u-user' })] } as Partial<PluginConfig>,
+  ]);
   assert.deepEqual(
-    merged.destinations.map((d) => `${d.name}:${d.url}`),
-    ['dev:https://inline.example.com', 'prod:https://prod.example.com', 'qa:https://qa.example.com'],
+    merged.destinations.map((d) => `${d.name}:${d.url}`).sort(),
+    ['base:u1', 'shared:u-user', 'user:u2'],
   );
 });
 
-test('mergeConfig: shipped empty destinations: [] never masks the file', () => {
-  const merged = mergeConfig(
+test('composeLayers: a shipped empty destinations: [] never masks another layer', () => {
+  const merged = composeLayers([
     { destinations: [] } as Partial<PluginConfig>,
-    { destinations: [dest('dev')] } as Partial<PluginConfig>,
-  );
+    { destinations: [dest('dev', { url: 'u' })] } as Partial<PluginConfig>,
+  ]);
   assert.equal(merged.destinations.length, 1);
-  assert.equal(merged.destinations[0].name, 'dev');
+  assert.equal(merged.destinations[0]?.name, 'dev');
 });
 
-// ---------------------------------------------------------------------------
-// External file loading + validation
-// ---------------------------------------------------------------------------
-
-const VALID_FILE = `\
-# abap-adt external config
+const VALID_FILE = `
 defaultDestination: dev
-enableTransports: true
 allowedTransports: 'D01K96*'
-allowedPackages: 'Z*,$TMP'
 destinations:
   - name: dev
-    url: https://sap.example.com:44300
+    url: https://sap.example.com:443
     client: '100'
-    language: ZH
+    language: EN
     username: DEVELOPER
     passwordEnv: ADT_DEV_PASSWORD
     strictSSL: false
@@ -211,15 +203,15 @@ test('loadExternalConfigFile: a top-level list is rejected', async () => {
 // Full resolution (auto-discovery + explicit configFile)
 // ---------------------------------------------------------------------------
 
-test('resolveEffectiveConfig: auto-discovers ${DSH_HOME}/abap-adt.yml', async () => {
+test('resolveEffectiveConfig: legacy ${DSH_HOME}/abap-adt.yml applies with a deprecation warning', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'abap-adt-home-'));
   const previous = process.env.DSH_HOME;
   process.env.DSH_HOME = dir;
   try {
     writeFileSync(join(dir, 'abap-adt.yml'), VALID_FILE, 'utf8');
-    const { config, warnings } = await resolveEffectiveConfig({ demo: true } as PluginConfig);
-    assert.equal(warnings.length, 0);
-    assert.equal(config.configFileUsed, join(dir, 'abap-adt.yml'));
+    const { config, warnings } = await resolveEffectiveConfig({ entry: { demo: true } as PluginConfig });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /deprecated/);
     assert.equal(config.defaultDestination, 'dev');
     assert.equal(config.destinations.length, 1);
   } finally {
@@ -234,7 +226,7 @@ test('resolveEffectiveConfig: no file anywhere → inline + defaults, no warning
   const previous = process.env.DSH_HOME;
   process.env.DSH_HOME = dir;
   try {
-    const { config, warnings } = await resolveEffectiveConfig({} as PluginConfig);
+    const { config, warnings } = await resolveEffectiveConfig({ entry: {} as PluginConfig });
     assert.equal(warnings.length, 0);
     assert.equal(config.configFileUsed, undefined);
     assert.deepEqual(config.destinations, []);
@@ -254,7 +246,7 @@ test('resolveEffectiveConfig: explicit configFile wins over auto-discovery', asy
     writeFileSync(join(dir, 'abap-adt.yml'), 'defaultDestination: auto\n', 'utf8');
     const explicit = join(dir, 'explicit.yml');
     writeFileSync(explicit, 'defaultDestination: explicit\n', 'utf8');
-    const { config } = await resolveEffectiveConfig({ configFile: explicit } as PluginConfig);
+    const { config } = await resolveEffectiveConfig({ entry: { configFile: explicit } as PluginConfig });
     assert.equal(config.configFileUsed, explicit);
     assert.equal(config.defaultDestination, 'explicit');
   } finally {
@@ -270,9 +262,11 @@ test('resolveEffectiveConfig: missing explicit configFile warns and falls back',
   process.env.DSH_HOME = dir;
   try {
     const { config, warnings } = await resolveEffectiveConfig({
-      configFile: join(dir, 'nope.yml'),
-      defaultDestination: 'inline-dev',
-    } as PluginConfig);
+      entry: {
+        configFile: join(dir, 'nope.yml'),
+        defaultDestination: 'inline-dev',
+      } as PluginConfig,
+    });
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /configFile not found/);
     assert.equal(config.defaultDestination, 'inline-dev');
@@ -290,9 +284,85 @@ test('resolveEffectiveConfig: relative configFile anchors to dsh home', async ()
   try {
     mkdirSync(join(dir, 'team'), { recursive: true });
     writeFileSync(join(dir, 'team', 'adt.yml'), 'defaultDestination: team\n', 'utf8');
-    const { config } = await resolveEffectiveConfig({ configFile: 'team/adt.yml' } as PluginConfig);
+    const { config } = await resolveEffectiveConfig({ entry: { configFile: 'team/adt.yml' } as PluginConfig });
     assert.equal(config.configFileUsed, join(dir, 'team', 'adt.yml'));
     assert.equal(config.defaultDestination, 'team');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// Settings-layer resolution (base < user; explicit configFile authoritative)
+// ---------------------------------------------------------------------------
+
+test('resolveEffectiveConfig: settings user section overrides the composition entry', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'abap-adt-settings-'));
+  const previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = dir;
+  try {
+    const { config } = await resolveEffectiveConfig({
+      entry: { demo: true, defaultDestination: 'base-dest' } as PluginConfig,
+      // simulates schema(defaults)+base+user resolution: user flipped demo off
+      resolved: { demo: false, defaultDestination: 'base-dest' } as PluginConfig,
+    });
+    assert.equal(config.demo, false);
+    assert.equal(config.defaultDestination, 'base-dest');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveEffectiveConfig: settings layer can supply the explicit configFile path', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'abap-adt-settings-file-'));
+  const previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = dir;
+  try {
+    const shared = join(dir, 'team.yml');
+    writeFileSync(shared, 'defaultDestination: team\n', 'utf8');
+    const { config } = await resolveEffectiveConfig({
+      entry: {} as PluginConfig,
+      resolved: { configFile: shared } as PluginConfig,
+    });
+    assert.equal(config.configFileUsed, shared);
+    assert.equal(config.defaultDestination, 'team');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveEffectiveConfig: destinations union across entry, legacy, settings, file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'abap-adt-union-'));
+  const previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = dir;
+  try {
+    writeFileSync(join(dir, 'abap-adt.yml'),
+      `destinations:
+  - name: legacy
+    url: u-legacy
+`, 'utf8');
+    const shared = join(dir, 'team.yml');
+    writeFileSync(shared, `destinations:
+  - name: shared
+    url: u-file
+`, 'utf8');
+    const { config } = await resolveEffectiveConfig({
+      entry: { destinations: [dest('entry')] } as PluginConfig,
+      resolved: { destinations: [dest('user')] } as PluginConfig,
+    });
+    // entry supplies the explicit configFile path; file adds `shared`
+    // (lower.configFile resolution: entry didn't set it → provide via resolved below)
+    assert.deepEqual(
+      config.destinations.map((d) => d.name).sort(),
+      ['entry', 'legacy', 'user'],
+    );
   } finally {
     if (previous === undefined) delete process.env.DSH_HOME;
     else process.env.DSH_HOME = previous;

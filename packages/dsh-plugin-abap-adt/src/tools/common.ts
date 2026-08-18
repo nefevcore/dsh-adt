@@ -1,6 +1,5 @@
 import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 import type { AdtRegistry } from '../registry.js';
-import type { AdtPolicy } from '../policy.js';
 import type { LockLedger } from '../locks.js';
 
 /** Parameter spec for the destination selector used by every tool. */
@@ -20,9 +19,12 @@ export function destinationOf(args: Record<string, unknown>): string | undefined
 
 /** Register-time helper: name a tool and give it the registry. */
 export interface ToolDeps {
+  /**
+   * Destination registry. Read `registry.policy` at call time (NOT
+   * destructured away): settings hot reload swaps the policy in place and a
+   * captured reference would keep asserting against the stale one.
+   */
   registry: AdtRegistry;
-  /** Effective permission policy; mutating tools assert rules against it. */
-  policy: AdtPolicy;
   /** Persistent lock ledger (see src/locks.ts). */
   ledger: LockLedger;
 }
