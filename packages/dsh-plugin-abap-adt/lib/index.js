@@ -10,7 +10,7 @@
  * server for zero-setup end-to-end use.
  */
 import { Context } from '@deepseek-ai/cordis';
-import { Config } from './config.js';
+import { Config, resolveEffectiveConfig } from './config.js';
 import { AdtRegistry } from './registry.js';
 import { LockLedger } from './locks.js';
 import { deepCompact } from './tools/common.js';
@@ -34,7 +34,13 @@ const name = 'abap-adt';
 const inject = ['tools', 'fs'];
 /** Apply the plugin: build the destination registry and register every tool. */
 async function apply(ctx, config) {
-    const registry = await AdtRegistry.create(config);
+    const logger = ctx.logger?.(name);
+    // Layered config: inline `config:` block > external file (configFile /
+    // auto-discovered ~/.dsh/abap-adt.yml) > SAP_* env > built-in defaults.
+    const { config: effective, warnings } = await resolveEffectiveConfig(config);
+    for (const warning of warnings)
+        (logger?.warn ?? console.warn)(`abap-adt: ${warning}`);
+    const registry = await AdtRegistry.create(effective);
     // Persistent lock ledger: survives process restarts so `adt_unlock_all` can
     // release locks left behind by crashed sessions (see src/locks.ts).
     const ledger = new LockLedger();
@@ -67,9 +73,10 @@ async function apply(ctx, config) {
             execute: async (args, exec) => deepCompact(await execute(args, exec)),
         });
     }
-    const logger = ctx.logger?.(name);
-    (logger?.info ?? console.info)(`abap-adt plugin active: ${tools.length} tools registered, ` +
-        `${registry.destinations.size} destination(s): ${[...registry.destinations.keys()].join(', ') || '(none)'}`);
+    const log = (logger?.info ?? console.info);
+    log(`abap-adt plugin active: ${tools.length} tools registered, ` +
+        `${registry.destinations.size} destination(s): ${[...registry.destinations.keys()].join(', ') || '(none)'}` +
+        (effective.configFileUsed ? `; config file: ${effective.configFileUsed}` : ' (inline config only)'));
     // Fiber disposer: close the mock server and drop clients on unload.
     return () => registry.dispose();
 }

@@ -1,0 +1,2 @@
+name: ABAP Development
+description: Standard coding agent + 30 adt_* tools (SAP ABAP development: search / edit / activate / unit tests / ATC / transports / data preview / local checks). adt tools are enabled only in sessions on this preset.

@@ -1,13 +1,22 @@
 # @nefevcore/abap-adt-dsh-plugin bundle patch.
 #
 # Installed into a dsh profile as a bundle layer: registers the ABAP ADT
-# plugin, which exposes the `adt_*` tool family to the agent. Override the
-# `destinations` config in the profile's own cordis.patch.yml (same id) to
-# point at real SAP systems; passwords are read from config or environment
-# variables (ADT_<DESTINATION_NAME>_PASSWORD / ADT_PASSWORD), never stored
-# in this file.
+# plugin, which exposes the `adt_*` tool family to the agent.
 #
-# Permission policy (权限管控) — optional config keys, resolved as
+# Config resolution (nearest wins):
+#   1. inline `config:` of the plugin row (this file / a same-id row in the
+#      profile's own cordis.patch.yml / an agent preset's agent.cordis.yml)
+#   2. external config file — `configFile` key, auto-discovered at
+#      `${DSH_HOME:-~/.dsh}/abap-adt.yml` when it exists (this is where
+#      destinations and the permission policy belong; see README)
+#   3. SAP_* environment variables (permission policy only)
+#   4. built-in defaults (demo mode on, port 8123, no destinations)
+#
+# Passwords are read from config or environment variables
+# (ADT_<DESTINATION_NAME>_PASSWORD / ADT_PASSWORD), never stored in
+# this file.
+#
+# Permission policy (权限管控) — optional keys, resolved as
 # config > SAP_* env var > default (see src/policy.ts for semantics):
 #   enableTransports        (SAP_ENABLE_TRANSPORTS)          default true
 #   allowedTransports       (SAP_ALLOWED_TRANSPORTS)         default '*'
@@ -15,14 +24,15 @@
 #   allowedPackages         (SAP_ALLOWED_PACKAGES)           default '*'
 # Example lockdown: enableTransports: true, allowedTransports: 'D01K96*',
 # allowTransportableEdits: true, allowedPackages: 'Z*,$TMP'.
+#
+# `demo: true` starts an in-process mock ADT server ("demo" destination) so
+# the tool family works end-to-end without any SAP system. To disable it,
+# override this row (same id) with `demo: false` — or set `demo: false` in
+# ${DSH_HOME:-~/.dsh}/abap-adt.yml, which wins whenever this row leaves the
+# key unset.
 
 - insert:
     - id: abap-adt
       name: '@nefevcore/abap-adt-dsh-plugin'
       config:
-        # Demo mode starts an in-process mock ADT server ("demo" destination)
-        # so the tool family works end-to-end without any SAP system.
         demo: true
-        demoPort: 8123
-        defaultDestination: demo
-        destinations: []

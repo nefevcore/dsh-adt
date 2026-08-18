@@ -65,6 +65,9 @@ importers:
       '@nefevcore/abap-adt-protocol':
         specifier: workspace:*
         version: link:../adt-protocol
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
     devDependencies:
       '@deepseek-ai/dsh-fs':
         specifier: ^0.1.0-rc.6
@@ -430,6 +433,11 @@ packages:
     resolution: {integrity: sha512-ghig2TBE/H11aOVgmahA3MhimvkBr6JIYknH/Dhdk10nXwdbIqBJsbfMxpvFPG8bAw77gN29aQWvKpmVoPlvPQ==}
     engines: {node: '>=16.0.0'}
 
+  yaml@2.9.0:
+    resolution: {integrity: sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
+
 snapshots:
 
   '@abaplint/core@2.120.23':
@@ -712,3 +720,5 @@ snapshots:
   vscode-languageserver-types@3.18.0: {}
 
   xml-naming@0.3.0: {}
+
+  yaml@2.9.0: {}

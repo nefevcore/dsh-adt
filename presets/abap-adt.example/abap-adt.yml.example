@@ -1,0 +1,40 @@
+# abap-adt 插件外部配置 —— 复制为 ~/.dsh/abap-adt.yml 后按需修改。
+#
+# 解析优先级（就近覆盖）：预设/patch 中插件行的内联 config > 本文件 >
+# SAP_* 环境变量（仅权限四开关）> 内置默认（demo 开、8123、无目的地）。
+# destinations 按名字合并：内联同名条目覆盖本文件，其余追加。
+#
+# ⚠ 密码不要明文写进本文件：用 passwordEnv 指到环境变量
+#   （缺省约定 ADT_<目的地名大写>_PASSWORD，或统一 ADT_PASSWORD）。
+#   PowerShell:  setx ADT_DEV_PASSWORD '...'   （新开终端生效）
+#
+# 改完本文件需重启 DSH 才生效。
+
+# 工具未显式传 destination 时使用的默认目的地名。
+defaultDestination: dev
+
+# --- 权限管控（可选；不写则看 SAP_* 环境变量，再不写用默认）---
+# enableTransports: true              # false = 禁用传输工具族与一切传输写入
+# allowedTransports: 'D01K96*'        # 允许的传输号 glob，逗号分隔；'*' = 全部
+# allowTransportableEdits: true       # false = 只允许编辑 $TMP 本地对象
+# allowedPackages: 'Z*,$TMP'          # 允许编辑的开发包 glob；'$TMP' 需显式列出
+
+# --- 目的地列表 ---
+destinations:
+  - name: dev
+    url: https://sap.example.com:44300   # ABAP 前端 HTTP(S) 地址
+    client: '100'                        # 集团（字符串）
+    language: ZH
+    username: DEVELOPER
+    passwordEnv: ADT_DEV_PASSWORD        # 密码走环境变量（推荐）
+    strictSSL: false                     # 自签名证书（SAP 内网常见）时必须 false
+    # timeoutMs: 60000                   # 可选，默认 60s
+
+  # 第二个系统照抄一段即可：
+  # - name: qas
+  #   url: https://sap-qas.example.com:44300
+  #   client: '100'
+  #   language: ZH
+  #   username: DEVELOPER
+  #   passwordEnv: ADT_QAS_PASSWORD
+  #   strictSSL: false
