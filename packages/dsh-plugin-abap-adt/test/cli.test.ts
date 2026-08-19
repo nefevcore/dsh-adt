@@ -42,6 +42,21 @@ test('parseArgs: defaults, flags, and id validation', () => {
 // Environment-dependent helpers (isolated DSH_HOME)
 // ---------------------------------------------------------------------------
 
+test('defaultSourcePresetId: a locally generated preset never becomes the source (self-copy guard)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'abap-adt-cli-'));
+  const previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = dir;
+  try {
+    writeFileSync(join(dir, 'settings.yaml'), 'agent-presets:\n  default: abap-adt\n', 'utf8');
+    mkdirSync(join(dir, '.agent-presets', 'abap-adt'), { recursive: true });
+    assert.equal(defaultSourcePresetId(), 'cordis', 'a preset present in the user dir falls back to cordis');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('defaultSourcePresetId: settings.yaml default wins, falls back to cordis', () => {
   const dir = mkdtempSync(join(tmpdir(), 'abap-adt-cli-'));
   const previous = process.env.DSH_HOME;

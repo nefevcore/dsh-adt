@@ -67,7 +67,14 @@ export function defaultSourcePresetId() {
         if (!existsSync(path))
             return 'cordis';
         const parsed = parse(readFileSync(path, 'utf8'));
-        return parsed?.['agent-presets']?.default || 'cordis';
+        const id = parsed?.['agent-presets']?.default || 'cordis';
+        // The source must be a SHIPPED preset: a user whose deployment default is
+        // a locally generated preset (e.g. this plugin's own `abap-adt`) would
+        // otherwise make the generator try to copy itself, so ids present in the
+        // user preset dir (~/.dsh/.agent-presets/) fall back to `cordis`.
+        if (id && existsSync(join(dshHome(), '.agent-presets', id)))
+            return 'cordis';
+        return id;
     }
     catch {
         return 'cordis';
