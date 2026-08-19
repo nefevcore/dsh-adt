@@ -1,6 +1,6 @@
 {
   "name": "@nefevcore/abap-adt-mock",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "In-memory mock of the SAP ADT REST service for local end-to-end testing of the ADT protocol client without a real ABAP system.",
   "type": "module",
   "main": "./lib/index.js",
