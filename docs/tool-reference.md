@@ -63,10 +63,12 @@
 - **传输语义**：显式 `transport` 经 PUT `?corrNr=` 精确生效（用户值优先于 lock 分配值，对齐官方编辑器行为）。
 
 ### adt_edit_object 🛡
-只替换源码中的**一个块**（含**单行替换**）。匹配语义对齐 DSH `edit` 工具：标记与**去注释后**的行做大小写不敏感子串匹配，**歧义标记（多候选行）直接报错并列出候选行号**，绝不静默取第一个。
-- **入参**：对象三元组；`packageName`；`start`*（起始行标记，须匹配当前内容）；`end`（结束行标记——METHOD/FORM/FUNCTION/MODULE 自动推导闭合语句，**其余类型默认 = start 行（单行替换）**；也可显式传 end == start；**end 搜索含 start 行**，同行紧凑块 `FORM x. ENDFORM.` 同样支持）；`source`/`sourceFile`（替换块全文）；`activate`（默认 false）；`transport`（指定修改计入的请求号，语义同 adt_write_object）。
-- **返回**：`uri, name, start, end, replaced, startLineNumber, endLineNumber, oldLines, newLines, unlocked?, activated?, transport?, transportSource?, activation?`（返回实际命中的行号便于核对）。
-- **匹配失败时**：错误信息带源码行数与建议——标记可能与当前内容不符（注释剥离/空白/内容已变），先用 `adt_read_object`（startLine/endLine 窗口）读回实际内容并复制精确行文本。
+只替换源码中的**一个块**（含**单行替换**）。匹配按**层级**进行（大小写不敏感）：①注释剥离子串 → ②去空白（容忍引号内空格差异如 `'BUKRS  '` vs `'BUKRS'`）→ ③原始行（可编辑**注释掉的代码** `* …`）。**原样复制整行（含尾注释）也能匹配**（两侧同剥注释）。
+- **入参**：对象三元组；`packageName`；`start`（起始行标记）；`end`（结束标记——METHOD/FORM/FUNCTION/MODULE 自动推导，其余默认 = start 行）；**`occurrence`**（同名重复行按序号选择，歧义错误列出 #1/#2…）；**`startLine`/`endLine`**（按行号定位，来自 adt_read_object——同时给出 `start` 时会校验该行内容防行号过期）；`source`/`sourceFile`；`activate`；`transport`。
+- **返回**：`uri, name, start, end, replaced, startLineNumber, endLineNumber, oldLines, newLines, matchMode ('text'|'text-loose'|'text-raw'|'line-number'), occurrence?, unlocked?, activated?, transport?, transportSource?, activation?`。
+- **end 语义**：从 start 行起**取第一个命中**——闭合语句在真实代码中大量重复（实测 2063 行文件 ENDFORM.×31、ENDIF.×59），块起始后的第一个就是本块的。
+- **匹配失败时**：错误列出**最接近的真实行**（token 相似度）+ 建议——一次重试即可自纠；或改用 startLine/endLine 按位置编辑。
+- **实测语料**：以 2063 行生产 include（中文注释、Mod 标记、宏、重复行）回归（`test/fixtures/zfir_gxyh040_frm.abap`）。
 
 ### adt_create_object 🛡
 新建对象。支持的类型：CLAS / INTF / PROG / DDLS / TABL / STRU / **DOMA / DTEL / TTYP** / MSAG / FUNC / DEVC。

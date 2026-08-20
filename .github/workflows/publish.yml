@@ -39,7 +39,7 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      - name: 构建 + 测试（118 例）
+      - name: 构建 + 测试（126 例）
         run: pnpm test
 
       - name: 打包（workspace:* 自动替换为实际版本号）
