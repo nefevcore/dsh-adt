@@ -1,6 +1,6 @@
 {
   "name": "@nefevcore/abap-adt-protocol",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Pure-TypeScript client for the SAP ABAP Development Tools (ADT) REST protocol: authentication, session, CSRF, object CRUD, activation, search, ABAP Unit, ATC and transport management.",
   "type": "module",
   "main": "./lib/index.js",

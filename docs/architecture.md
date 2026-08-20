@@ -37,8 +37,8 @@
 ### 3. `@nefevcore/abap-adt-dsh-plugin` — DSH (Cordis) 插件
 - `cordis.patch.yml` 声明 `dsh.bundle.patch`；安装后自动成为 profile bundle 层
 - `apply(ctx, config)`：构建 registry（含 `AdtPolicy` 权限策略）→ 注册全部工具 → 返回 fiber disposer（卸载时关闭 mock）
-- **权限管控（`policy.ts`）**：所有修改类工具在执行前断言策略规则（传输开关 / 允许的传输号 glob / 可传输编辑开关 / 允许的包 glob），生效值来自 config > `SAP_*` 环境变量 > 默认值；拒绝时抛 `[POLICY]` 错误并自动回滚（如写操作解锁）。包名解析优先显式 `packageName`，其次搜索精确命中，无法确定时失败关闭
-- 工具按职责分文件（system/search/source/lifecycle/testing/atc_runs/transport/packages/batch/local/whereused/datapreview/lock/versions/gate/policy），统一通过 `defineTool` 声明参数/输出 schema 与 render
+- **权限管控（`policy.ts`）**：所有修改类工具在执行前断言策略规则（传输开关 / 允许的传输号 glob / 可传输编辑开关 / 允许的包 glob / 代码执行开关 / batch 写开关），生效值来自 config > `SAP_*` 环境变量 > 默认值；拒绝时抛 `[POLICY]` 错误并自动回滚（如写操作解锁）。包名解析优先显式 `packageName`，其次搜索精确命中，无法确定时失败关闭
+- 工具按职责分文件（system/search/read/write/objects/lifecycle/testing/atc_runs/transport/packages/batch/local/whereused/datapreview/lock/versions/gate/policy/dumps/execute/structure），统一通过 `defineTool` 声明参数/输出 schema 与 render；共享参数规格与对象解析/权限门助手收敛在 `tools/common.ts`
 
 ## 关键设计决策
 
@@ -53,11 +53,14 @@
 
 | 工具 | 价值 |
 |---|---|
-| `adt_batch_checks` | 一次调用对整个开发包跑 ATC + ABAP Unit，产出聚合质量报告 |
+| `adt_batch` | 协议级 $batch：多个 ADT 请求一次 HTTP 往返（默认只读 GET 扇出；写部分需 `allowBatchWrites` 开关） |
+| `adt_execute` | 在系统上运行程序 / `if_oo_adt_classrun` 类并取回控制台输出（写→激活→执行→观察闭环） |
+| `adt_list_dumps` / `adt_get_dump` | ST22 短转储错误分析（列表 + 三种视图详情） |
+| `adt_read_structure` / `adt_write_structure` | DDIC 结构化编辑器：MSAG/DOMA/DTEL/TTYP 的元数据级读写（read-modify-write 保属性） |
 | `adt_release_gate` | 预发布门禁：一次跑完语法 + ABAP Unit + ATC，输出 go/no-go，验证通过才 release |
 | `adt_export_objects` | 把包/对象集源码落盘为 `.abap` 文件（带类型后缀，abaplint 兼容），支持 git 版本化、离线评审、备份 |
 | `adt_local_check` | 导出源码后离线跑 abaplint（语法 + lint 规则），秒级反馈——「先本地验证，再一次性推送 SAP」 |
 | `adt_where_used` | 影响分析：改代码前评估谁引用了该对象（usageReferences） |
-| `adt_data_preview` | 表/CDS 内容查询与 freestyle SQL——改完数据层直接验证 |
-| 全链路自动化 | 代理可自主串联 search→read→write→activate→test→transport，无需人工点击 |
+| `adt_data_preview` | 表/CDS 内容查询与 freestyle SQL（offset/length 行窗口）——改完数据层直接验证 |
+| 全链路自动化 | 代理可自主串联 search→read→write→activate→test→execute→transport，无需人工点击 |
 | DSH 生态协同 | 与 workflow/subagent/schedule 组合：多系统批量分析、夜间质量巡检、AI 代码评审流水线 |

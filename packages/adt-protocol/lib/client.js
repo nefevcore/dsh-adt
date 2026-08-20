@@ -18,6 +18,7 @@
 import { randomUUID } from 'node:crypto';
 import { ADT_BASE as ADT_BASE_PATH, ENDPOINTS, MEDIA, toQuery } from './endpoints.js';
 import { attr, child, children, childText, parseXml } from './xml.js';
+import { parseStructure, patchStructureXml, structureMediaType } from './structure.js';
 /** Error raised for HTTP-level or protocol-level failures. */
 export class AdtError extends Error {
     status;
@@ -425,14 +426,20 @@ export class AdtClient {
     // ---------------------------------------------------------------------------
     // Object source access
     // ---------------------------------------------------------------------------
-    /** Read the main source of an object by its ADT URI. */
+    /**
+     * Read the main source of an object by its ADT URI. `version` selects the
+     * active or inactive representation (`?version=active|inactive`); without
+     * it the backend returns the CURRENT source — the inactive version when
+     * one exists, else the active one.
+     */
     async readSource(objectUri, options = {}) {
         const uri = normalizeUri(objectUri);
         const attempts = uri.endsWith('/source/main') ? [uri] : [`${uri}/source/main`, uri];
+        const withVersion = (path) => options.version ? `${path}${path.includes('?') ? '&' : '?'}version=${options.version}` : path;
         let lastError;
         for (const path of attempts) {
             try {
-                const res = await this.request({ path, accept: 'text/plain', signal: options.signal });
+                const res = await this.request({ path: withVersion(path), accept: 'text/plain', signal: options.signal });
                 return parseSourceResponse(res.text, uri, res.headers.get('content-type') ?? '');
             }
             catch (error) {
@@ -1197,8 +1204,226 @@ export class AdtClient {
         }
     }
     // ---------------------------------------------------------------------------
+    // Runtime dumps (ST22 short-dump analysis)
+    // ---------------------------------------------------------------------------
+    /**
+     * List runtime dumps (the ST22 feed). `from`/`to` are `YYYYMMDDHHMMSS`
+     * timestamps; `user` filters by the session user; `top`/`skip` page the
+     * feed (server-side `$top`/`$skip`).
+     */
+    async listDumps(options = {}) {
+        // The backend filters via the `$query` expression syntax, e.g.
+        // `and( equals( user, X ) )`; it is combined with the time-range params.
+        const query = options.user
+            ? `and( equals( user, ${options.user.trim()} ) )`
+            : undefined;
+        const params = this.baseQuery({
+            ...(query ? { $query: query } : {}),
+            ...(options.from ? { from: options.from } : {}),
+            ...(options.to ? { to: options.to } : {}),
+            ...(options.top !== undefined ? { $top: options.top } : {}),
+            ...(options.skip !== undefined ? { $skip: options.skip } : {}),
+        });
+        const res = await this.request({
+            path: ENDPOINTS.runtimeDumps(params),
+            accept: 'application/atom+xml;type=feed',
+            timeoutMs: 60_000,
+            signal: options.signal,
+        });
+        return parseDumpsFeed(res.text);
+    }
+    /**
+     * Read one runtime dump. `view` selects the representation:
+     *  - `default`   — structured XML (`runtime.dump.v1+xml`), parsed to sections
+     *  - `summary`   — HTML summary (raw passthrough)
+     *  - `formatted` — plain-text analysis view (raw passthrough)
+     */
+    async getDump(dumpId, options = {}) {
+        const view = options.view ?? 'default';
+        const id = dumpId.trim();
+        if (!id || id.includes('/'))
+            throw new AdtError(`ADT: invalid dump id '${dumpId}'`);
+        const res = await this.request({
+            path: ENDPOINTS.runtimeDump(id, view),
+            accept: view === 'summary'
+                ? 'text/html'
+                : view === 'formatted'
+                    ? 'text/plain'
+                    : 'application/vnd.sap.adt.runtime.dump.v1+xml, application/xml',
+            timeoutMs: 60_000,
+            signal: options.signal,
+        });
+        if (view !== 'default') {
+            return { id, sections: [], raw: res.text, view };
+        }
+        return parseDumpDetail(res.text, id);
+    }
+    // ---------------------------------------------------------------------------
+    // Program / class execution
+    // ---------------------------------------------------------------------------
+    /**
+     * Run an ABAP executable program (console output comes back as text).
+     * Equivalent to F8 in ADT: the program runs synchronously in the session.
+     */
+    async runProgram(programName, options = {}) {
+        const name = programName.trim().toUpperCase();
+        if (!name)
+            throw new AdtError('ADT: program name is required');
+        const res = await this.request({
+            method: 'POST',
+            path: `${ENDPOINTS.programRun(name)}${toQuery(this.baseQuery({}))}`,
+            accept: 'text/plain, application/xml',
+            stateful: true,
+            timeoutMs: 300_000,
+            signal: options.signal,
+        });
+        return { kind: 'PROG', name, output: res.text, status: res.status };
+    }
+    /**
+     * Run a class that implements `if_oo_adt_classrun` — its `main( )` executes
+     * and the `out->write( )` output comes back as text. The standard agent
+     * pattern for "run logic and capture output without building a program".
+     */
+    async runClass(className, options = {}) {
+        const name = className.trim().toUpperCase();
+        if (!name)
+            throw new AdtError('ADT: class name is required');
+        const res = await this.request({
+            method: 'POST',
+            path: `${ENDPOINTS.classRun(name)}${toQuery(this.baseQuery({}))}`,
+            accept: 'text/plain, application/xml',
+            stateful: true,
+            timeoutMs: 300_000,
+            signal: options.signal,
+        });
+        return { kind: 'CLAS', name, output: res.text, status: res.status };
+    }
+    // ---------------------------------------------------------------------------
+    // Protocol-level $batch
+    // ---------------------------------------------------------------------------
+    /**
+     * Execute several ADT requests in ONE HTTP round-trip via the `$batch`
+     * multipart protocol (`POST /sap/bc/adt/$batch`). Every part carries an
+     * embedded HTTP request (`GET/POST/PUT <path> HTTP/1.1`); the response is
+     * a multipart with one embedded HTTP response per part, in order.
+     *
+     * The outer POST is state-changing (CSRF applies once, for all parts);
+     * `sap-client`/`sap-language` are appended to every inner request path.
+     */
+    async batch(parts, options = {}) {
+        if (parts.length === 0)
+            throw new AdtError('ADT $batch: at least one request part is required');
+        const boundary = `batch_${randomUUID()}`;
+        const sections = parts.map((part) => {
+            const headers = [`Accept:${part.accept ?? 'application/xml'}`];
+            if (part.body !== undefined && part.contentType) {
+                headers.push(`Content-Type:${part.contentType}`);
+            }
+            const request = [
+                `${part.method} ${this.innerBatchPath(part.path)} HTTP/1.1`,
+                ...headers,
+                '',
+                part.body ?? '',
+            ].join('\r\n');
+            return [`--${boundary}`, 'Content-Type: application/http', 'content-transfer-encoding: binary', '', request].join('\r\n');
+        });
+        const body = `${sections.join('\r\n')}\r\n--${boundary}--\r\n`;
+        const res = await this.request({
+            method: 'POST',
+            path: `${ENDPOINTS.batch()}${toQuery(this.baseQuery({}))}`,
+            body,
+            contentType: `multipart/mixed; boundary=${boundary}`,
+            accept: 'multipart/mixed',
+            stateful: true,
+            timeoutMs: 120_000,
+            signal: options.signal,
+        });
+        const contentTypeHeader = res.headers.get('content-type') ?? '';
+        const boundaryMatch = /boundary=([^;\s]+)/.exec(contentTypeHeader);
+        return parseBatchResponseParts(res.text, boundaryMatch?.[1] ?? boundary);
+    }
+    // ---------------------------------------------------------------------------
+    // Structured metadata (MSAG / DOMA / DTEL / TTYP)
+    // ---------------------------------------------------------------------------
+    /** Read the structured metadata of a DDIC object as typed JSON. */
+    async readStructure(objectUri, kind, options = {}) {
+        const uri = normalizeUri(objectUri);
+        const res = await this.request({
+            path: `${uri}${toQuery(this.baseQuery({}))}`,
+            accept: structureMediaType(kind),
+            signal: options.signal,
+        });
+        return parseStructure(res.text, kind);
+    }
+    /**
+     * Read-modify-write the structured metadata of a DDIC object: lock → GET
+     * current XML → patch only the provided fields → PUT → unlock. The
+     * optional `onLocked` hook runs right after the lock (with the backend
+     * transport the lock assigned) so callers can enforce policy and abort
+     * BEFORE anything is written — a throw rolls the lock back and propagates.
+     */
+    async writeStructure(objectUri, kind, changes, options = {}) {
+        const uri = normalizeUri(objectUri);
+        const { handle, transport: assigned } = await this.lock(uri, { signal: options.signal });
+        try {
+            if (options.onLocked)
+                options.onLocked(options.transport ? undefined : assigned);
+            const current = await this.request({
+                path: `${uri}${toQuery(this.baseQuery({}))}`,
+                accept: structureMediaType(kind),
+                signal: options.signal,
+            });
+            const patched = patchStructureXml(current.text, kind, changes);
+            const query = this.baseQuery({
+                lockHandle: handle,
+                ...(options.transport ?? assigned ? { corrNr: options.transport ?? assigned } : {}),
+            });
+            await this.request({
+                method: 'PUT',
+                path: `${uri}${toQuery(query)}`,
+                body: patched,
+                contentType: structureMediaType(kind).split(',')[0].trim(),
+                accept: structureMediaType(kind),
+                stateful: true,
+                signal: options.signal,
+            });
+            const effective = await this.request({
+                path: `${uri}${toQuery(this.baseQuery({ withLongPolling: 'true' }))}`,
+                accept: structureMediaType(kind),
+                signal: options.signal,
+            });
+            return { success: true, data: parseStructure(effective.text, kind), transport: options.transport ?? assigned };
+        }
+        finally {
+            // Cleanup deliberately runs WITHOUT the caller signal: an aborted write
+            // must still release the backend lock it acquired.
+            await this.unlock(uri, handle).catch(() => undefined);
+        }
+    }
+    // ---------------------------------------------------------------------------
     // Diagnostics
     // ---------------------------------------------------------------------------
+    /**
+     * Inner `$batch` request path: the client/language query parameters of the
+     * destination are appended (once) so every embedded request executes in the
+     * right session context, exactly like the outer request would carry them.
+     */
+    innerBatchPath(path) {
+        const [base, existingQuery = ''] = path.split('?');
+        const normalized = normalizeUri(base ?? path);
+        const present = new Set(existingQuery.split('&').filter(Boolean).map((kv) => kv.split('=')[0]));
+        const extras = [];
+        if (this.destination.client && !present.has('sap-client')) {
+            extras.push(['sap-client', this.destination.client]);
+        }
+        if (this.destination.language && !present.has('sap-language')) {
+            extras.push(['sap-language', this.destination.language]);
+        }
+        if (extras.length === 0)
+            return existingQuery ? `${normalized}?${existingQuery}` : normalized;
+        const extra = extras.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+        return existingQuery ? `${normalized}?${existingQuery}&${extra}` : `${normalized}?${extra}`;
+    }
     /** Lightweight reachability + auth probe. */
     async ping(options = {}) {
         try {
@@ -1336,6 +1561,9 @@ function createContentType(type) {
         DDLS: 'application/vnd.sap.adt.ddlSource.v2+xml',
         TABL: 'application/vnd.sap.adt.tables.v2+xml',
         STRU: 'application/vnd.sap.adt.structures.v2+xml',
+        DOMA: 'application/vnd.sap.adt.domains.v2+xml',
+        DTEL: 'application/vnd.sap.adt.dataelements.v2+xml',
+        TTYP: 'application/vnd.sap.adt.tabletypes.v2+xml',
         MSAG: 'application/xml',
         DEVC: 'application/vnd.sap.adt.packages.v2+xml',
     };
@@ -2304,6 +2532,9 @@ function uriForCreated(type, name) {
         DDLS: '/sap/bc/adt/ddls/sources/',
         TABL: '/sap/bc/adt/ddic/tables/',
         STRU: '/sap/bc/adt/ddic/structures/',
+        DOMA: '/sap/bc/adt/ddic/domains/',
+        DTEL: '/sap/bc/adt/ddic/dataelements/',
+        TTYP: '/sap/bc/adt/ddic/tabletypes/',
         MSAG: '/sap/bc/adt/msgclass/',
         DEVC: '/sap/bc/adt/packages/',
     };
@@ -2402,5 +2633,115 @@ function parseTransport(el) {
         modifiable: !isReleasedStatus(status),
         items,
     };
+}
+// --- Runtime dumps (Atom feed) ----------------------------------------------
+/** Derive the dump id from a feed entry (link href preferred, `<id>` fallback). */
+function dumpIdFromEntry(entry) {
+    for (const link of children(entry, 'link')) {
+        const href = attr(link, 'href') ?? '';
+        const match = /\/runtime\/dump\/([^/?]+)/.exec(href);
+        if (match)
+            return decodeURIComponent(match[1]);
+    }
+    const idText = childText(entry, 'id') ?? '';
+    if (idText) {
+        // Plain ids only — urn:/tag: forms carry no usable dump key.
+        return /^[\w.-]+$/.test(idText) ? idText : undefined;
+    }
+    return undefined;
+}
+/** Parse the runtime-dumps Atom feed into summaries. */
+function parseDumpsFeed(xml) {
+    let root;
+    try {
+        root = parseXml(xml);
+    }
+    catch {
+        return [];
+    }
+    const dumps = [];
+    for (const entry of children(root, 'entry')) {
+        const id = dumpIdFromEntry(entry);
+        if (!id)
+            continue;
+        const category = children(entry, 'category').map((c) => attr(c, 'term') ?? c.text).find(Boolean);
+        dumps.push({
+            id,
+            title: childText(entry, 'title') ?? '',
+            category: category || undefined,
+            user: childText(child(entry, 'author') ?? entry, 'name') || undefined,
+            updatedAt: childText(entry, 'updated') || undefined,
+            host: undefined,
+        });
+    }
+    return dumps;
+}
+/** Tolerant structured-XML dump parser: every text-bearing child becomes a section. */
+function parseDumpDetail(xml, id) {
+    const sections = [];
+    let title;
+    try {
+        const root = parseXml(xml);
+        title = attr(root, 'type') ?? attr(root, 'name') ?? childText(root, 'name') ?? childText(root, 'title');
+        const walk = (node) => {
+            for (const c of node.children) {
+                if (c.children.length === 0 && c.text) {
+                    sections.push({ name: c.name, value: c.text });
+                }
+                else if (c.children.length > 0) {
+                    // Composite nodes contribute a flattened key/value view.
+                    for (const gc of c.children) {
+                        if (gc.text)
+                            sections.push({ name: `${c.name}.${gc.name}`, value: gc.text });
+                    }
+                    walk(c);
+                }
+            }
+        };
+        walk(root);
+    }
+    catch {
+        // Non-XML body → keep raw.
+        return { id, sections: [], raw: xml, view: 'default' };
+    }
+    return { id, title, sections, view: 'default' };
+}
+// --- $batch response parts ---------------------------------------------------
+/** Parse a multipart `$batch` response body into embedded HTTP responses. */
+function parseBatchResponseParts(body, boundary) {
+    const parts = body
+        .split(`--${boundary}`)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0 && !p.startsWith('--'));
+    const out = [];
+    for (const raw of parts) {
+        // Skip the MIME envelope headers; the embedded response starts at HTTP/.
+        const httpStart = raw.search(/HTTP\/1\.[01]/);
+        if (httpStart < 0) {
+            out.push({ index: out.length, status: 0, statusText: 'Unparseable', headers: {}, body: raw });
+            continue;
+        }
+        const http = raw.slice(httpStart);
+        const split = http.indexOf('\r\n\r\n');
+        const headerSection = split < 0 ? http : http.slice(0, split);
+        const responseBody = split < 0 ? '' : http.slice(split + 4);
+        const lines = headerSection.split('\r\n');
+        const statusMatch = /^HTTP\/1\.[01]\s+(\d+)\s*(.*)$/.exec(lines[0] ?? '');
+        const headers = {};
+        for (let i = 1; i < lines.length; i++) {
+            const colon = lines[i].indexOf(':');
+            if (colon > 0)
+                headers[lines[i].slice(0, colon).trim().toLowerCase()] = lines[i].slice(colon + 1).trim();
+        }
+        out.push({
+            index: out.length,
+            status: statusMatch ? Number(statusMatch[1]) : 0,
+            statusText: statusMatch?.[2]?.trim() ?? '',
+            headers,
+            body: responseBody.trim(),
+            contentType: headers['content-type'],
+        });
+    }
+    return out;
 }
 //# sourceMappingURL=client.js.map

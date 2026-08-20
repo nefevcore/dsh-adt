@@ -1,6 +1,6 @@
 {
   "name": "@nefevcore/abap-adt-dsh-plugin",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "DeepSeek Harness plugin: agent-native access to SAP ABAP systems via the ADT REST protocol — search, edit, activate, unit tests, ATC, transports, packages, plus agent-scale batch/export features.",
   "type": "module",
   "main": "./lib/index.js",

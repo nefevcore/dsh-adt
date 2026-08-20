@@ -422,4 +422,129 @@ export interface AdtCreateObjectResult {
     /** Messages (e.g. warnings). */
     messages: AdtMessage[];
 }
+/** One entry of the runtime-dumps Atom feed. */
+export interface AdtDumpSummary {
+    /** Compound dump id (datetime + host + sysid + instance + user + seq). */
+    id: string;
+    /** Short dump type, e.g. `UNCAUGHT_EXCEPTION`, `TIMEOUT`. */
+    title: string;
+    /** Dump category (e.g. `ABAP Programming Error`). */
+    category?: string;
+    /** User whose session produced the dump. */
+    user?: string;
+    /** Creation timestamp (ISO when the backend provides one). */
+    updatedAt?: string;
+    /** Host / instance, when exposed by the feed. */
+    host?: string;
+}
+/** Full dump detail (parsed from the structured XML view). */
+export interface AdtDumpDetail {
+    id: string;
+    /** Section heading, e.g. `Runtime Errors: UNCAUGHT_EXCEPTION`. */
+    title?: string;
+    /** Named sections extracted from the dump (error analysis, system info, …). */
+    sections: Array<{
+        name: string;
+        value: string;
+    }>;
+    /** Raw body when the view is `formatted` / `summary`. */
+    raw?: string;
+    view: 'default' | 'summary' | 'formatted';
+}
+/** Result of running an executable program or an `if_oo_adt_classrun` class. */
+export interface AdtRunResult {
+    /** What was executed. */
+    kind: 'PROG' | 'CLAS';
+    name: string;
+    /** Console output (the run's `out->write` / `WRITE` lines). */
+    output: string;
+    /** HTTP status of the run request (200 on success). */
+    status: number;
+}
+/** One embedded request of a `$batch` multipart call. */
+export interface AdtBatchRequestPart {
+    method: 'GET' | 'POST' | 'PUT';
+    /** Path under the ADT base, e.g. `/sap/bc/adt/oo/classes/zcl_demo/source/main`. */
+    path: string;
+    /** Request body (writes). */
+    body?: string;
+    /** Content-Type of the body (writes). */
+    contentType?: string;
+    /** Accept header for the embedded response. */
+    accept?: string;
+}
+/** One embedded response of a `$batch` multipart call. */
+export interface AdtBatchResponsePart {
+    index: number;
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+    /** Response body (XML / plain text). */
+    body: string;
+    /** Content-Type reported by the embedded response. */
+    contentType?: string;
+}
+/** Object kinds with a structured (metadata XML) editor. */
+export type AdtStructureKind = 'MSAG' | 'DOMA' | 'DTEL' | 'TTYP';
+/** One message of a message class (MSAG). */
+export interface AdtMessageClassMessage {
+    /** Message number, `'001'` … `'999'`. */
+    number: string;
+    /** Message text (may contain `&1`-style placeholders). */
+    text: string;
+    selfExplanatory?: boolean;
+}
+/** One fixed value of a domain (DOMA). */
+export interface AdtDomainFixedValue {
+    low: string;
+    high?: string;
+    description?: string;
+}
+/** Header fields shared by every structured kind. */
+export interface AdtStructureBase {
+    kind: AdtStructureKind;
+    name: string;
+    description?: string;
+    packageName?: string;
+    masterLanguage?: string;
+    responsible?: string;
+}
+/** Parsed structured metadata, one variant per kind. */
+export type AdtStructureData = AdtStructureBase & ({
+    kind: 'MSAG';
+    messages: AdtMessageClassMessage[];
+} | {
+    kind: 'DOMA';
+    /** Technical properties (dataType, length, decimals, …). */
+    properties: Record<string, string>;
+    fixedValues: AdtDomainFixedValue[];
+} | {
+    kind: 'DTEL';
+    properties: Record<string, string>;
+    /** Short / medium / long / heading texts. */
+    labels: Record<string, string>;
+} | {
+    kind: 'TTYP';
+    properties: Record<string, string>;
+});
+/** Changes to apply to a structured object (all fields optional). */
+export interface AdtStructureChanges {
+    description?: string;
+    /** MSAG: full replacement message list (numbers not listed are deleted). */
+    messages?: AdtMessageClassMessage[];
+    /** DOMA/DTEL/TTYP: scalar technical properties to patch. */
+    properties?: Record<string, string | number | boolean>;
+    /** DOMA: full replacement fixed-value list. */
+    fixedValues?: AdtDomainFixedValue[];
+    /** DTEL: label texts to patch (shortText / mediumText / longText / heading). */
+    labels?: Record<string, string>;
+}
+/** Result of a structured write (lock → patch → PUT → unlock). */
+export interface AdtStructureWriteResult {
+    success: boolean;
+    /** Effective structured state after the write. */
+    data: AdtStructureData;
+    /** Transport the backend assigned (lock CORRNR), when any. */
+    transport?: string;
+}
 //# sourceMappingURL=types.d.ts.map

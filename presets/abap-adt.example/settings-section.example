@@ -14,11 +14,15 @@ abap-adt:
   # 工具未显式传 destination 时使用的默认目的地名。
   defaultDestination: dev
 
-  # --- 权限管控（可选；不写则看 SAP_* 环境变量，再不写用默认）---
+  # --- 权限管控：全局默认（可选；不写则看 SAP_* 环境变量，再不写用默认）---
+  # 六个开关也可以在每个 destination 里用 policy: 块按系统覆盖（见下）；
+  # 生效值 = 全局默认 + 该目的地 policy 覆盖，逐键就近生效。
   # enableTransports: true              # false = 禁用传输工具族与一切传输写入
   # allowedTransports: 'D01K96*'        # 允许的传输号 glob，逗号分隔；'*' = 全部
   # allowTransportableEdits: true       # false = 只允许编辑 $TMP 本地对象
   # allowedPackages: 'Z*,$TMP'          # 允许编辑的开发包 glob；'$TMP' 需显式列出
+  # allowExecution: true                # false = 禁用 adt_execute（运行任意 ABAP 可改系统状态）
+  # allowBatchWrites: false             # true = 允许 adt_batch 的 POST/PUT 内嵌写（默认只读扇出）
 
   # --- 目的地列表 ---
   destinations:
@@ -30,8 +34,12 @@ abap-adt:
       passwordEnv: ADT_DEV_PASSWORD        # 密码走环境变量（推荐）
       strictSSL: false                     # 自签名证书（SAP 内网常见）时必须 false
       # timeoutMs: 60000                   # 可选，默认 60s
+      # 按系统收紧权限（可选，逐键覆盖全局默认）：
+      # policy:
+      #   allowedTransports: 'D01K96*'     # dev 只允许这一批传输号
+      #   allowTransportableEdits: true
 
-    # 第二个系统照抄一段即可：
+    # 第二个系统照抄一段即可（可以更保守——比如 QAS 只读 + 不碰传输）：
     # - name: qas
     #   url: https://sap-qas.example.com:44300
     #   client: '100'
@@ -39,3 +47,8 @@ abap-adt:
     #   username: DEVELOPER
     #   passwordEnv: ADT_QAS_PASSWORD
     #   strictSSL: false
+    #   policy:
+    #     enableTransports: false           # qas 上禁用整个传输工具族
+    #     allowedPackages: '$TMP'           # qas 上只能编辑本地对象
+    #     allowExecution: false             # qas 上禁止运行程序/类
+    #     allowBatchWrites: false           # qas 上 $batch 保持只读

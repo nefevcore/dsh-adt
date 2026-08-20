@@ -1,11 +1,19 @@
 /**
- * adt_version_diff — compare the current source of an object with a past
- * version (or two past versions), returning a unified diff. Read-only.
+ * adt_version_diff — compare versions of an object and return ONLY the
+ * unified diff plus the labels and history (full sources are deliberately
+ * NOT part of the output — the diff is what matters and double sources only
+ * burn context). Read-only.
+ *
+ * Default comparison: `saved` (the current source — the inactive version
+ * when one exists) vs `active` (the last activated version,
+ * `?version=active`) — i.e. "what is saved but NOT yet activated". This is
+ * the residual-non-activation check the adt_activate hints point at.
+ * Historical versions can be compared explicitly via versionFrom/versionTo
+ * (ids from adt_object_versions / the `versions` array of this output).
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, destinationOf, text } from './common.js';
-import { resolveObject } from '../resolve.js';
+import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, optStr, resolveToolObject, text } from './common.js';
 /**
  * Line diff. Uses common prefix/suffix trimming with the middle emitted as a
  * remove block then an add block — no DP table, so it is O(n) memory and time.
@@ -83,43 +91,25 @@ export function unifiedDiff(from, to, context = 3) {
     }
     return out.join('\n') + '\n';
 }
-/** Char budget per side for diff-card metadata; larger sources fall back to the
- * generic card (the unified-diff text stays model-visible either way). */
-const DIFF_META_MAX_CHARS = 100_000;
-function diffPresentationMeta(value) {
-    if (value.identical)
-        return null; // nothing to render as a change
-    if (value.from.source.length > DIFF_META_MAX_CHARS || value.to.source.length > DIFF_META_MAX_CHARS) {
-        return null;
-    }
-    const name = value.objectUri.split('/').pop() ?? value.objectUri;
-    const short = (label) => label.split('/').pop() ?? label;
-    return {
-        kind: 'diff',
-        path: `${name.toLowerCase()} (${short(value.from.label)} -> ${short(value.to.label)})`,
-        oldText: value.from.source,
-        newText: value.to.source,
-    };
-}
 export function versionTools(deps) {
     const { registry } = deps;
     return [
         defineTool({
             name: 'adt_version_diff',
-            description: 'Compare two versions of an object (default: current active source vs its latest saved version) ' +
-                'and return a unified diff. Use to review what changed before releasing or rolling back. ' +
-                'Read-only. Version ids come from adt_object_versions.',
+            description: 'Compare two versions of an object and return a unified diff. DEFAULT: saved (current source, inactive ' +
+                'when one exists) vs active (last activated version) — i.e. exactly the changes that are NOT yet ' +
+                'activated; use it to verify activation leftovers after writing/activating (includes of a program too). ' +
+                'Pass versionFrom/versionTo (ids from adt_object_versions or this tool\'s `versions` output; keywords ' +
+                '"saved" and "active") to compare historical versions. Read-only.',
             parameters: {
-                objectUri: { type: 'string', description: 'Exact ADT object URI, e.g. /sap/bc/adt/oo/classes/zcl_demo.' },
-                name: { type: 'string', description: 'Object name, e.g. ZCL_DEMO.' },
-                type: { type: 'string', description: 'Object type (short or ADT form), e.g. CLAS, INTF, PROG.' },
+                ...OBJECT_REF_PARAMS,
                 versionFrom: {
                     type: 'string',
-                    description: 'Version id of the base (old) side. Default: the latest version in the history feed.',
+                    description: 'Base (old) side: a version id, or "saved" for the current source. Default "saved".',
                 },
                 versionTo: {
                     type: 'string',
-                    description: 'Version id of the compare (new) side, or "active" for the current source. Default "active".',
+                    description: 'Compare (new) side: a version id, "active" for the last activated version, or "saved". Default "active".',
                 },
                 ...DESTINATION_PARAM,
             },
@@ -130,24 +120,12 @@ export function versionTools(deps) {
                     properties: {
                         objectUri: { type: 'string', required: true },
                         identical: { type: 'boolean', required: true },
-                        from: {
-                            type: 'object',
-                            required: true,
-                            additionalProperties: false,
-                            properties: {
-                                label: { type: 'string', required: true },
-                                source: { type: 'string', required: true },
-                            },
+                        pendingChanges: {
+                            type: 'boolean',
+                            description: 'Only for the default saved-vs-active comparison: true = saved changes are NOT yet activated.',
                         },
-                        to: {
-                            type: 'object',
-                            required: true,
-                            additionalProperties: false,
-                            properties: {
-                                label: { type: 'string', required: true },
-                                source: { type: 'string', required: true },
-                            },
-                        },
+                        fromLabel: { type: 'string', required: true },
+                        toLabel: { type: 'string', required: true },
                         diff: { type: 'string', required: true },
                         versions: {
                             type: 'array',
@@ -169,31 +147,21 @@ export function versionTools(deps) {
                 },
                 render: (_args, value) => {
                     if (value.identical) {
-                        return text(`${value.objectUri}: ${value.from.label} and ${value.to.label} are identical`);
+                        const detail = value.fromLabel === 'saved' && value.toLabel === 'active'
+                            ? ' — the current source is fully activated (nothing pending)'
+                            : '';
+                        return text(`${value.objectUri}: ${value.fromLabel} and ${value.toLabel} are identical${detail}`);
                     }
-                    return text(`Diff of ${value.objectUri} (${value.from.label} -> ${value.to.label}):\n${value.diff}`);
+                    const hint = value.fromLabel === 'saved' && value.toLabel === 'active'
+                        ? '\n(saved differs from active — these changes are NOT yet activated; call adt_activate with ALL related objects)'
+                        : '';
+                    return text(`Diff of ${value.objectUri} (${value.fromLabel} -> ${value.toLabel}):\n${value.diff}${hint}`);
                 },
-                presentationMeta: (_args, value) => diffPresentationMeta(value),
-            },
-            presentResult: (_args, result) => {
-                // Replay the diff card from persisted metadata; identical/oversized
-                // results have no meta and fall back to the generic presentation.
-                const meta = result.meta;
-                if (!meta || meta.kind !== 'diff' || typeof meta.oldText !== 'string')
-                    return undefined;
-                return {
-                    card: 'diff',
-                    diffs: [{ path: meta.path, oldText: meta.oldText, newText: meta.newText }],
-                };
             },
             isConcurrencySafe: () => true,
             execute: async (args, exec) => {
                 const entry = registry.require(destinationOf(args));
-                const ref = await resolveObject(entry.client, {
-                    objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
-                    name: typeof args.name === 'string' ? args.name : undefined,
-                    type: typeof args.type === 'string' ? args.type : undefined,
-                }, 10, exec.signal);
+                const ref = await resolveToolObject(entry.client, args, exec.signal);
                 let versions;
                 try {
                     versions = await entry.client.getVersions(ref.uri, { signal: exec.signal });
@@ -206,42 +174,43 @@ export function versionTools(deps) {
                     throw error;
                 }
                 const byId = (id) => versions.find((v) => v.versionId === id ||
+                    v.versionId.endsWith(`/${id}`) ||
                     v.contentUri?.includes(`version=${id}`) ||
                     v.contentUri?.endsWith(id));
-                // Base side: explicit version or the latest saved version.
-                let from;
-                if (typeof args.versionFrom === 'string' && args.versionFrom) {
-                    const v = byId(args.versionFrom);
-                    if (!v?.contentUri)
-                        throw new Error(`adt_version_diff: version '${args.versionFrom}' not found in history`);
-                    from = { label: v.versionId, source: await entry.client.getVersionSource(v.contentUri, { signal: exec.signal }) };
-                }
-                else {
-                    const latest = versions[0];
-                    if (!latest?.contentUri)
-                        throw new Error('adt_version_diff: no version history available for this object');
-                    from = { label: latest.versionId, source: await entry.client.getVersionSource(latest.contentUri, { signal: exec.signal }) };
-                }
-                // Compare side: explicit version or the active source.
-                let to;
-                if (typeof args.versionTo === 'string' && args.versionTo && args.versionTo !== 'active') {
-                    const v = byId(args.versionTo);
-                    if (!v?.contentUri)
-                        throw new Error(`adt_version_diff: version '${args.versionTo}' not found in history`);
-                    to = { label: v.versionId, source: await entry.client.getVersionSource(v.contentUri, { signal: exec.signal }) };
-                }
-                else {
-                    to = { label: 'active', source: (await entry.client.readSource(ref.uri, { signal: exec.signal })).source };
-                }
+                // One side of the comparison: a keyword ("saved" = current source,
+                // "active" = last activated) or a historical version id.
+                const resolveSide = async (raw, fallback) => {
+                    const side = raw && raw.length > 0 ? raw : fallback;
+                    if (side === 'saved') {
+                        return { label: 'saved', source: (await entry.client.readSource(ref.uri, { signal: exec.signal })).source };
+                    }
+                    if (side === 'active') {
+                        return {
+                            label: 'active',
+                            source: (await entry.client.readSource(ref.uri, { version: 'active', signal: exec.signal })).source,
+                        };
+                    }
+                    const v = byId(side);
+                    if (!v?.contentUri) {
+                        throw new Error(`adt_version_diff: version '${side}' not found in history (known: ${versions
+                            .map((x) => x.versionId.split('/').pop())
+                            .join(', ')}; keywords "saved"/"active")`);
+                    }
+                    return { label: v.versionId.split('/').pop() ?? v.versionId, source: await entry.client.getVersionSource(v.contentUri, { signal: exec.signal }) };
+                };
+                const from = await resolveSide(optStr(args.versionFrom), 'saved');
+                const to = await resolveSide(optStr(args.versionTo), 'active');
                 const identical = from.source === to.source;
+                const pendingCheck = from.label === 'saved' && to.label === 'active';
                 return {
                     objectUri: ref.uri,
                     identical,
-                    from,
-                    to,
+                    pendingChanges: pendingCheck ? !identical : undefined,
+                    fromLabel: from.label,
+                    toLabel: to.label,
                     diff: unifiedDiff(from.source, to.source),
                     versions: versions.map((v) => ({
-                        versionId: v.versionId,
+                        versionId: v.versionId.split('/').pop() ?? v.versionId,
                         author: v.author,
                         updatedAt: v.updatedAt,
                         title: v.title,

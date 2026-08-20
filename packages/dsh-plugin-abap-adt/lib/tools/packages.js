@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, destinationOf, text, renderObjectRefs } from './common.js';
+import { DESTINATION_PARAM, destinationOf, text } from './common.js';
 export function packageTools(deps) {
     const { registry } = deps;
     return [
@@ -25,14 +25,13 @@ export function packageTools(deps) {
                         objects: {
                             type: 'array',
                             required: true,
+                            description: 'Compact member list (name + type); reference objects in other tools by name + type.',
                             items: {
                                 type: 'object',
                                 additionalProperties: false,
                                 properties: {
                                     name: { type: 'string', required: true },
                                     type: { type: 'string', required: true },
-                                    uri: { type: 'string', required: true },
-                                    category: { type: 'string' },
                                 },
                             },
                         },
@@ -40,7 +39,7 @@ export function packageTools(deps) {
                 },
                 render: (_args, value) => text([
                     `Package ${value.packageName}: ${value.count} member(s)`,
-                    ...value.objects.map((o) => `- ${o.name} (${o.type}) — ${o.uri}`),
+                    ...value.objects.map((o) => `- ${o.name} (${o.type})`),
                 ].join('\n')),
             },
             isConcurrencySafe: () => true,
@@ -50,7 +49,9 @@ export function packageTools(deps) {
                 return {
                     packageName: String(args.packageName),
                     count: refs.length,
-                    objects: refs.map((r) => ({ name: r.name, type: r.type, uri: r.uri, category: r.category })),
+                    // Compact by design: uri/category are derivable from name+type and
+                    // only bloat the context for large packages.
+                    objects: refs.map((r) => ({ name: r.name, type: r.type })),
                 };
             },
         }),

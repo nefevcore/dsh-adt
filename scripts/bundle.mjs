@@ -27,7 +27,15 @@ await build({
   // Peer services come from the host dsh profile — never bundle them.
   external: ['@deepseek-ai/*'],
   banner: {
-    js: `/* dsh-abap-adt — ABAP Development Tools plugin for DeepSeek Harness
+    // Bundled CJS deps (yaml, undici, …) keep real `require(...)` calls for
+    // node builtins. In an ESM output there is no module-scope `require`, so
+    // esbuild's `__require` shim would throw
+    // `Dynamic require of "process" is not supported` the moment DSH imports
+    // the bundle. Provide a real require via createRequire FIRST — the shim
+    // checks `typeof require !== "undefined"` and uses it when present.
+    js: `import { createRequire as __dshCreateRequire } from "node:module";
+const require = __dshCreateRequire(import.meta.url);
+/* dsh-abap-adt — ABAP Development Tools plugin for DeepSeek Harness
    Built from packages/dsh-plugin-abap-adt. MIT. See README.md for usage. */`,
   },
   logLevel: 'info',

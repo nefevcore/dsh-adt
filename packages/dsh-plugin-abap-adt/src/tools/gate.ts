@@ -5,7 +5,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
+import { DESTINATION_PARAM, NAME_TYPE_OBJECTS_PARAM, clampWithNote, destinationOf, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
 
 export type GateStage = 'syntax' | 'unit' | 'atc';
@@ -32,19 +32,7 @@ export function gateTools(deps: ToolDeps) {
         'Read-only (only runs checks; nothing is activated or transported).',
       parameters: {
         packageName: { type: 'string', description: 'Check every member of this development package.' },
-        objects: {
-          type: 'array',
-          description: 'Alternative: explicit objects to check. Each: {name, type}.',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-
-            properties: {
-              name: { type: 'string', required: true },
-              type: { type: 'string' },
-            },
-          },
-        },
+        ...NAME_TYPE_OBJECTS_PARAM,
         stages: {
           type: 'array',
           description: 'Which checks to run (default: all three).',
@@ -61,6 +49,8 @@ export function gateTools(deps: ToolDeps) {
 
           properties: {
             objectCount: { type: 'integer', required: true },
+            truncated: { type: 'boolean' },
+            note: { type: 'string' },
             verdict: { type: 'string', required: true },
             stages: {
               type: 'array',
@@ -89,19 +79,29 @@ export function gateTools(deps: ToolDeps) {
       timeoutMs: 1_200_000,
       execute: async (args, exec) => {
         const entry = registry.require(destinationOf(args));
-        const cap = Math.min(Math.max(Number(args.maxObjects ?? 100), 1), 500);
+        const clamp = clampWithNote(Number(args.maxObjects ?? 100), 1, 500, 'maxObjects');
+        const cap = clamp.value;
+        let truncated = false;
 
         let refs: AdtObjectRef[];
         if (typeof args.packageName === 'string' && args.packageName) {
-          refs = (await entry.client.packageContent(args.packageName.toUpperCase(), { maxResults: cap, signal: exec.signal })).slice(0, cap);
+          const members = await entry.client.packageContent(args.packageName.toUpperCase(), { maxResults: cap, signal: exec.signal });
+          refs = members.slice(0, cap);
+          if (members.length > refs.length) truncated = true;
         } else if (Array.isArray(args.objects) && args.objects.length > 0) {
-          refs = [];
+          const all: AdtObjectRef[] = [];
           for (const o of args.objects as Array<{ name: string; type?: string }>) {
-            refs.push(await resolveObject(entry.client, { name: o.name, type: o.type }, 10, exec.signal));
+            all.push(await resolveObject(entry.client, { name: o.name, type: o.type }, 10, exec.signal));
           }
+          refs = all.slice(0, cap);
+          if (all.length > refs.length) truncated = true;
         } else {
           throw new Error('adt_release_gate: provide either `packageName` or `objects`');
         }
+        const notes = [
+          clamp.note,
+          truncated ? `object set truncated to maxObjects=${cap} — the verdict covers the first ${refs.length} only` : undefined,
+        ].filter(Boolean);
 
         const wanted = new Set<GateStage>(
           (Array.isArray(args.stages) && args.stages.length > 0
@@ -141,7 +141,13 @@ export function gateTools(deps: ToolDeps) {
           });
         }
 
-        return { objectCount: refs.length, verdict: aggregateGate(stages).verdict, stages };
+        return {
+          objectCount: refs.length,
+          truncated: truncated || undefined,
+          note: notes.join('; ') || undefined,
+          verdict: aggregateGate(stages).verdict,
+          stages,
+        };
       },
     }),
   ];

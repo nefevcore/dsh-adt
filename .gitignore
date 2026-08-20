@@ -7,3 +7,4 @@ dist/
 coverage/
 dist-tarballs/
 .research/
+*.log

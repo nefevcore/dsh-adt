@@ -132,6 +132,9 @@ export const ENDPOINTS = {
         DDLS: (query) => `${ADT_BASE}/ddls/sources${toQuery(query)}`,
         TABL: (query) => `${ADT_BASE}/ddic/tables${toQuery(query)}`,
         STRU: (query) => `${ADT_BASE}/ddic/structures${toQuery(query)}`,
+        DOMA: (query) => `${ADT_BASE}/ddic/domains${toQuery(query)}`,
+        DTEL: (query) => `${ADT_BASE}/ddic/dataelements${toQuery(query)}`,
+        TTYP: (query) => `${ADT_BASE}/ddic/tabletypes${toQuery(query)}`,
         MSAG: (query) => `${ADT_BASE}/msgclass${toQuery(query)}`,
         DEVC: (query) => `${ADT_BASE}/packages${toQuery(query)}`,
     },
@@ -143,6 +146,16 @@ export const ENDPOINTS = {
     deletionCheck: (query) => `${ADT_BASE}/deletion/check${toQuery(query)}`,
     /** System time / ping (lightweight reachability probe). */
     systemTime: () => `${ADT_BASE}/core/system/time`,
+    /** Runtime dumps feed (ST22 short-dump list; Atom feed, $-style paging). */
+    runtimeDumps: (query) => `${ADT_BASE}/runtime/dumps${toQuery(query)}`,
+    /** One runtime dump by id; `view` selects default/summary/formatted. */
+    runtimeDump: (dumpId, view) => `${ADT_BASE}/runtime/dump/${encodeURIComponent(dumpId)}${view === 'summary' ? '/summary' : view === 'formatted' ? '/formatted' : ''}`,
+    /** Execute an ABAP executable program (console output as text/plain). */
+    programRun: (programName) => `${ADT_BASE}/programs/programrun/${encodeURIComponent(programName)}`,
+    /** Execute an `if_oo_adt_classrun` class (console output as text/plain). */
+    classRun: (className) => `${ADT_BASE}/oo/classrun/${encodeURIComponent(className)}`,
+    /** Protocol-level `$batch` (multipart/mixed embedded HTTP requests). */
+    batch: () => `${ADT_BASE}/$batch`,
 };
 /** Human-readable object type labels (used when search does not provide them). */
 export const OBJECT_TYPE_LABELS = {

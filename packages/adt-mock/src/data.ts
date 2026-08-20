@@ -17,6 +17,22 @@ export interface MockObject {
   changedAt: string;
   changedBy: string;
   masterLanguage: string;
+  /** Structured metadata XML (MSAG/DOMA/DTEL/TTYP editors). */
+  metadataXml?: string;
+  /**
+   * Snapshot of the source at its last ACTIVATION (the "active" version).
+   * Plain reads return `source` (the current saved state — inactive when it
+   * differs); `?version=active` reads return this. Mirrors the real backend:
+   * writing does not activate, activating promotes saved → active.
+   */
+  activeSource?: string;
+  /**
+   * Open transport request the object currently belongs to (the corrNr of
+   * its last write). Locking returns it instead of creating a new task —
+   * mirroring the real backend, where an object already in an open request
+   * stays there and only fresh objects get an auto-created task.
+   */
+  corrNr?: string;
   /** Unit test outcome when this object is tested. */
   unit?: {
     total: number;
@@ -195,6 +211,163 @@ ENDCLASS.`,
         line: 11,
       },
     ],
+  },
+  {
+    uri: '/sap/bc/adt/oo/classes/zcl_runner',
+    type: 'CLAS/OC',
+    category: 'CLAS',
+    name: 'ZCL_RUNNER',
+    description: 'Runnable class (if_oo_adt_classrun) for adt_execute demos',
+    packageName: 'ZPACK_DEMO',
+    masterLanguage: 'EN',
+    changedAt: NOW,
+    changedBy: 'DEMO',
+    source: `CLASS zcl_runner DEFINITION PUBLIC FINAL CREATE PUBLIC.
+  PUBLIC SECTION.
+    INTERFACES if_oo_adt_classrun.
+ENDCLASS.
+
+CLASS zcl_runner IMPLEMENTATION.
+  METHOD if_oo_adt_classrun~main.
+    out->write( 'Hello from ZCL_RUNNER (mock classrun)' ).
+    out->write( |2 + 3 = { 2 + 3 }| ).
+  ENDMETHOD.
+ENDCLASS.`,
+  },
+  {
+    uri: '/sap/bc/adt/msgclass/zmsg_demo',
+    type: 'MSAG/N',
+    category: 'MSAG',
+    name: 'ZMSG_DEMO',
+    description: 'Demo message class',
+    packageName: 'ZPACK_DEMO',
+    masterLanguage: 'EN',
+    changedAt: NOW,
+    changedBy: 'DEMO',
+    source: '* message class ZMSG_DEMO',
+    metadataXml: `<?xml version="1.0" encoding="UTF-8"?>
+<mc:messageClass xmlns:mc="http://www.sap.com/adt/MessageClass" xmlns:adtcore="http://www.sap.com/adt/core" adtcore:name="ZMSG_DEMO" adtcore:type="MSAG/N" adtcore:description="Demo message class" adtcore:language="EN" adtcore:masterLanguage="EN" adtcore:responsible="DEMO">
+  <adtcore:packageRef adtcore:name="ZPACK_DEMO"/>
+  <mc:messages mc:msgno="001" mc:msgtext="Hello &amp;1, welcome to the demo"/>
+  <mc:messages mc:msgno="002" mc:msgtext="Value &amp;1 is not valid (allowed: &amp;2)"/>
+  <mc:messages mc:msgno="003" mc:msgtext="Operation finished with status &amp;1"/>
+</mc:messageClass>`,
+  },
+  {
+    uri: '/sap/bc/adt/ddic/domains/zdoma_demo',
+    type: 'DOMA/DT',
+    category: 'DOMA',
+    name: 'ZDOMA_DEMO',
+    description: 'Demo domain with fixed values',
+    packageName: 'ZPACK_DEMO',
+    masterLanguage: 'EN',
+    changedAt: NOW,
+    changedBy: 'DEMO',
+    source: '* domain ZDOMA_DEMO',
+    metadataXml: `<?xml version="1.0" encoding="UTF-8"?>
+<doma:domain xmlns:doma="http://www.sap.com/adt/ddic/Domains" xmlns:adtcore="http://www.sap.com/adt/core" adtcore:name="ZDOMA_DEMO" adtcore:type="DOMA/DT" adtcore:description="Demo domain with fixed values" adtcore:language="EN" adtcore:masterLanguage="EN">
+  <adtcore:packageRef adtcore:name="ZPACK_DEMO"/>
+  <doma:content>
+    <doma:typeInformation>
+      <doma:datatype>CHAR</doma:datatype>
+      <doma:length>2</doma:length>
+      <doma:decimals>0</doma:decimals>
+    </doma:typeInformation>
+    <doma:outputInformation>
+      <doma:conversionExit></doma:conversionExit>
+      <doma:signExists>false</doma:signExists>
+      <doma:lowercase>false</doma:lowercase>
+    </doma:outputInformation>
+    <doma:fixValues>
+      <doma:fixValue>
+        <doma:low>AA</doma:low>
+        <doma:text>Alpha mode</doma:text>
+      </doma:fixValue>
+      <doma:fixValue>
+        <doma:low>BB</doma:low>
+        <doma:text>Beta mode</doma:text>
+      </doma:fixValue>
+    </doma:fixValues>
+  </doma:content>
+</doma:domain>`,
+  },
+  {
+    uri: '/sap/bc/adt/ddic/dataelements/zdtel_demo',
+    type: 'DTEL/DT',
+    category: 'DTEL',
+    name: 'ZDTEL_DEMO',
+    description: 'Demo data element on ZDOMA_DEMO',
+    packageName: 'ZPACK_DEMO',
+    masterLanguage: 'EN',
+    changedAt: NOW,
+    changedBy: 'DEMO',
+    source: '* data element ZDTEL_DEMO',
+    metadataXml: `<?xml version="1.0" encoding="UTF-8"?>
+<dtel:dataElement xmlns:dtel="http://www.sap.com/adt/ddic/DataElements" xmlns:adtcore="http://www.sap.com/adt/core" adtcore:name="ZDTEL_DEMO" adtcore:type="DTEL/DT" adtcore:description="Demo data element on ZDOMA_DEMO" adtcore:language="EN" adtcore:masterLanguage="EN">
+  <adtcore:packageRef adtcore:name="ZPACK_DEMO"/>
+  <dtel:typeKind>domain</dtel:typeKind>
+  <dtel:typeName>ZDOMA_DEMO</dtel:typeName>
+  <dtel:labels>
+    <dtel:label type="shortText">Demo</dtel:label>
+    <dtel:label type="mediumText">Demo element</dtel:label>
+    <dtel:label type="heading">DemoElem</dtel:label>
+  </dtel:labels>
+</dtel:dataElement>`,
+  },
+  {
+    uri: '/sap/bc/adt/ddic/tabletypes/zttyp_demo',
+    type: 'TTYP/DT',
+    category: 'TTYP',
+    name: 'ZTTYP_DEMO',
+    description: 'Demo table type (sorted by component)',
+    packageName: 'ZPACK_DEMO',
+    masterLanguage: 'EN',
+    changedAt: NOW,
+    changedBy: 'DEMO',
+    source: '* table type ZTTYP_DEMO',
+    metadataXml: `<?xml version="1.0" encoding="UTF-8"?>
+<ttypes:tableType xmlns:ttypes="http://www.sap.com/adt/ddic/TableTypes" xmlns:ttyp="http://www.sap.com/adt/ddic/TableTypes" xmlns:adtcore="http://www.sap.com/adt/core" adtcore:name="ZTTYP_DEMO" adtcore:type="TTYP/DT" adtcore:description="Demo table type (sorted by component)" adtcore:language="EN" adtcore:masterLanguage="EN">
+  <adtcore:packageRef adtcore:name="ZPACK_DEMO"/>
+  <ttyp:typeKind>structure</ttyp:typeKind>
+  <ttyp:typeName>ZCDS_DEMO</ttyp:typeName>
+  <ttyp:accessType>standard</ttyp:accessType>
+  <ttyp:key>
+    <ttyp:definition>key</ttyp:definition>
+    <ttyp:kind>default</ttyp:kind>
+  </ttyp:key>
+</ttypes:tableType>`,
+  },
+];
+
+/** Deterministic sample runtime dumps (ST22) exposed by the mock. */
+export interface MockDump {
+  id: string;
+  title: string;
+  category: string;
+  user: string;
+  updatedAt: string;
+  program: string;
+  text: string;
+}
+
+export const DUMPS: MockDump[] = [
+  {
+    id: '20260813115347mockhost_MOCK_00DEMO000001',
+    title: 'UNCAUGHT_EXCEPTION',
+    category: 'ABAP Programming Error',
+    user: 'DEMO',
+    updatedAt: '2026-08-13T11:53:47.000Z',
+    program: 'ZPROG_DEMO',
+    text: 'CX_SY_ZERODIVIDE: Division by zero in method DIVIDE (row 11).',
+  },
+  {
+    id: '20260812100102mockhost_MOCK_00OTHER000002',
+    title: 'TIMEOUT',
+    category: 'ABAP Runtime Limit Exceeded',
+    user: 'OTHER',
+    updatedAt: '2026-08-12T10:01:02.000Z',
+    program: 'SAPLZLONG_RUNNING',
+    text: 'Runtime limit of 600 seconds exceeded in SELECT on ZBIGTABLE.',
   },
 ];
 

@@ -9,8 +9,8 @@
  * a handle-less unlock on backends that accept it.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
-import { resolveObject, resolveObjects } from '../resolve.js';
+import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
+import { resolveObjects } from '../resolve.js';
 
 export function lockTools(deps: ToolDeps) {
   const { registry, ledger } = deps;
@@ -22,9 +22,7 @@ export function lockTools(deps: ToolDeps) {
       'Check before adt_write_object to avoid edit conflicts. Read-only (never acquires a lock). ' +
       'Some backends do not expose lock state in metadata — the tool reports locked=null with a note then.',
     parameters: {
-      objectUri: { type: 'string', description: 'Exact ADT object URI, e.g. /sap/bc/adt/oo/classes/zcl_demo.' },
-      name: { type: 'string', description: 'Object name, e.g. ZCL_DEMO.' },
-      type: { type: 'string', description: 'Object type (short or ADT form), e.g. CLAS, INTF, PROG.' },
+      ...OBJECT_REF_PARAMS,
       ...DESTINATION_PARAM,
     },
     output: {
@@ -52,11 +50,7 @@ export function lockTools(deps: ToolDeps) {
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
-      const ref = await resolveObject(entry.client, {
-        objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
-        name: typeof args.name === 'string' ? args.name : undefined,
-        type: typeof args.type === 'string' ? args.type : undefined,
-      }, 10, exec.signal);
+      const ref = await resolveToolObject(entry.client, args, exec.signal);
       const info = await entry.client.getObjectLock(ref.uri, ref.type, { signal: exec.signal });
       return {
         objectUri: ref.uri,
@@ -71,12 +65,12 @@ export function lockTools(deps: ToolDeps) {
   const unlockAll = defineTool({
     name: 'adt_unlock_all',
     description:
-      'Release residual ABAP edit locks held by this user. ADT locks can survive a crashed or ' +
-      'interrupted tool call (and object creation auto-locks without returning a handle), blocking later ' +
-      'edits with HTTP 403 EU510 until removed in SM12. This tool replays the plugin\'s persistent lock ' +
-      'ledger (every lock this plugin acquired, across sessions on this machine) plus any explicit `objects`, ' +
-      'unlocking with the recorded handle and falling back to a handle-less unlock where the backend accepts it. ' +
-      'Locks that still cannot be released (e.g. held by another user) are reported — those need SM12.',
+      'Release residual ABAP edit locks held by this user. ADT locks can survive a crashed or interrupted tool ' +
+      'call, blocking later edits with HTTP 403 EU510 until removed in SM12. Replays the plugin\'s persistent lock ' +
+      'ledger (every lock this plugin acquired, across sessions) plus any explicit `objects`, unlocking with the ' +
+      'recorded handle and falling back to a handle-less unlock where accepted. Locks still not releasable ' +
+      '(e.g. held by another user) are reported — those need SM12. Set `dryRun: true` to only LIST the candidate ' +
+      'locks without releasing anything.',
     parameters: {
       objects: {
         type: 'array',
@@ -93,6 +87,10 @@ export function lockTools(deps: ToolDeps) {
           },
         },
       },
+      dryRun: {
+        type: 'boolean',
+        description: 'Only list the candidate locks (ledger + explicit objects) without unlocking anything (default false).',
+      },
       ...DESTINATION_PARAM,
     },
     output: {
@@ -102,6 +100,7 @@ export function lockTools(deps: ToolDeps) {
 
         properties: {
           destination: { type: 'string', required: true },
+          dryRun: { type: 'boolean' },
           attempted: { type: 'integer', required: true },
           released: {
             type: 'array',
@@ -132,7 +131,8 @@ export function lockTools(deps: ToolDeps) {
       },
       render: (_args, value) => {
         const lines = [
-          `Unlock all on ${value.destination}: ${value.released.length} released, ${value.failed.length} failed (of ${value.attempted} attempted)`,
+          `Unlock all on ${value.destination}: ${value.released.length} released, ${value.failed.length} failed (of ${value.attempted} attempted)` +
+            (value.dryRun ? ' — DRY RUN, nothing was unlocked' : ''),
           ...value.released.map((r) => `- released ${r.objectUri}${r.note ? ` (${r.note})` : ''}`),
           ...value.failed.map((f) => `- FAILED ${f.objectUri}: ${f.reason}`),
         ];
@@ -155,6 +155,22 @@ export function lockTools(deps: ToolDeps) {
         candidates.set(e.uri, { uri: e.uri, handle: e.handle ?? existing?.handle, name: e.name ?? existing?.name });
       }
 
+      // Dry run: list the candidates, touch nothing (the unlock itself is the
+      // only ERP interaction; listing is purely local ledger + resolution).
+      if (args.dryRun === true) {
+        return {
+          destination,
+          dryRun: true,
+          attempted: candidates.size,
+          released: [],
+          failed: [...candidates.values()].map((c) => ({
+            objectUri: c.uri,
+            reason: 'dry run — candidate lock (not released)',
+          })),
+          remainingLedger: ledger.forDestination(destination).length,
+        };
+      }
+
       const released: Array<{ objectUri: string; note?: string }> = [];
       const failed: Array<{ objectUri: string; reason: string }> = [];
       for (const cand of candidates.values()) {
@@ -168,6 +184,7 @@ export function lockTools(deps: ToolDeps) {
       }
       return {
         destination,
+        dryRun: false,
         attempted: candidates.size,
         released,
         failed,

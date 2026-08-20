@@ -154,7 +154,61 @@ Accept: application/xml  →  <adtcore:objectReferences><adtcore:objectReference
 - **ATC 结果的真实格式是 `atcresult` 命名空间**（非 checkstyle）：`resultList → result → objects → object → findings → finding`。finding 属性：`priority`(1-4)、`checkId`、`checkTitle`、`messageId`、`messageTitle`、`location`(`#start=行,列`)、`uri`。集合列表也是子元素格式（`<atcresult:displayId>` 等），并带 `aggregates`（`numPrio1..4`/`numFailure`）。priority 映射：1→CRITICAL、2→ERROR、3→WARNING、4→INFO。
 - **ATC 结果集合 `GET /atc/results` 需要 `createdBy` 参数**（缺省会 400）；`createdBy=*` 可跨用户列出全部结果；`activeResult=true` 语义不同（活跃结果）。结果可通过 displayId 直接获取（`GET /atc/results/{displayId}`）。
 
-## 7. 待验证项（勿在生产依赖）
+## 7. 运行时转储 / 执行器 / $batch / 结构化编辑器
+
+### 运行时转储（ST22 短转储分析）
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/sap/bc/adt/runtime/dumps` | Atom feed。`$query`（`and( equals( user, X ) )` 表达式过滤）、`from`/`to`（`YYYYMMDDHHMMSS` 时间范围）、`$top`/`$skip` 分页；Accept `application/atom+xml;type=feed` |
+| GET | `/sap/bc/adt/runtime/dump/{id}` | 结构化 XML（`application/vnd.sap.adt.runtime.dump.v1+xml`）。**注意集合是 dumps（复数）、单条是 dump（单数）** |
+| GET | `/sap/bc/adt/runtime/dump/{id}/summary` | HTML 概览（Accept `text/html`） |
+| GET | `/sap/bc/adt/runtime/dump/{id}/formatted` | 纯文本分析视图（Accept `text/plain`） |
+
+dump id 是复合键：`{YYYYMMDDHHMMSS}{hostname}_{SYSID}_{instance}{user}{client}{seq}`。feed entry 的 id 从 `<link href=".../runtime/dump/{id}"/>` 提取（`<id>` 元素不总是可用）。
+
+### 程序 / 类执行器
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/sap/bc/adt/programs/programrun/{NAME}` | 运行可执行程序（F8 等价物）；控制台输出 `text/plain` 返回；名称大写 |
+| POST | `/sap/bc/adt/oo/classrun/{NAME}` | 运行实现 `if_oo_adt_classrun` 的类（`main( )` 执行，`out->write( )` 输出以 `text/plain` 返回）；未实现该接口 → 400 |
+
+两者都是**状态变更 POST**（需 CSRF）；报文无 body。
+
+### 协议级 $batch
+```
+POST /sap/bc/adt/$batch
+Content-Type: multipart/mixed; boundary=batch_<uuid>
+Accept: multipart/mixed
+
+--batch_<uuid>
+Content-Type: application/http
+content-transfer-encoding: binary
+
+GET /sap/bc/adt/oo/classes/zcl_demo/source/main?sap-client=100 HTTP/1.1
+Accept: text/plain
+
+--batch_<uuid>
+...
+--batch_<uuid>--
+```
+- 每部分是 `application/http` 内嵌完整 HTTP 请求（请求行 + 头 + 空行 + body）
+- 响应是 `multipart/mixed`，逐部分内嵌 HTTP 响应（`HTTP/1.1 200 OK` + 头 + body），**顺序与请求一致**
+- CSRF 只需在外层 POST 校验一次；`sap-client`/`sap-language` 应附加到每个内层路径
+- 参考实现：`@mcp-abap-adt/adt-clients` 的 `batch/buildBatchPayload`（boundary 随机生成、requestId 32 位）；语义同 OData $batch 但挂在整个 ADT 命名空间下
+
+### 结构化编辑器（MSAG / DOMA / DTEL / TTYP）
+这些 DDIC 对象没有 `/source/main`，内容是元数据 XML；写入走 read-modify-write（lock → GET 原文 → 只补丁显式字段 → PUT ?lockHandle= → unlock），SAP 管理属性全量保留：
+
+| 类型 | 端点 | 媒体类型 | 结构要点 |
+|---|---|---|---|
+| MSAG | `/sap/bc/adt/messageclass/{name}` | `application/vnd.sap.adt.mc.messageclass+xml` | 根 `mc:messageClass`（ns `http://www.sap.com/adt/MessageClass`）；消息是 `mc:messages` 元素属性（`mc:msgno`/`mc:msgtext`/`mc:selfexplainatory`——SAP 拼写就是没有 x）；删除走 `mc:deletedmessages` |
+| DOMA | `/sap/bc/adt/ddic/domains/{name}` | `application/vnd.sap.adt.domains.v2+xml` | `doma:content` → `doma:typeInformation`（datatype/length/decimals）+ `doma:outputInformation`（conversionExit/signExists/lowercase）+ `doma:fixValues` → `doma:fixValue`（`doma:low`/`doma:text` 子元素） |
+| DTEL | `/sap/bc/adt/ddic/dataelements/{name}` | `application/vnd.sap.adt.dataelements.v2+xml` | `dtel:typeKind`（domain/builtin）+ `dtel:typeName` 或 `dtel:dataType`+`dtel:dataTypeLength`（**补零到 6 位**）；`dtel:labels` → `dtel:label type="shortText|mediumText|longText|heading"` |
+| TTYP | `/sap/bc/adt/ddic/tabletypes/{name}` | `application/vnd.sap.adt.tabletypes.v2+xml` | `ttyp:typeKind`/`ttyp:typeName`/`ttyp:accessType`；主键 `ttyp:key` → `ttyp:definition`/`ttyp:kind` |
+
+TABL/STRU 不在结构化编辑器范围：现代系统上它们有 DDL 源（`/ddic/tables/{name}/source/main`，PUT DDL 文本），走普通源码读写路径。
+
+## 8. 待验证项（勿在生产依赖）
 
 - `?includeSupportPackageCompatibility` 参数
 - `x-sap-login-with` 头

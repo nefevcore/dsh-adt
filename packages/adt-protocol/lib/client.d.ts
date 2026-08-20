@@ -16,7 +16,7 @@
  * server that exposes the ADT service (classic NetWeaver and ABAP Cloud).
  */
 import { type XmlNode } from './xml.js';
-import type { AdtActivationResult, AdtAtcResult, AdtAtcRunSummary, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtDestination, AdtDiscovery, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtObjectVersion, AdtObjectLockInfo, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtSystemInfo, AdtTransport, AdtUnitRunResult, AdtWhereUsedResult, AdtDataPreview } from './types.js';
+import type { AdtActivationResult, AdtAtcResult, AdtAtcRunSummary, AdtBatchRequestPart, AdtBatchResponsePart, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtDestination, AdtDiscovery, AdtDumpDetail, AdtDumpSummary, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtObjectVersion, AdtObjectLockInfo, AdtRunResult, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtStructureChanges, AdtStructureData, AdtStructureKind, AdtStructureWriteResult, AdtSystemInfo, AdtTransport, AdtUnitRunResult, AdtWhereUsedResult, AdtDataPreview } from './types.js';
 /** Error raised for HTTP-level or protocol-level failures. */
 export declare class AdtError extends Error {
     readonly status?: number | undefined;
@@ -121,8 +121,14 @@ export declare class AdtClient {
         maxResults?: number;
         signal?: AbortSignal;
     }): Promise<AdtSourceSearchHit[]>;
-    /** Read the main source of an object by its ADT URI. */
+    /**
+     * Read the main source of an object by its ADT URI. `version` selects the
+     * active or inactive representation (`?version=active|inactive`); without
+     * it the backend returns the CURRENT source — the inactive version when
+     * one exists, else the active one.
+     */
     readSource(objectUri: string, options?: {
+        version?: 'active' | 'inactive';
         signal?: AbortSignal;
     }): Promise<AdtSource>;
     /**
@@ -312,6 +318,78 @@ export declare class AdtClient {
         transport?: string;
         signal?: AbortSignal;
     }): Promise<void>;
+    /**
+     * List runtime dumps (the ST22 feed). `from`/`to` are `YYYYMMDDHHMMSS`
+     * timestamps; `user` filters by the session user; `top`/`skip` page the
+     * feed (server-side `$top`/`$skip`).
+     */
+    listDumps(options?: {
+        user?: string;
+        from?: string;
+        to?: string;
+        top?: number;
+        skip?: number;
+        signal?: AbortSignal;
+    }): Promise<AdtDumpSummary[]>;
+    /**
+     * Read one runtime dump. `view` selects the representation:
+     *  - `default`   — structured XML (`runtime.dump.v1+xml`), parsed to sections
+     *  - `summary`   — HTML summary (raw passthrough)
+     *  - `formatted` — plain-text analysis view (raw passthrough)
+     */
+    getDump(dumpId: string, options?: {
+        view?: 'default' | 'summary' | 'formatted';
+        signal?: AbortSignal;
+    }): Promise<AdtDumpDetail>;
+    /**
+     * Run an ABAP executable program (console output comes back as text).
+     * Equivalent to F8 in ADT: the program runs synchronously in the session.
+     */
+    runProgram(programName: string, options?: {
+        signal?: AbortSignal;
+    }): Promise<AdtRunResult>;
+    /**
+     * Run a class that implements `if_oo_adt_classrun` — its `main( )` executes
+     * and the `out->write( )` output comes back as text. The standard agent
+     * pattern for "run logic and capture output without building a program".
+     */
+    runClass(className: string, options?: {
+        signal?: AbortSignal;
+    }): Promise<AdtRunResult>;
+    /**
+     * Execute several ADT requests in ONE HTTP round-trip via the `$batch`
+     * multipart protocol (`POST /sap/bc/adt/$batch`). Every part carries an
+     * embedded HTTP request (`GET/POST/PUT <path> HTTP/1.1`); the response is
+     * a multipart with one embedded HTTP response per part, in order.
+     *
+     * The outer POST is state-changing (CSRF applies once, for all parts);
+     * `sap-client`/`sap-language` are appended to every inner request path.
+     */
+    batch(parts: AdtBatchRequestPart[], options?: {
+        signal?: AbortSignal;
+    }): Promise<AdtBatchResponsePart[]>;
+    /** Read the structured metadata of a DDIC object as typed JSON. */
+    readStructure(objectUri: string, kind: AdtStructureKind, options?: {
+        signal?: AbortSignal;
+    }): Promise<AdtStructureData>;
+    /**
+     * Read-modify-write the structured metadata of a DDIC object: lock → GET
+     * current XML → patch only the provided fields → PUT → unlock. The
+     * optional `onLocked` hook runs right after the lock (with the backend
+     * transport the lock assigned) so callers can enforce policy and abort
+     * BEFORE anything is written — a throw rolls the lock back and propagates.
+     */
+    writeStructure(objectUri: string, kind: AdtStructureKind, changes: AdtStructureChanges, options?: {
+        transport?: string;
+        onLocked?: (assignedTransport: string | undefined) => void;
+        signal?: AbortSignal;
+    }): Promise<AdtStructureWriteResult>;
+    /**
+     * Inner `$batch` request path: the client/language query parameters of the
+     * destination are appended (once) so every embedded request executes in the
+     * right session context, exactly like the outer request would carry them.
+     */
+    private innerBatchPath;
     /** Lightweight reachability + auth probe. */
     ping(options?: {
         signal?: AbortSignal;
