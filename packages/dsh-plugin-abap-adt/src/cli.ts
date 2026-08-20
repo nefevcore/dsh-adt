@@ -41,7 +41,7 @@ import { parse } from 'yaml';
 export const PLUGIN_ROW = `
 # --- abap-adt (appended by abap-adt-preset) ---
 # This row is what scopes the adt_* tools to sessions on this preset; the
-# default cordis preset (and global sessions) never load them.
+# source preset (and global sessions) never loads them.
 # Destinations / permission policy live in ~/.dsh/settings.yaml under
 # abap-adt: (hot-applies); demo starts an in-process mock destination.
 - id: abap-adt
@@ -242,6 +242,26 @@ export function main(argv: string[]): number {
     return 1;
   }
 
+  // --force replaces the whole directory: surface manual customizations of
+  // the previous abap-adt row (e.g. a local bundle path instead of the npm
+  // package name) instead of silently discarding them.
+  const notices: string[] = [];
+  if (existsSync(presetDir)) {
+    try {
+      const previous = readFileSync(join(presetDir, 'agent.cordis.yml'), 'utf8');
+      const stockRow = "name: '@nefevcore/abap-adt-dsh-plugin'";
+      if (previous.includes('- id: abap-adt') && !previous.includes(stockRow)) {
+        const customized = /^\s*name:\s*(.+)$/m.exec(previous.split('- id: abap-adt')[1] ?? '')?.[1]?.trim();
+        notices.push(
+          `note: the previous preset had a CUSTOMIZED abap-adt row${customized ? ` (name: ${customized})` : ''} — ` +
+            'the regenerated preset uses the npm package name instead; re-apply your customization if that was intentional',
+        );
+      }
+    } catch {
+      /* unreadable previous composition — nothing to compare */
+    }
+  }
+
   mkdirSync(dirname(presetDir), { recursive: true });
   if (existsSync(presetDir)) rmSync(presetDir, { recursive: true, force: true });
   cpSync(sourceDir, presetDir, { recursive: true });
@@ -251,6 +271,7 @@ export function main(argv: string[]): number {
   process.stdout.write(
     [
       `created ${presetDir} (from preset '${from}')`,
+      ...notices,
       'next steps:',
       '  1. restart DSH (only needed once — this preset is new)',
       `  2. new session -> preset chip -> ${args.name}`,

@@ -1,19 +1,59 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { Context } from '@deepseek-ai/cordis';
 import type { FileSystem } from '@deepseek-ai/dsh-fs';
-import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
-import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
+import type { AdtBatchRequestPart, AdtBatchRequestPart as BatchPart, AdtObjectRef } from '@nefevcore/abap-adt-protocol';
+import { DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
 
 /**
  * Batch & pipeline tools — capabilities that go beyond the interactive VS Code
  * ADT workflow:
  *
- *  - `adt_batch_checks`   — run ATC + ABAP Unit across every object of a
- *    package in one shot and produce an aggregated report.
+ *  - `adt_batch`          — protocol-level `$batch`: several ADT requests in
+ *    ONE HTTP round-trip (fan-out reads without N sequential calls; optional
+ *    write parts behind an explicit policy knob). Supersedes the former
+ *    adt_batch_checks — package-wide ATC+Unit quality runs are covered by
+ *    adt_release_gate, and arbitrary composition now happens here.
  *  - `adt_export_objects` — pull an object set's sources into a local folder
  *    (git-style versioning, offline review, backups).
  */
+
+/** Hard cap per $batch call (protocol + context hygiene). */
+const MAX_BATCH_PARTS = 50;
+
+/** Response bodies beyond this are truncated in the tool output. */
+const MAX_PART_BODY_CHARS = 4000;
+
+/** Paths that dedicated, policy-checked tools own — never batchable. */
+const FORBIDDEN_BATCH_PATHS: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /\/cts\/transportrequests\/[^/]+\/release/i, reason: 'transport release is a human decision — no tool exposes it' },
+  { pattern: /\/deletion\//i, reason: 'use adt_delete_object (policy-checked, lock-aware)' },
+];
+
+function validateBatchPart(part: BatchPart, index: number, allowWrites: boolean, toolName: string): void {
+  const method = part.method ?? 'GET';
+  if (method !== 'GET' && method !== 'POST' && method !== 'PUT') {
+    throw new Error(`${toolName}: requests[${index}] method must be GET, POST or PUT (got '${method}')`);
+  }
+  const path = part.path ?? '';
+  if (!path.startsWith('/sap/bc/adt/') || path.includes('..')) {
+    throw new Error(
+      `${toolName}: requests[${index}] path must be an absolute ADT path starting with /sap/bc/adt/ (got '${path}')`,
+    );
+  }
+  for (const forbidden of FORBIDDEN_BATCH_PATHS) {
+    if (forbidden.pattern.test(path)) {
+      throw new Error(`${toolName}: requests[${index}] path is blocked in $batch — ${forbidden.reason}`);
+    }
+  }
+  if (method !== 'GET' && !allowWrites) {
+    throw new Error(
+      `${toolName}: requests[${index}] uses ${method} but write parts are disabled (read-only GET fan-out is ` +
+        'the default). Set allowWrites: true AND enable the destination policy knob allowBatchWrites ' +
+        '(SAP_ALLOW_BATCH_WRITES) — generic write parts bypass per-object policy checks',
+    );
+  }
+}
 
 export function batchTools(deps: ToolDeps, ctx: Context) {
   const { registry } = deps;
@@ -35,25 +75,37 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
     return named ? `${ref.name}.${named}` : `${ref.name}.abap`;
   }
 
-  const batchChecks = defineTool({
-    name: 'adt_batch_checks',
+  const batch = defineTool({
+    name: 'adt_batch',
     description:
-      'Run ATC (ABAP Test Cockpit) and ABAP Unit tests across ALL objects of a development package in one operation ' +
-      'and return an aggregated quality report. This is a batch capability not available in the interactive VS Code ADT UI.',
+      'Protocol-level $batch: execute several ADT requests in ONE HTTP round-trip (multipart embedded ' +
+      'HTTP, POST /sap/bc/adt/$batch). The agent-scale way to fan out reads — e.g. pull the sources of 20 ' +
+      'objects, or object metadata + versions + lock state together — without N sequential calls. ' +
+      'Read-only by design: GET parts always work; POST/PUT parts additionally need allowWrites:true AND ' +
+      'the destination policy knob allowBatchWrites (generic embedded writes bypass per-object policy ' +
+      'checks — prefer the dedicated write tools). Transport release / deletion paths are always blocked. ' +
+      'Each request: {method, path, body?, contentType?, accept?}.',
     parameters: {
-      packageName: {
-        type: 'string',
+      requests: {
+        type: 'array',
         required: true,
-        description: 'Package to analyze, e.g. ZPACK_DEMO.',
+        description: `Embedded ADT requests (max ${MAX_BATCH_PARTS}). Each: {method: GET|POST|PUT, path: /sap/bc/adt/…, body?, contentType?, accept?}.`,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+
+          properties: {
+            method: { type: 'string', enum: ['GET', 'POST', 'PUT'], description: 'HTTP method (default GET).' },
+            path: { type: 'string', required: true, description: 'Absolute ADT path, e.g. /sap/bc/adt/oo/classes/zcl_demo/source/main.' },
+            body: { type: 'string', description: 'Request body (write parts).' },
+            contentType: { type: 'string', description: 'Content-Type of the body (write parts).' },
+            accept: { type: 'string', description: 'Accept header for the embedded response (default application/xml).' },
+          },
+        },
       },
-      runUnitTests: {
+      allowWrites: {
         type: 'boolean',
-        description: 'Also run ABAP Unit tests on test classes in the package (default true).',
-      },
-      atcVariant: { type: 'string', description: 'ATC check variant (backend-defined).' },
-      maxObjects: {
-        type: 'integer',
-        description: 'Cap on analyzed objects (default 50) — guards against huge packages.',
+        description: 'Opt in to POST/PUT parts (also requires the destination policy knob allowBatchWrites).',
       },
       ...DESTINATION_PARAM,
     },
@@ -63,148 +115,92 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
         additionalProperties: false,
 
         properties: {
-          packageName: { type: 'string', required: true },
-          analyzed: { type: 'integer', required: true },
-          atc: {
-            type: 'object',
+          requested: { type: 'integer', required: true },
+          ok: { type: 'integer', required: true, description: 'Parts with status < 400.' },
+          failed: { type: 'integer', required: true, description: 'Parts with status >= 400.' },
+          note: { type: 'string' },
+          parts: {
+            type: 'array',
             required: true,
-            additionalProperties: false,
+            items: {
+              type: 'object',
+              additionalProperties: false,
 
-            properties: {
-              clean: { type: 'boolean', required: true },
-              findings: {
-                type: 'array',
-                required: true,
-                items: {
-                  type: 'object',
-                  additionalProperties: false,
-
-                  properties: {
-                    severity: { type: 'string', required: true },
-                    objectName: { type: 'string', required: true },
-                    message: { type: 'string', required: true },
-                    checkTitle: { type: 'string' },
-                    line: { type: 'integer' },
-                  },
-                },
-              },
-              counts: {
-                type: 'object',
-                required: true,
-                additionalProperties: false,
-
-                properties: {
-                  INFO: { type: 'integer', required: true },
-                  WARNING: { type: 'integer', required: true },
-                  ERROR: { type: 'integer', required: true },
-                  CRITICAL: { type: 'integer', required: true },
-                  CATASTROPHIC: { type: 'integer', required: true },
-                },
-              },
-            },
-          },
-          unit: {
-            type: 'object',
-            required: true,
-            additionalProperties: false,
-
-            properties: {
-              success: { type: 'boolean', required: true },
-              total: { type: 'integer', required: true },
-              passed: { type: 'integer', required: true },
-              failed: { type: 'integer', required: true },
-              errors: { type: 'integer', required: true },
-              classes: {
-                type: 'array',
-                required: true,
-                items: {
-                  type: 'object',
-                  additionalProperties: false,
-
-                  properties: {
-                    className: { type: 'string', required: true },
-                    status: { type: 'string', required: true },
-                  },
-                },
+              properties: {
+                index: { type: 'integer', required: true },
+                status: { type: 'integer', required: true },
+                statusText: { type: 'string' },
+                contentType: { type: 'string' },
+                chars: { type: 'integer', required: true, description: 'Full body length.' },
+                truncated: { type: 'boolean' },
+                body: { type: 'string', description: 'Response body (truncated beyond 4000 chars).' },
               },
             },
           },
         },
       },
       render: (_args, value) => {
-        const lines: string[] = [];
-        lines.push(`Batch quality report for package ${value.packageName} (${value.analyzed} objects analyzed)`);
-        lines.push('');
-        lines.push(`ATC: ${value.atc.clean ? 'CLEAN' : 'findings'} — ` +
-          `INFO ${value.atc.counts.INFO}, WARNING ${value.atc.counts.WARNING}, ERROR ${value.atc.counts.ERROR}, ` +
-          `CRITICAL ${value.atc.counts.CRITICAL}, CATASTROPHIC ${value.atc.counts.CATASTROPHIC}`);
-        for (const f of value.atc.findings) {
-          lines.push(`  [${f.severity}] ${f.objectName}${f.line ? `:${f.line}` : ''} — ${f.message}`);
-        }
-        lines.push('');
-        lines.push(`ABAP Unit: ${value.unit.total} tests, ${value.unit.passed} passed, ${value.unit.failed} failed, ${value.unit.errors} errors`);
-        for (const c of value.unit.classes) {
-          lines.push(`  ${c.className}: ${c.status}`);
+        const lines = [
+          `$batch: ${value.ok}/${value.requested} part(s) succeeded${value.failed ? `, ${value.failed} failed` : ''}`,
+        ];
+        if (value.note) lines.push(`Note: ${value.note}`);
+        for (const p of value.parts) {
+          lines.push(`  #${p.index} → HTTP ${p.status} ${p.statusText ?? ''} (${p.chars} chars${p.truncated ? ', truncated' : ''})`);
         }
         return text(lines.join('\n'));
       },
     },
-    timeoutMs: 960_000,
+    timeoutMs: 180_000,
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
-      const packageName = String(args.packageName);
-      const maxObjects = Math.min(Number(args.maxObjects ?? 50), 200);
-      const members = await entry.client.packageContent(packageName, { signal: exec.signal });
-      const refs = members.slice(0, maxObjects);
+      const raw = Array.isArray(args.requests) ? (args.requests as BatchPart[]) : [];
+      if (raw.length === 0) throw new Error('adt_batch: `requests` must contain at least one embedded request');
+      const clamp = clampWithNote(raw.length, 1, MAX_BATCH_PARTS, 'requests');
+      const parts = raw.slice(0, clamp.value);
+      const notes: string[] = [];
+      if (clamp.note) notes.push(clamp.note);
 
-      // ATC over all members.
-      const atc = await entry.client.runAtc(refs, {
-        variant: typeof args.atcVariant === 'string' ? args.atcVariant : undefined,
-        signal: exec.signal,
+      // Policy read at call time: a write part requires BOTH the explicit
+      // allowWrites flag and the destination knob (default off).
+      const allowWrites = args.allowWrites === true && parts.some((p) => (p.method ?? 'GET') !== 'GET');
+      if (parts.some((p) => (p.method ?? 'GET') !== 'GET')) {
+        entry.policy.assertBatchWritesAllowed('adt_batch');
+      }
+      const normalized: AdtBatchRequestPart[] = parts.map((part, index) => {
+        const method = (part.method ?? 'GET').toUpperCase() as 'GET' | 'POST' | 'PUT';
+        const checked: BatchPart = { ...part, method };
+        validateBatchPart(checked, index, allowWrites || method === 'GET', 'adt_batch');
+        return {
+          method,
+          path: part.path,
+          body: optStr(part.body),
+          contentType: optStr(part.contentType),
+          accept: optStr(part.accept),
+        };
       });
 
-      // ABAP Unit: focus on test classes (name contains '~test' or starts with 'ltcl_'), fall back to all.
-      const runUnit = args.runUnitTests !== false;
-      let unit = {
-        success: true,
-        total: 0,
-        passed: 0,
-        failed: 0,
-        errors: 0,
-        classes: [] as Array<{ className: string; status: string }>,
-      };
-      if (runUnit) {
-        const testRefs = refs.filter(
-          (r) => r.name.includes('~TEST') || r.name.toLowerCase().startsWith('ltcl_') || r.name.toUpperCase().startsWith('LTCL_'),
-        );
-        if (testRefs.length > 0) {
-          const result = await entry.client.runUnitTests(testRefs, { signal: exec.signal });
-          unit = {
-            success: result.success,
-            total: result.total,
-            passed: result.passed,
-            failed: result.failed,
-            errors: result.errors,
-            classes: result.classes.map((c) => ({ className: c.className, status: c.status })),
-          };
+      const responses = await entry.client.batch(normalized, { signal: exec.signal });
+      const rendered = responses.map((r) => {
+        const truncated = r.body.length > MAX_PART_BODY_CHARS;
+        if (truncated) {
+          notes.push(`part #${r.index} body truncated to ${MAX_PART_BODY_CHARS} of ${r.body.length} chars`);
         }
-      }
-
+        return {
+          index: r.index,
+          status: r.status,
+          statusText: r.statusText,
+          contentType: r.contentType,
+          chars: r.body.length,
+          truncated: truncated || undefined,
+          body: truncated ? r.body.slice(0, MAX_PART_BODY_CHARS) : r.body,
+        };
+      });
       return {
-        packageName,
-        analyzed: refs.length,
-        atc: {
-          clean: atc.clean,
-          findings: atc.findings.map((f) => ({
-            severity: f.severity,
-            objectName: f.objectName,
-            message: f.message,
-            checkTitle: f.checkTitle,
-            line: f.line,
-          })),
-          counts: atc.counts,
-        },
-        unit,
+        requested: responses.length,
+        ok: responses.filter((r) => r.status > 0 && r.status < 400).length,
+        failed: responses.filter((r) => r.status === 0 || r.status >= 400).length,
+        note: notes.length ? [...new Set(notes)].join('; ') : undefined,
+        parts: rendered,
       };
     },
   });
@@ -215,10 +211,12 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
       'Export the sources of ABAP objects (by package or explicit list) into a local folder as .abap files — ' +
       'enabling git-style versioning, offline review and backups. Writes through the DSH filesystem (sandbox-aware).',
     parameters: {
-      packageName: { type: 'string', description: 'Export all members of this package.' },
       objects: {
         type: 'array',
-        description: 'Alternative: explicit objects to export. Each: {name, type}.',
+        required: true,
+        description:
+          'Explicit objects to export. Each: {name, type}. Deliberately explicit — no whole-package export; ' +
+          'build the list with adt_package_content / adt_search first.',
         items: {
           type: 'object',
           additionalProperties: false,
@@ -234,7 +232,7 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
         required: true,
         description: 'Local directory to write the exported sources into (absolute path).',
       },
-      maxObjects: { type: 'integer', description: 'Cap on exported objects (default 100).' },
+      maxObjects: { type: 'integer', description: 'Cap on exported objects (default 100, clamped to 1–500).' },
       ...DESTINATION_PARAM,
     },
     output: {
@@ -246,6 +244,8 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
           targetDir: { type: 'string', required: true },
           exported: { type: 'integer', required: true },
           failed: { type: 'integer', required: true },
+          truncated: { type: 'boolean' },
+          note: { type: 'string' },
           files: {
             type: 'array',
             required: true,
@@ -294,22 +294,21 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
       const targetDir = String(args.targetDir);
       await fs.resolve(targetDir, { signal: exec.signal });
 
-      let refs: AdtObjectRef[];
-      if (typeof args.packageName === 'string' && args.packageName) {
-        const members = await entry.client.packageContent(args.packageName, { signal: exec.signal });
-        refs = members.slice(0, Math.min(Number(args.maxObjects ?? 100), 500));
-      } else if (Array.isArray(args.objects) && args.objects.length > 0) {
-        refs = [];
-        for (const o of args.objects as Array<{ name: string; type?: string }>) {
-          refs.push(await resolveObject(entry.client, { name: o.name, type: o.type }, 10, exec.signal));
-        }
-      } else {
-        throw new Error('adt_export_objects: provide either `packageName` or `objects`');
+      if (!Array.isArray(args.objects) || args.objects.length === 0) {
+        throw new Error('adt_export_objects: `objects` is required (build the list via adt_package_content / adt_search)');
+      }
+      const clamp = clampWithNote(Number(args.maxObjects ?? 100), 1, 500, 'maxObjects');
+      const refs: AdtObjectRef[] = [];
+      for (const o of args.objects as Array<{ name: string; type?: string }>) {
+        refs.push(await resolveObject(entry.client, { name: o.name, type: o.type }, 10, exec.signal));
       }
 
       const files: Array<{ name: string; path: string; chars?: number }> = [];
+      const limited = refs.slice(0, clamp.value);
+      const notes = [clamp.note];
+      if (limited.length < refs.length) notes.push(`export truncated to maxObjects=${clamp.value} of ${refs.length} requested object(s)`);
       let failed = 0;
-      for (const ref of refs) {
+      for (const ref of limited) {
         try {
           const parsed = await entry.client.readSource(ref.uri, { signal: exec.signal });
           const fileName = exportFileName(ref);
@@ -321,9 +320,16 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
           files.push({ name: ref.name, path: `FAILED: ${(error as Error).message}` });
         }
       }
-      return { targetDir, exported: files.length - failed, failed, files };
+      return {
+        targetDir,
+        exported: files.length - failed,
+        failed,
+        files,
+        truncated: limited.length < refs.length || undefined,
+        note: notes.filter(Boolean).join('; ') || undefined,
+      };
     },
   });
 
-  return [batchChecks, exportObjects];
+  return [batch, exportObjects];
 }

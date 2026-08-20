@@ -2,6 +2,10 @@
 
 > 范围：`packages/dsh-plugin-abap-adt`（30 个 `adt_*` 工具）+ 底层 `adt-protocol` 客户端行为。
 > 视角：把「调用方是 LLM Agent」作为一等约束来审视工具契约——调用链成本、上下文经济、失败可读性、误操作安全、长任务语义。
+>
+> **落地状态（2025 整理批次 1）**：✅ 已落地 —— §2.6/P0-2（目的地 typo fail-fast，`registry.require` 对未知名直接抛错）、P0-3（`unlocked` 如实反映 + 失败时保留锁账本条目）、§2.7-1（batch 单测对本地测试类回退全量 refs）、§2.7-2（batch 输出 `truncated` 提示）。代码结构同步整理：`source.ts` 拆为 `read.ts`/`write.ts`/`objects.ts`，共享参数与解析助手收敛到 `tools/common.ts`（下文 `src/tools/source.ts` 路径按此对应）。
+>
+> **落地状态（2025 评审批次 2，17 条意见全部处理）**：✅ P0-1 部分（edit 匹配硬化：去注释 + 歧义报错）、P0-4 未做（hint 信任保留，见下方说明）；§2.8（version_diff 去双全文）；新增：package_content 瘦身、search 包过滤/offset、DOMA/DTEL/TTYP 支持、read 行窗口、**移除 adt_release_transport**（人工决策）、export 强制对象清单、check 消息归属、preview kind 对齐类型码、get_transport 脱离传输号管控、unlock_all dryRun、**策略四开关改为全局默认 + per-destination `policy:` 覆盖**（工具按目标目的地断言）。工具数 30 → 29。对照表见 `docs/tool-reference.md` 末节。
 
 ---
 
@@ -94,7 +98,7 @@
 - `exact ?? hits[0]`——名字拼错时（如 `ZCL_DEMO2` 不存在），搜索会拿第一个模糊命中（可能是 `ZCL_DEMO`）**静默替换目标对象**，随后 write/edit/delete 作用到错误对象上。对只读工具无害，对变更工具是事故源。
 - TYPE_MAP 未覆盖的类型（如 DDIC 域、搜索类）回退到 `/sap/bc/adt/repository/objects/<name>` 这种通用 URI，最终以裸 404 形式失败，错误信息不指明「类型不支持」。
 
-### 2.2 写路径与锁（`source.ts`、`locks.ts`）——整体扎实，`unlocked` 标志有一处失真
+### 2.2 写路径与锁（`write.ts`、`locks.ts`）——整体扎实，`unlocked` 标志有一处失真 ✅ 已修
 
 写链路：`lock → ledger.register → assertTransportUsage(CORRNR) → write → unlock → ledger.deregister`；任何异常都回滚锁。持久账本 + `adt_unlock_all` + `unlockBestEffort`（无 handle 裸 UNLOCK）这组设计能兜住「进程死亡/创建自动锁」两类残留，是明显强于社区实现的点。
 
@@ -125,7 +129,7 @@
 - `timeoutMs` 协议层有参数，工具层没暴露。
 - 反例是 `adt_run_atc` 返回 `displayId` + `adt_get_atc_result` 复取——这个「产物可寻址」模式已经存在，只是 run 本身不拆分。
 
-### 2.6 目的地选择（`registry.require`）——typo 静默回退 default
+### 2.6 目的地选择（`registry.require`）——typo 静默回退 default ✅ 已修（未知名直接抛错并列出可用目的地）
 
 `name && destinations.has(name) ? name : this.defaultName`：传了不存在的目的地名**不报错**，直接落到 defaultDestination。对只读工具是麻烦（读到错误系统还以为成功了），对 write/delete/release 是事故（typo `dve` → 落到 `dev` 或 `demo`）。Agent 传参手滑的概率不低，这里应当 fail-fast。
 
@@ -158,17 +162,17 @@
 
 ### P0-1 模糊命中防护：变更类工具禁止 hits[0] 回退
 - **改法**：`resolveObject` 增加模式参数；write/edit/delete/activate 走 `strict` 模式——无 objectUri、搜索无精确命中时抛错并列出 top 候选（`candidates: [{name,type,package}]`），让 Agent 二次确认。只读工具维持现状。
-- **位置**：`src/resolve.ts` + `src/tools/source.ts`/`lifecycle.ts`。
+- **位置**：`src/resolve.ts` + `src/tools/write.ts`/`objects.ts`/`lifecycle.ts`。
 - **收益**：消灭「改错对象」这一最贵的事故类别。
 
-### P0-2 目的地 typo 不再静默回退
+### P0-2 目的地 typo 不再静默回退 ✅ 已落地
 - **改法**：`registry.require(name)`：`name` 已提供但不存在 → 直接抛错并列出可用目的地；仅 `name` 缺省时才用 default。
 - **位置**：`src/registry.ts`。
 - **收益**：一行改动，杜绝跨系统误操作。
 
-### P0-3 `unlocked` 标志与账本一致性
+### P0-3 `unlocked` 标志与账本一致性 ✅ 已落地
 - **改法**：write/edit 的 unlock 结果如实反映：`released=false` 时 `unlocked:false`、**保留**账本条目（edit 已保留，write 需修），错误信息提示下一步 `adt_unlock_all`。
-- **位置**：`src/tools/source.ts`（writeObject 的 unlock 分支）。
+- **位置**：`src/tools/write.ts`（writeObject 的 unlock 分支）。
 
 ### P0-4 `packageName` hint 不应覆盖后端事实
 - **改法**：`resolvePackageName` 顺序改为：搜索精确命中的 `packageName` > hint > 失败关闭。hint 仅在后端查不到时兜底（并在输出里注明「包名来自调用方」）。可顺带在 hint 与后端命中不一致时打 warning。

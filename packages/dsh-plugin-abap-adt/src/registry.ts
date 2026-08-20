@@ -9,6 +9,9 @@ export interface RegistryDestination {
   /** `true` when backed by the in-process mock server. */
   mock: boolean;
   client: AdtClient;
+  /** Effective permission policy of THIS destination (global defaults overlaid
+   *  with the destination's `policy:` block); swapped by reload(). */
+  policy: AdtPolicy;
   /** Cached last ping result. */
   status?: { ok: boolean; detail?: string; checkedAt?: string };
 }
@@ -22,8 +25,12 @@ export class AdtRegistry {
   readonly destinations = new Map<string, RegistryDestination>();
   /** Effective permission policy (config > SAP_* env > defaults); swapped by reload(). */
   policy: AdtPolicy;
+  /** Destination used when a tool call omits `destination`. */
+  defaultName = 'demo';
   private mockServer?: Awaited<ReturnType<typeof createMockAdtServer>>;
   private mockPort?: number;
+  /** Top-level policy inputs (global defaults for every destination). */
+  private globalPolicyInputs: import('./policy.js').PolicyInputs = {};
 
   private constructor(policy: AdtPolicy) {
     this.policy = policy;
@@ -57,6 +64,17 @@ export class AdtRegistry {
       await this.startMock(config.demoPort);
     }
 
+    // Global policy inputs (top-level keys) — each destination overlays its
+    // own `policy:` block on these.
+    this.globalPolicyInputs = {
+      enableTransports: config.enableTransports,
+      allowedTransports: config.allowedTransports,
+      allowTransportableEdits: config.allowTransportableEdits,
+      allowedPackages: config.allowedPackages,
+      allowExecution: config.allowExecution,
+      allowBatchWrites: config.allowBatchWrites,
+    };
+
     // Rebuild the non-mock destinations (fresh clients; dropped names go away).
     for (const [name, entry] of [...this.destinations]) {
       if (!entry.mock) this.destinations.delete(name);
@@ -67,7 +85,10 @@ export class AdtRegistry {
     if (config.defaultDestination) {
       this.defaultName = config.defaultDestination;
     }
-    this.policy = AdtPolicy.resolve(config);
+    this.policy = AdtPolicy.resolve(this.globalPolicyInputs);
+    // The demo destination follows the global policy (no per-dest override).
+    const demo = this.destinations.get('demo');
+    if (demo) demo.policy = this.policy;
   }
 
   private async startMock(port: number): Promise<void> {
@@ -115,6 +136,8 @@ export class AdtRegistry {
         language: 'EN',
         auth: { type: 'basic', username: 'demo', password: 'demo' },
       }),
+      // refreshed at the end of reload() with the global policy
+      policy: this.policy,
     });
   }
 
@@ -135,10 +158,10 @@ export class AdtRegistry {
       config: adtDest,
       mock: false,
       client: new AdtClient(adtDest),
+      // Global defaults overlaid with the destination's own policy block.
+      policy: AdtPolicy.resolve({ ...this.globalPolicyInputs, ...dest.policy }),
     });
   }
-
-  defaultName = 'demo';
 
   /** Get a client by destination name; empty/undefined uses the default. */
   require(name?: string): RegistryDestination {
@@ -175,6 +198,16 @@ export class AdtRegistry {
       results.push({ name, mock: entry.mock, ok: status.ok, detail: status.detail ?? '' });
     }
     return results;
+  }
+
+  /** Snapshot for the `adt_permissions` tool: global defaults + per destination. */
+  describePolicies(): {
+    global: ReturnType<AdtPolicy['describe']>;
+    perDestination: Record<string, ReturnType<AdtPolicy['describe']>>;
+  } {
+    const perDestination: Record<string, ReturnType<AdtPolicy['describe']>> = {};
+    for (const [name, entry] of this.destinations) perDestination[name] = entry.policy.describe();
+    return { global: this.policy.describe(), perDestination };
   }
 
   async dispose(): Promise<void> {

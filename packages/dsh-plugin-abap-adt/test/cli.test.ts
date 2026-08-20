@@ -131,3 +131,43 @@ test('main: generates the preset, refuses to clobber, --force replaces', () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('main: --force warns when the previous abap-adt row was customized', () => {
+  const install = fakeDshInstall();
+  const home = mkdtempSync(join(tmpdir(), 'abap-adt-home-'));
+  const prevHome = process.env.DSH_HOME;
+  const prevSrc = process.env.DSH_PRESET_SOURCE;
+  process.env.DSH_HOME = home;
+  process.env.DSH_PRESET_SOURCE = install;
+  let captured = '';
+  const origWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    captured += String(chunk);
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    assert.equal(main([]), 0);
+    // Customize the row the way a local-bundle user would (non-npm name).
+    const presetDir = join(home, '.agent-presets', 'abap-adt');
+    const composition = readFileSync(join(presetDir, 'agent.cordis.yml'), 'utf8');
+    writeFileSync(
+      join(presetDir, 'agent.cordis.yml'),
+      composition.replace("name: '@nefevcore/abap-adt-dsh-plugin'", "name: 'C:/bundle/dsh-plugin-abap-adt.bundle.mjs'"),
+      'utf8',
+    );
+    captured = '';
+    assert.equal(main(['--force']), 0);
+    assert.match(captured, /CUSTOMIZED abap-adt row.*bundle\.mjs/);
+    // Regenerating over the stock row again stays silent.
+    captured = '';
+    assert.equal(main(['--force']), 0);
+    assert.doesNotMatch(captured, /CUSTOMIZED/);
+  } finally {
+    process.stdout.write = origWrite;
+    process.env.DSH_HOME = prevHome;
+    if (prevSrc === undefined) delete process.env.DSH_PRESET_SOURCE;
+    else process.env.DSH_PRESET_SOURCE = prevSrc;
+    rmSync(install, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});

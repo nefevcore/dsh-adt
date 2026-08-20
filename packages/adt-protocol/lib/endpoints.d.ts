@@ -128,6 +128,9 @@ export declare const ENDPOINTS: {
         readonly DDLS: (query?: AdtQueryParams) => string;
         readonly TABL: (query?: AdtQueryParams) => string;
         readonly STRU: (query?: AdtQueryParams) => string;
+        readonly DOMA: (query?: AdtQueryParams) => string;
+        readonly DTEL: (query?: AdtQueryParams) => string;
+        readonly TTYP: (query?: AdtQueryParams) => string;
         readonly MSAG: (query?: AdtQueryParams) => string;
         readonly DEVC: (query?: AdtQueryParams) => string;
     };
@@ -139,6 +142,16 @@ export declare const ENDPOINTS: {
     readonly deletionCheck: (query?: AdtQueryParams) => string;
     /** System time / ping (lightweight reachability probe). */
     readonly systemTime: () => string;
+    /** Runtime dumps feed (ST22 short-dump list; Atom feed, $-style paging). */
+    readonly runtimeDumps: (query?: AdtQueryParams) => string;
+    /** One runtime dump by id; `view` selects default/summary/formatted. */
+    readonly runtimeDump: (dumpId: string, view?: "default" | "summary" | "formatted") => string;
+    /** Execute an ABAP executable program (console output as text/plain). */
+    readonly programRun: (programName: string) => string;
+    /** Execute an `if_oo_adt_classrun` class (console output as text/plain). */
+    readonly classRun: (className: string) => string;
+    /** Protocol-level `$batch` (multipart/mixed embedded HTTP requests). */
+    readonly batch: () => string;
 };
 /** Human-readable object type labels (used when search does not provide them). */
 export declare const OBJECT_TYPE_LABELS: Record<string, string>;

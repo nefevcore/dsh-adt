@@ -1,19 +1,14 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, destinationOf, text } from './common.js';
-import { resolveObject } from '../resolve.js';
+import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text } from './common.js';
 export function transportTools(deps) {
     const { registry } = deps;
     const objectVersions = defineTool({
         name: 'adt_object_versions',
         description: 'Read the version history (Atom feed) of a source object. Each version carries the transport request ' +
-            '(or open task) it was saved into — a read-only way to map objects to transports without locking. ' +
-            'A version whose transport number does not resolve via adt_get_transport is an open task of an ' +
-            'unreleased request; a number that resolves with status "D" is itself an unreleased request.',
+            '(or open task) it was saved into — a read-only way to map objects to transports without locking.',
         parameters: {
-            objectUri: { type: 'string', description: 'Exact ADT object URI, e.g. /sap/bc/adt/programs/programs/zai_fi_audit_test.' },
-            name: { type: 'string', description: 'Object name, e.g. ZAI_FI_AUDIT_TEST.' },
-            type: { type: 'string', description: 'Object type (short or ADT form), e.g. PROG, CLAS, FUNC.' },
+            ...OBJECT_REF_PARAMS,
             ...DESTINATION_PARAM,
         },
         output: {
@@ -52,11 +47,7 @@ export function transportTools(deps) {
         isConcurrencySafe: () => true,
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
-            const ref = await resolveObject(entry.client, {
-                objectUri: typeof args.objectUri === 'string' ? args.objectUri : undefined,
-                name: typeof args.name === 'string' ? args.name : undefined,
-                type: typeof args.type === 'string' ? args.type : undefined,
-            }, 10, exec.signal);
+            const ref = await resolveToolObject(entry.client, args, exec.signal);
             let versions;
             try {
                 versions = await entry.client.getVersions(ref.uri, { signal: exec.signal });
@@ -142,18 +133,17 @@ export function transportTools(deps) {
             allUsers: { type: 'boolean', description: 'List transports of all users (default false).' },
             status: {
                 type: 'string',
-                description: 'Filter by release state (default "all"). Semantic values: "modifiable" = open/unreleased requests (alias "D"), ' +
-                    '"released" = already-published ones (aliases "R"/"L"), "all" = no filter. ' +
-                    'Any other value is forwarded to the backend as the `status` query parameter. ' +
-                    'Note: some backends only report released requests (from the last two weeks) via the organizer tree.',
+                description: 'Filter by release state (default "all"): "modifiable" = open/unreleased requests (alias "D"), ' +
+                    '"released" = published (aliases "R"/"L"), "all" = no filter. Other values are forwarded to the ' +
+                    'backend as the `status` query parameter.',
             },
             ...DESTINATION_PARAM,
         },
         output: transportOutput,
         isConcurrencySafe: () => true,
         execute: async (args, exec) => {
-            registry.policy.assertTransportsEnabled('adt_list_transports');
             const entry = registry.require(destinationOf(args));
+            entry.policy.assertTransportsEnabled('adt_list_transports');
             const transports = await entry.client.listTransports({
                 allUsers: args.allUsers === true,
                 status: typeof args.status === 'string' ? args.status : 'all',
@@ -223,10 +213,12 @@ export function transportTools(deps) {
         },
         isConcurrencySafe: () => true,
         execute: async (args, exec) => {
-            registry.policy.assertTransportsEnabled('adt_get_transport');
-            const number = String(args.number);
-            registry.policy.assertTransportAllowed(number, 'adt_get_transport');
             const entry = registry.require(destinationOf(args));
+            // Read-only: the transport FAMILY gate still applies, but the request
+            // number itself is not policed — only edits (write/activate/release of
+            // content) are constrained by allowedTransports.
+            entry.policy.assertTransportsEnabled('adt_get_transport');
+            const number = String(args.number);
             const t = await entry.client.getTransport(number, { signal: exec.signal });
             return {
                 number: t.number,
@@ -246,36 +238,12 @@ export function transportTools(deps) {
             };
         },
     });
-    const releaseTransport = defineTool({
-        name: 'adt_release_transport',
-        description: 'Release a transport request, moving its objects to the next system in the transport route. ' +
-            'Irreversible within a system — double-check the request contents first. ' +
-            'Only requests matching the plugin permission policy (allowedTransports) can be released.',
-        parameters: {
-            number: { type: 'string', required: true, description: 'Transport request number to release.' },
-            ...DESTINATION_PARAM,
-        },
-        output: {
-            schema: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    number: { type: 'string', required: true },
-                    released: { type: 'boolean', required: true },
-                    status: { type: 'string' },
-                },
-            },
-            render: (_args, value) => text(`${value.number}: ${value.released ? 'released' : 'release failed'}${value.status ? ` (status ${value.status})` : ''}`),
-        },
-        execute: async (args, exec) => {
-            registry.policy.assertTransportsEnabled('adt_release_transport');
-            const number = String(args.number);
-            registry.policy.assertTransportAllowed(number, 'adt_release_transport');
-            const entry = registry.require(destinationOf(args));
-            const t = await entry.client.releaseTransport(number, { signal: exec.signal });
-            return { number: t.number, released: !t.modifiable, status: t.status };
-        },
-    });
-    return [objectVersions, listTransports, getTransport, releaseTransport];
+    // NOTE: adt_release_transport is deliberately NOT exposed as a tool.
+    // Releasing a transport is irreversible (objects leave the system) and the
+    // decision needs human judgement (import order, release windows, buffer
+    // state) — an agent should stage everything up to a releasable request and
+    // leave the final release to a person. The protocol client still implements
+    // releaseTransport() for future, explicitly-gated use.
+    return [objectVersions, listTransports, getTransport];
 }
 //# sourceMappingURL=transports.js.map

@@ -2,10 +2,10 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-100-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-116-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
-> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **30 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport*, plus agent-scale batch capabilities (whole-package quality reports, local export, offline abaplint, release gates). Ships with a zero-config mock server, so you can try everything without an SAP system.
+> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **34 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, local export, offline abaplint). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system.
 
 在 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 上直接访问 SAP ABAP 系统的插件与协议客户端。
 
@@ -53,10 +53,13 @@ dsh plugin --profile web exec abap-adt-preset --force
 
 ## 核心能力
 
-- **代理原生工具**：30 个 `adt_*` 工具，AI 自主编排多步开发流程
-- **批量代码分析**：`adt_batch_checks` 一次对整个包跑 ATC + ABAP Unit 聚合质量报告
-- **传输自动化**：`adt_list_transports` / `adt_get_transport` / `adt_release_transport`
-- **本地版本化**：`adt_export_objects` 把对象源码落盘为 `.abap` 文件（git 化/备份/离线评审）
+- **代理原生工具**：34 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **错误分析**：`adt_list_dumps` / `adt_get_dump` 直接读取 ABAP 短转储（ST22）做排障闭环
+- **代码执行**：`adt_execute` 运行可执行程序 / `if_oo_adt_classrun` 类并取回控制台输出
+- **结构化编辑器**：`adt_read_structure` / `adt_write_structure` 元数据级读写消息类（MSAG）/域（DOMA）/数据元素（DTEL）/表类型（TTYP）
+- **协议级 $batch**：`adt_batch` 一次 HTTP 往返打包多个 ADT 请求（默认只读 GET 扇出；写部分需显式开关）
+- **传输查询**：`adt_list_transports` / `adt_get_transport`（释放传输是人工决策，刻意不提供工具）
+- **本地版本化**：`adt_export_objects` 把对象源码落盘为 `.abap` 文件（显式对象清单；git 化/备份/离线评审）
 - **本地静态检查**：`adt_local_check` 导出源码后离线跑 abaplint（语法 + lint），验证通过再一次性推送 SAP
 - **全链路自动化**：search → read → write → activate → test → transport 由 AI 一条龙完成
 - **工作流编排**：可配合 DSH 的 `workflow`/`subagent` 做大规模多目标分析
@@ -67,7 +70,7 @@ dsh plugin --profile web exec abap-adt-preset --force
 
 完成上方 ①② 并重启 DSH，新建会话选择「ABAP Development」预设。插件默认 `demo: true`（进程内 mock ADT 服务器，`demo` 目的地）。直接对代理说：
 
-> 列出 ADT 目的地 → 搜索 ZCL_DEMO → 读取其源码 → 修改它 → 激活 → 跑它的单元测试和 ATC → 导出整个 ZPACK_DEMO 包到本地 → 本地静态检查导出的源码
+> 列出 ADT 目的地 → 搜索 ZCL_DEMO → 读取其源码 → 修改它 → 激活 → 跑它的单元测试和 ATC → 用 adt_package_content 拿到对象清单 → 导出这些对象到本地 → 本地静态检查导出的源码
 
 连真实系统：在 `~/.dsh/settings.yaml` 增加 `abap-adt:` 段（保存即热生效，无需重启）：
 
@@ -108,9 +111,9 @@ abap-adt:
 
 ## 权限管控（Permission Policy）
 
-所有会**修改 SAP 系统状态**的工具（`adt_write_object` / `adt_create_object` / `adt_delete_object` / `adt_activate` / 传输工具族）在执行前都会经过一层权限策略（`src/policy.ts`），不满足即抛 `[POLICY]` 错误并指明具体规则。只读工具（搜索/读取/检查/测试/ATC/导出）不受限制。
+所有会**修改 SAP 系统状态**的工具（`adt_write_object` / `adt_create_object` / `adt_delete_object` / `adt_activate` / `adt_write_structure` / 传输工具族）在执行前都会经过**目标目的地**的权限策略（`src/policy.ts`），不满足即抛 `[POLICY]` 错误并指明具体规则。只读工具（搜索/读取/检查/测试/ATC/导出/查看传输请求/转储分析）不受限制——`allowedTransports` 只约束编辑类操作引用的传输号，读取任意请求详情不受该开关限制。两个高危能力各有独立开关：`adt_execute`（执行任意 ABAP，`allowExecution`）与 `adt_batch` 的写部分（`allowBatchWrites`，默认关）。
 
-四个独立开关，生效值优先级为 **settings 用户段/共享文件 > 插件行内联 config > `SAP_*` 环境变量 > 内置默认值**（详见上方「配置分层」）：
+六个独立开关支持**全局默认 + 按目的地覆盖**：顶层键是全局默认，每个 destination 可用自己的 `policy:` 块逐键覆盖（如生产系统只读、开发系统放开）。全局键生效值优先级为 **settings 用户段/共享文件 > 插件行内联 config > `SAP_*` 环境变量 > 内置默认值**（详见上方「配置分层」）：
 
 | 开关 | config 键 | 环境变量 | 默认 | 含义 |
 |---|---|---|---|---|
@@ -118,13 +121,28 @@ abap-adt:
 | 允许的传输号 | `allowedTransports` | `SAP_ALLOWED_TRANSPORTS` | `*` | 逗号分隔 glob（如 `D01K96*`）。既约束显式传入的传输号，也约束后端在 lock 时自动分配的 CORRNR——不匹配则回滚（解锁）并拒绝 |
 | 可传输编辑 | `allowTransportableEdits` | `SAP_ALLOW_TRANSPORTABLE_EDITS` | `true` | `false` 时只允许编辑 `$TMP`（本地对象）中的对象 |
 | 允许的包 | `allowedPackages` | `SAP_ALLOWED_PACKAGES` | `*` | 逗号分隔 glob（如 `Z*,$TMP`），只有白名单内的包可被编辑；`*` = 全部 |
+| 代码执行 | `allowExecution` | `SAP_ALLOW_EXECUTION` | `true` | `false` 时 `adt_execute`（运行程序/类，可任意改系统状态）被拒绝——只读目的地的总闸 |
+| batch 写部分 | `allowBatchWrites` | `SAP_ALLOW_BATCH_WRITES` | `false` | `adt_batch` 默认只做只读 GET 扇出；开启后才允许 POST/PUT 内嵌请求（通用写无法逐对象校验策略，专用写工具仍是受管控路径；传输释放/删除路径永远禁止） |
+
+按目的地覆盖示例（settings.yaml）：
+
+```yaml
+abap-adt:
+  allowedPackages: 'Z*,$TMP'        # 全局默认
+  destinations:
+    - name: prd
+      policy:
+        enableTransports: false      # prd：禁用传输 + 只许 $TMP
+        allowedPackages: '$TMP'
+```
 
 要点：
 
+- **变更工具的传输选择**：`adt_write_object` / `adt_edit_object` / `adt_delete_object` / `adt_write_structure` 均接受 `transport` 参数——显式指定时修改**精确计入该请求**（PUT `?corrNr=`，用户值优先于 lock 分配值，对齐官方 ADT 编辑器行为）；省略时由后端在 lock 时决定（已在 open 请求中的对象留在原请求，否则自动新建 task/request）。输出带 `transport` + `transportSource`（`'user'|'auto'`），自动分配时明确提示，避免改动悄悄计入新建的请求。
 - 包校验对**新建**用显式 `packageName`；对**已存在对象**（write/delete/activate）优先取调用方传入的 `packageName`，否则通过搜索精确命中解析包名；无法确定包名时**失败关闭**（拒绝并提示补传 `packageName`）。
 - `$TMP` 不被隐式放行——白名单是权威的，需要本地对象就把 `$TMP` 写进 `allowedPackages`。
 - 环境变量示例：`SAP_ENABLE_TRANSPORTS=true SAP_ALLOWED_TRANSPORTS='D01K96*' SAP_ALLOW_TRANSPORTABLE_EDITS=true SAP_ALLOWED_PACKAGES='Z*,$TMP'`。
-- 用 `adt_permissions` 查看当前生效策略与每个开关的来源（config/env/default）。
+- 用 `adt_permissions` 查看全局默认**和每个目的地的生效策略**及每个开关的来源（config/env/default）。
 - 注意：demo 目的地的 mock 传输号（`S4HK900001` 等）通常不在 `allowedTransports` 白名单内，因此 demo 上对可传输对象的写入/激活会被策略拒绝——纯演示时把 `allowedTransports` 设为 `*`，或只做只读演示。
 
 ## 协议实现要点（与真实 SAP 兼容）
@@ -143,12 +161,16 @@ abap-adt:
 - **创建**：类型专用集合端点（`/sap/bc/adt/oo/classes` 等）+ 命名空间元数据 XML + `package` 查询参数，201 + `Location` 头
 - **搜索**：`/sap/bc/adt/repository/informationsystem/search?operation=...&query=...&maxResults=...`
 - **包内容**：`/sap/bc/adt/repository/nodestructure?parent_name=DEVC/K&parent_type=DEVC/K`
+- **转储（ST22）**：`GET /sap/bc/adt/runtime/dumps`（Atom feed，`$query` 用户过滤 + `from/to` 时间范围 + `$top/$skip` 分页）；详情 `GET /runtime/dump/{id}`（结构化 XML）/`/summary`（HTML）/`/formatted`（纯文本）
+- **执行**：`POST /sap/bc/adt/programs/programrun/{name}`（可执行程序）与 `POST /sap/bc/adt/oo/classrun/{name}`（`if_oo_adt_classrun` 类），控制台输出以 `text/plain` 返回
+- **$batch**：`POST /sap/bc/adt/$batch`（`multipart/mixed; boundary=…`），每部分 `application/http` 内嵌完整 HTTP 请求（`GET/POST/PUT <path> HTTP/1.1`），响应为逐部分内嵌 HTTP 响应；CSRF 仅在外层校验一次，`sap-client/sap-language` 自动附加到内层路径
+- **结构化编辑器**：MSAG `application/vnd.sap.adt.mc.messageclass+xml`（`mc:messages`/`mc:deletedmessages` 增删）、DOMA `…domains.v2+xml`（`doma:content/typeInformation` + `doma:fixValues`）、DTEL `…dataelements.v2+xml`（`dtel:typeKind/typeName/dataType` + `dtel:labels`）、TTYP `…tabletypes.v2+xml`（`ttyp:typeKind/typeName/accessType` + key）；写入走 read-modify-write（lock → GET 原文 → 只补丁显式字段 → PUT → unlock），SAP 管理的属性全量保留
 
 详见 [docs/adt-protocol-notes.md](docs/adt-protocol-notes.md)。
 
 ## 测试
 
-共 **100 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、abaplint 本地检查、版本 diff、发布门禁、配置分层。
+共 **116 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对工具层、abaplint 本地检查、版本 diff、发布门禁、配置分层。
 
 ## 路线图（可扩展方向）
 
@@ -156,8 +178,9 @@ abap-adt:
 - ABAP Debugger REST API 工具（断点/栈/变量）
 - RAP 对象（BDEF/DDLX/SRVD）专项工具
 - ATC 豁免/基线（exemptions）管理
+- 应用日志（SLG1）/Gateway 错误日志读取工具
 
-> 已落地（早期路线图项）：`adt_where_used`（影响分析）、`adt_data_preview`（CDS/SQL 数据预览）、`adt_object_versions` / `adt_version_diff`（版本历史与 diff）、`adt_lock_info` / `adt_unlock_all`（锁状态查询与残留锁清理）。
+> 已落地（早期路线图项）：`adt_where_used`（影响分析）、`adt_data_preview`（CDS/SQL 数据预览，offset/length 行窗口）、`adt_object_versions` / `adt_version_diff`（版本历史与 diff）、`adt_lock_info` / `adt_unlock_all`（锁状态查询与残留锁清理）、`adt_list_dumps` / `adt_get_dump`（ST22 错误分析）、`adt_execute`（程序/类执行器）、`adt_read_structure` / `adt_write_structure`（DDIC 结构化编辑器）、`adt_batch`（协议级 $batch）。
 
 ## 许可证
 

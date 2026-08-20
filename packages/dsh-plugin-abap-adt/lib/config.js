@@ -46,6 +46,18 @@ import { parse } from 'yaml';
  * and silently defeat layer 2. `resolveEffectiveConfig` applies defaults
  * after merging instead.
  */
+/**
+ * Per-destination permission-policy override (all keys optional; each
+ * overrides the global top-level value for THIS destination only).
+ */
+const policySchema = z.object({
+    enableTransports: z.boolean(),
+    allowedTransports: z.string(),
+    allowTransportableEdits: z.boolean(),
+    allowedPackages: z.string(),
+    allowExecution: z.boolean(),
+    allowBatchWrites: z.boolean(),
+});
 const destinationSchema = z.object({
     name: z.string().required(),
     /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
@@ -61,6 +73,8 @@ const destinationSchema = z.object({
     passwordEnv: z.string(),
     strictSSL: z.boolean().default(true),
     timeoutMs: z.number().default(60_000),
+    /** Destination-level policy overrides (see policy.ts for semantics). */
+    policy: policySchema,
 });
 export const Config = z.object({
     /**
@@ -75,10 +89,11 @@ export const Config = z.object({
     /** Default destination name used by tools when none is given. */
     defaultDestination: z.string().default('demo'),
     /**
-     * Permission policy ("权限管控") knobs. Each is optional: when absent in
-     * both inline config and the external file, the corresponding `SAP_*`
-     * environment variable is consulted, then a built-in default. See
-     * `src/policy.ts` for the full semantics.
+     * GLOBAL permission-policy defaults. These apply to every destination
+     * without its own `policy:` block; a destination-level `policy:` entry
+     * overrides them key by key. Each key is optional: when absent everywhere,
+     * the corresponding `SAP_*` environment variable applies, then the built-in
+     * default (see `src/policy.ts`).
      */
     /** Allow the transport tool family and transport usage (env: SAP_ENABLE_TRANSPORTS). */
     enableTransports: z.boolean(),
@@ -88,6 +103,10 @@ export const Config = z.object({
     allowTransportableEdits: z.boolean(),
     /** Comma-separated glob list of packages that may be edited, e.g. `Z*,$TMP` (env: SAP_ALLOWED_PACKAGES). */
     allowedPackages: z.string(),
+    /** Allow running programs / classrun classes via adt_execute (env: SAP_ALLOW_EXECUTION). */
+    allowExecution: z.boolean(),
+    /** Allow write parts (POST/PUT) inside adt_batch — off by default (env: SAP_ALLOW_BATCH_WRITES). */
+    allowBatchWrites: z.boolean(),
     destinations: z.array(destinationSchema),
 });
 /** Default external config file name inside the dsh home directory. */
@@ -109,6 +128,8 @@ const SCALAR_KEYS = [
     'allowedTransports',
     'allowTransportableEdits',
     'allowedPackages',
+    'allowExecution',
+    'allowBatchWrites',
 ];
 const KNOWN_TOP_LEVEL_KEYS = new Set([...SCALAR_KEYS, 'destinations', 'configFile']);
 const KNOWN_DESTINATION_KEYS = new Set([
@@ -121,6 +142,15 @@ const KNOWN_DESTINATION_KEYS = new Set([
     'passwordEnv',
     'strictSSL',
     'timeoutMs',
+    'policy',
+]);
+const KNOWN_POLICY_KEYS = new Set([
+    'enableTransports',
+    'allowedTransports',
+    'allowTransportableEdits',
+    'allowedPackages',
+    'allowExecution',
+    'allowBatchWrites',
 ]);
 /** The dsh home directory: `${DSH_HOME}` or `~/.dsh`. */
 export function dshHome() {
@@ -225,6 +255,13 @@ export async function loadExternalConfigFile(path) {
         if (unknownDest.length > 0) {
             throw new Error(`[abap-adt] unknown destination keys in ${path} (destination "${dest.name}"): ` +
                 `${unknownDest.join(', ')} (known keys: ${[...KNOWN_DESTINATION_KEYS].join(', ')})`);
+        }
+        if (dest.policy) {
+            const unknownPolicy = Object.keys(dest.policy).filter((key) => !KNOWN_POLICY_KEYS.has(key));
+            if (unknownPolicy.length > 0) {
+                throw new Error(`[abap-adt] unknown policy keys in ${path} (destination "${dest.name}"): ` +
+                    `${unknownPolicy.join(', ')} (known keys: ${[...KNOWN_POLICY_KEYS].join(', ')})`);
+            }
         }
     }
     return validated;

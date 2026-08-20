@@ -2,7 +2,7 @@
  * ADT permission policy ("权限管控") — the guard rails applied to every
  * mutating tool of the plugin.
  *
- * Four independent knobs, each resolvable from three sources (in order):
+ * Six independent knobs, each resolvable from three sources (in order):
  *
  *   1. explicit plugin config (`cordis.patch.yml` → `config:` block)
  *   2. a `SAP_*` environment variable
@@ -14,6 +14,8 @@
  * | allowed transport numbers   | `allowedTransports`       | `SAP_ALLOWED_TRANSPORTS`      | `*`     |
  * | edits in transport packages | `allowTransportableEdits` | `SAP_ALLOW_TRANSPORTABLE_EDITS`| `true`  |
  * | allowed development package | `allowedPackages`         | `SAP_ALLOWED_PACKAGES`        | `*`     |
+ * | program/class execution     | `allowExecution`          | `SAP_ALLOW_EXECUTION`         | `true`  |
+ * | write parts in adt_batch    | `allowBatchWrites`        | `SAP_ALLOW_BATCH_WRITES`      | `false` |
  *
  * Pattern lists (`allowedTransports`, `allowedPackages`) are comma-separated
  * globs: `*` matches any sequence, `?` any single char; matching is
@@ -33,6 +35,13 @@
  *    delete/activate) to `$TMP` objects.
  *  - `allowedPackages`         → whitelist of packages that may be edited;
  *    anything else is denied even when transportable edits are allowed.
+ *  - `allowExecution`          → `false` denies `adt_execute` (running a
+ *    program/class can change system state arbitrarily — the kill switch for
+ *    read-only destinations).
+ *  - `allowBatchWrites`        → `adt_batch` is read-only (GET fan-out) by
+ *    default; write parts additionally require this knob because a generic
+ *    embedded POST/PUT cannot be per-object policy-checked. Dedicated write
+ *    tools remain the policy-enforced path.
  *
  * Every denial throws an {@link AdtPolicyError} carrying the rule id, so the
  * agent sees exactly which knob blocked it and how to adapt.
@@ -42,19 +51,23 @@
  */
 /** SAP "Local Objects" package — edits here never touch the transport system. */
 export const LOCAL_PACKAGE = '$TMP';
-/** Environment variable names for the four policy knobs. */
+/** Environment variable names for the policy knobs. */
 export const POLICY_ENV = {
     enableTransports: 'SAP_ENABLE_TRANSPORTS',
     allowedTransports: 'SAP_ALLOWED_TRANSPORTS',
     allowTransportableEdits: 'SAP_ALLOW_TRANSPORTABLE_EDITS',
     allowedPackages: 'SAP_ALLOWED_PACKAGES',
+    allowExecution: 'SAP_ALLOW_EXECUTION',
+    allowBatchWrites: 'SAP_ALLOW_BATCH_WRITES',
 };
-/** Built-in defaults: permissive, so the zero-config demo keeps working. */
+/** Built-in defaults: permissive for edits/execution, strict for batch writes. */
 export const POLICY_DEFAULTS = {
     enableTransports: true,
     allowedTransports: '*',
     allowTransportableEdits: true,
     allowedPackages: '*',
+    allowExecution: true,
+    allowBatchWrites: false,
 };
 /** Thrown when a policy rule denies an operation. */
 export class AdtPolicyError extends Error {
@@ -118,6 +131,8 @@ export class AdtPolicy {
     allowedTransports;
     allowTransportableEdits;
     allowedPackages;
+    allowExecution;
+    allowBatchWrites;
     /** Where each knob's effective value came from (for `adt_permissions`). */
     sources;
     constructor(effective) {
@@ -125,6 +140,8 @@ export class AdtPolicy {
         this.allowedTransports = parsePatterns(effective.allowedTransports);
         this.allowTransportableEdits = effective.allowTransportableEdits;
         this.allowedPackages = parsePatterns(effective.allowedPackages);
+        this.allowExecution = effective.allowExecution;
+        this.allowBatchWrites = effective.allowBatchWrites;
         this.sources = effective.sources;
     }
     /**
@@ -137,6 +154,8 @@ export class AdtPolicy {
             allowedTransports: 'default',
             allowTransportableEdits: 'default',
             allowedPackages: 'default',
+            allowExecution: 'default',
+            allowBatchWrites: 'default',
         };
         const enableTransports = config.enableTransports ?? parseEnvBoolean(env[POLICY_ENV.enableTransports]);
         if (config.enableTransports !== undefined)
@@ -158,11 +177,23 @@ export class AdtPolicy {
             sources.allowedPackages = 'config';
         else if (env[POLICY_ENV.allowedPackages] !== undefined)
             sources.allowedPackages = 'env';
+        const allowExecution = config.allowExecution ?? parseEnvBoolean(env[POLICY_ENV.allowExecution]);
+        if (config.allowExecution !== undefined)
+            sources.allowExecution = 'config';
+        else if (allowExecution !== undefined && env[POLICY_ENV.allowExecution] !== undefined)
+            sources.allowExecution = 'env';
+        const allowBatchWrites = config.allowBatchWrites ?? parseEnvBoolean(env[POLICY_ENV.allowBatchWrites]);
+        if (config.allowBatchWrites !== undefined)
+            sources.allowBatchWrites = 'config';
+        else if (allowBatchWrites !== undefined && env[POLICY_ENV.allowBatchWrites] !== undefined)
+            sources.allowBatchWrites = 'env';
         return new AdtPolicy({
             enableTransports: enableTransports ?? POLICY_DEFAULTS.enableTransports,
             allowedTransports: allowedTransportsRaw ?? POLICY_DEFAULTS.allowedTransports,
             allowTransportableEdits: allowTransportableEdits ?? POLICY_DEFAULTS.allowTransportableEdits,
             allowedPackages: allowedPackagesRaw ?? POLICY_DEFAULTS.allowedPackages,
+            allowExecution: allowExecution ?? POLICY_DEFAULTS.allowExecution,
+            allowBatchWrites: allowBatchWrites ?? POLICY_DEFAULTS.allowBatchWrites,
             sources,
         });
     }
@@ -215,6 +246,21 @@ export class AdtPolicy {
         }
         this.assertTransportAllowed(number, context);
     }
+    /** Rule: program/class execution must be enabled (adt_execute). */
+    assertExecutionAllowed(context) {
+        if (!this.allowExecution) {
+            throw new AdtPolicyError('allowExecution', `${context}: executing programs/classes is disabled on this destination ` +
+                `(set ${POLICY_ENV.allowExecution}=true or allowExecution: true to permit)`);
+        }
+    }
+    /** Rule: write parts inside adt_batch must be explicitly allowed. */
+    assertBatchWritesAllowed(context) {
+        if (!this.allowBatchWrites) {
+            throw new AdtPolicyError('allowBatchWrites', `${context}: adt_batch write parts are disabled (read-only GET fan-out is always allowed). ` +
+                `A generic embedded POST/PUT bypasses per-object policy checks; set ${POLICY_ENV.allowBatchWrites}=true ` +
+                'or use the dedicated write tools (adt_write_object / adt_write_structure), which ARE policy-checked');
+        }
+    }
     /** Snapshot for the `adt_permissions` introspection tool. */
     describe() {
         return {
@@ -222,6 +268,8 @@ export class AdtPolicy {
             allowedTransports: this.allowedTransports,
             allowTransportableEdits: this.allowTransportableEdits,
             allowedPackages: this.allowedPackages,
+            allowExecution: this.allowExecution,
+            allowBatchWrites: this.allowBatchWrites,
             sources: { ...this.sources },
             defaults: { ...POLICY_DEFAULTS },
         };

@@ -10,8 +10,9 @@
   ],
   "scripts": {
     "build": "tsc -b && tsc -p packages/dsh-plugin-abap-adt",
-    "test": "pnpm build && node --test --test-timeout=60000 packages/adt-protocol/test/xml.test.ts packages/adt-protocol/test/transports.test.ts packages/adt-mock/test/integration.test.ts packages/dsh-plugin-abap-adt/test/policy.test.ts packages/dsh-plugin-abap-adt/test/local_check.test.ts packages/dsh-plugin-abap-adt/test/versions.test.ts packages/dsh-plugin-abap-adt/test/gate.test.ts packages/dsh-plugin-abap-adt/test/config_file.test.ts",
+    "test": "pnpm build && node --test --test-timeout=60000 packages/adt-protocol/test/xml.test.ts packages/adt-protocol/test/transports.test.ts packages/adt-mock/test/integration.test.ts packages/dsh-plugin-abap-adt/test/policy.test.ts packages/dsh-plugin-abap-adt/test/local_check.test.ts packages/dsh-plugin-abap-adt/test/versions.test.ts packages/dsh-plugin-abap-adt/test/gate.test.ts packages/dsh-plugin-abap-adt/test/config_file.test.ts packages/dsh-plugin-abap-adt/test/cli.test.ts packages/dsh-plugin-abap-adt/test/reload.test.ts packages/dsh-plugin-abap-adt/test/agent_tools.test.ts",
     "mock": "node packages/adt-mock/lib/cli.js",
+    "smoke": "node scripts/smoke-tools.mjs",
     "bundle": "node scripts/bundle.mjs",
     "typecheck": "tsc -b --pretty false && tsc -p packages/dsh-plugin-abap-adt --pretty false"
   },

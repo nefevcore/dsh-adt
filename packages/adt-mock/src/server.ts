@@ -14,7 +14,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { ADT_BASE } from '@nefevcore/abap-adt-protocol';
-import { OBJECTS, PACKAGES, type MockObject } from './data.js';
+import { DUMPS, OBJECTS, PACKAGES, type MockDump, type MockObject } from './data.js';
 
 export interface MockAdtOptions {
   port?: number;
@@ -90,21 +90,31 @@ const WHERE_USED: Record<string, Array<{ name: string; type: string; uri: string
   ],
 };
 
-/** Data-preview sample payload (dataPreview: namespace, column-major layout). */
-function dataPreviewXml(entity: string, query = ''): string {
+/**
+ * Data-preview sample payload (dataPreview: namespace, column-major layout).
+ * Generates `rows` deterministic rows so offset/length paging is verifiable;
+ * `totalRows` reports a larger virtual total like a real table would.
+ */
+function dataPreviewXml(entity: string, query = '', rows = 2): string {
   const queryEl = query ? `\n  <dataPreview:query>${xmlEscape(query)}</dataPreview:query>` : '';
+  const count = Math.max(1, Math.min(rows, 5000));
+  const mandt = Array.from({ length: count }, () => '<dataPreview:data>100</dataPreview:data>').join('');
+  const ids = Array.from({ length: count }, (_, i) => `<dataPreview:data>${i + 1}</dataPreview:data>`).join('');
+  const texts = Array.from({ length: count }, (_, i) => `<dataPreview:data>Row ${i + 1}</dataPreview:data>`).join('');
   return `<dataPreview:dataPreview xmlns:dataPreview="http://www.sap.com/adt/datapreview" entity="${xmlEscape(entity)}">
-  <dataPreview:totalRows>2</dataPreview:totalRows>
+  <dataPreview:totalRows>1234</dataPreview:totalRows>
   <dataPreview:queryExecutionTime>1.5</dataPreview:queryExecutionTime>
   <dataPreview:metadata name="MANDT" type="CLNT" description="Client" length="3"/>
-  <dataPreview:metadata name="CARRID" type="CHAR" description="Airline Code" length="3"/>
+  <dataPreview:metadata name="ID" type="INT4" description="Row id" length="10"/>
+  <dataPreview:metadata name="TEXT" type="CHAR" description="Row text" length="20"/>
   <dataPreview:columns>
-    <dataPreview:data>100</dataPreview:data>
-    <dataPreview:data>200</dataPreview:data>
+    ${mandt}
   </dataPreview:columns>
   <dataPreview:columns>
-    <dataPreview:data>LH</dataPreview:data>
-    <dataPreview:data>UA</dataPreview:data>
+    ${ids}
+  </dataPreview:columns>
+  <dataPreview:columns>
+    ${texts}
   </dataPreview:columns>${queryEl}
 </dataPreview:dataPreview>`;
 }
@@ -112,6 +122,7 @@ function dataPreviewXml(entity: string, query = ''): string {
 /** Atom feed of an object's version history. */
 function versionsFeedXml(obj: MockObject): string {
   const stamp = new Date().toISOString();
+  const transport = obj.corrNr ?? 'S4HK900001';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <title>Versions of ${obj.name}</title>
@@ -121,7 +132,7 @@ function versionsFeedXml(obj: MockObject): string {
     <updated>${stamp}</updated>
     <author><name>${obj.changedBy}</name></author>
     <content src="${obj.uri}/source/main?version=00001"/>
-    <link rel="http://www.sap.com/adt/relations/transportrequest" href="/sap/bc/adt/cts/transportrequests/S4HK900001" name="S4HK900001" title="Demo request 1"/>
+    <link rel="http://www.sap.com/adt/relations/transport/request" href="/sap/bc/adt/cts/transportrequests/${transport}" name="${transport}" title="Request of ${obj.name}"/>
   </entry>
   <entry>
     <id>${obj.uri}/source/main/versions/00000</id>
@@ -334,6 +345,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
       ['/sap/bc/adt/oo/interfaces', 'application/vnd.sap.adt.oo.interfaces.v5+xml', 'Interfaces'],
       ['/sap/bc/adt/programs/programs', 'application/vnd.sap.adt.programs.programs.v2+xml', 'Programs'],
       ['/sap/bc/adt/ddls/sources', 'application/vnd.sap.adt.ddlSource.v2+xml', 'CDS Data Definitions'],
+      ['/sap/bc/adt/runtime/dumps', 'application/atom+xml;type=feed', 'Runtime Dumps'],
+      ['/sap/bc/adt/programs/programrun', 'text/plain', 'Program Execution'],
+      ['/sap/bc/adt/oo/classrun', 'text/plain', 'Class Execution'],
+      ['/sap/bc/adt/$batch', 'multipart/mixed', 'Batch Processing'],
       ['/sap/bc/adt/core/system/time', 'application/xml', 'System Time'],
     ]
       .map(
@@ -423,15 +438,199 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   const dpCds = /^\/datapreview\/cds\/([^/]+)$/.exec(path);
   if (dpDdic || dpCds) {
     const name = (dpDdic?.[1] ?? dpCds?.[1] ?? '').toUpperCase();
+    const rowNumber = Number(url.searchParams.get('rowNumber') ?? 2) || 2;
     res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
-    res.end(adtXml(dataPreviewXml(name)));
+    res.end(adtXml(dataPreviewXml(name, '', rowNumber)));
     return;
   }
   if (path === '/datapreview/freestyle') {
     const sql = url.searchParams.get('sqlQuery') ?? url.searchParams.get('sql') ?? 'SELECT';
+    const rowNumber = Number(url.searchParams.get('rowNumber') ?? 2) || 2;
     res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
-    res.end(adtXml(dataPreviewXml('QUERY', sql)));
+    res.end(adtXml(dataPreviewXml('QUERY', sql, rowNumber)));
     return;
+  }
+
+  // ---- Runtime dumps (ST22 short-dump analysis) ----
+  if (path === '/runtime/dumps' && req.method === 'GET') {
+    let dumps: MockDump[] = [...DUMPS];
+    const query = url.searchParams.get('$query') ?? '';
+    const userMatch = /equals\(\s*user\s*,\s*([^)\s]+)\s*\)/.exec(query);
+    if (userMatch) dumps = dumps.filter((d) => d.user.toUpperCase() === userMatch[1]!.toUpperCase());
+    const from = url.searchParams.get('from');
+    const to = url.searchParams.get('to');
+    if (from) dumps = dumps.filter((d) => d.id.slice(0, from.length) >= from);
+    if (to) dumps = dumps.filter((d) => d.id.slice(0, to.length) <= to);
+    const top = Number(url.searchParams.get('$top') ?? 0);
+    const skip = Number(url.searchParams.get('$skip') ?? 0);
+    if (skip > 0) dumps = dumps.slice(skip);
+    if (top > 0) dumps = dumps.slice(0, top);
+    res.setHeader('Content-Type', 'application/atom+xml;type=feed');
+    const entries = dumps
+      .map(
+        (d) => `  <entry>
+    <id>${d.id}</id>
+    <title>${d.title}</title>
+    <category term="${d.category}"/>
+    <updated>${d.updatedAt}</updated>
+    <author><name>${d.user}</name></author>
+    <link href="/sap/bc/adt/runtime/dump/${d.id}" rel="self"/>
+  </entry>`,
+      )
+      .join('\n');
+    res.end(
+      `<?xml version="1.0" encoding="UTF-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom">\n  <title>Runtime Dumps</title>\n${entries}\n</feed>`,
+    );
+    return;
+  }
+  const dumpMatch = /^\/runtime\/dump\/([^/]+?)(?:\/(summary|formatted))?$/.exec(path);
+  if (dumpMatch && req.method === 'GET') {
+    const dump = DUMPS.find((d) => d.id === decodeURIComponent(dumpMatch[1]!));
+    if (!dump) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`Runtime dump ${dumpMatch[1]} does not exist`));
+      return;
+    }
+    if (dumpMatch[2] === 'summary') {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(`<html><body><h1>${dump.title}</h1><p>${xmlEscape(dump.text)}</p></body></html>`);
+      return;
+    }
+    if (dumpMatch[2] === 'formatted') {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end(`Runtime Errors: ${dump.title}\nDate: ${dump.updatedAt}\nProgram: ${dump.program}\n\n${dump.text}`);
+      return;
+    }
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.runtime.dump.v1+xml');
+    res.end(
+      adtXml(
+        `<dump:dump xmlns:dump="http://www.sap.com/adt/runtime/dumps" type="${dump.title}" id="${dump.id}">
+  <dump:category>${dump.category}</dump:category>
+  <dump:happenedAt>${dump.updatedAt}</dump:happenedAt>
+  <dump:program>${dump.program}</dump:program>
+  <dump:user>${dump.user}</dump:user>
+  <dump:errorAnalysis>
+    <dump:shortText>${xmlEscape(dump.text)}</dump:shortText>
+    <dump:errorType>${dump.title}</dump:errorType>
+  </dump:errorAnalysis>
+</dump:dump>`,
+      ),
+    );
+    return;
+  }
+
+  // ---- Program / class execution ----
+  const programRun = /^\/programs\/programrun\/([^/]+)$/.exec(path);
+  if (programRun && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const name = decodeURIComponent(programRun[1]!).toUpperCase();
+    const obj = findObjectByName(state, name);
+    if (!obj || obj.category !== 'PROG') {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`Program ${name} does not exist`));
+      return;
+    }
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.end(`${name} executed (mock run)\nHello, World!\nOutput lines: 2`);
+    return;
+  }
+  const classRun = /^\/oo\/classrun\/([^/]+)$/.exec(path);
+  if (classRun && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const name = decodeURIComponent(classRun[1]!).toUpperCase();
+    const obj = findObjectByName(state, name);
+    if (!obj || obj.category !== 'CLAS') {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`Class ${name} does not exist`));
+      return;
+    }
+    if (!/if_oo_adt_classrun/.test(obj.source)) {
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`Class ${name} is not runnable (does not implement if_oo_adt_classrun)`));
+      return;
+    }
+    // Echo the out->write( '…' ) lines of the mock source as console output.
+    const writes = [...obj.source.matchAll(/out->write\(\s*'([^']*)'/g)].map((m) => m[1]!);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.end(writes.join('\n'));
+    return;
+  }
+
+  // ---- Protocol-level $batch (multipart embedded HTTP requests) ----
+  if (path === '/$batch' && req.method === 'POST') {
+    if (!checkCsrf(req, res, state)) return;
+    const body = await readBody(req);
+    const boundaryMatch = /boundary=([^;\s]+)/.exec(req.headers['content-type'] ?? '');
+    const boundary = boundaryMatch?.[1] ?? 'batch';
+    const innerResponses: string[] = [];
+    const rawParts = body
+      .split(`--${boundary}`)
+      .map((p) => p.replace(/^\r?\n/, '').replace(/\r?\n$/, ''))
+      .filter((p) => p.length > 0 && !p.startsWith('--'));
+    for (const part of rawParts) {
+      // Embedded request: METHOD path HTTP/1.1 after the MIME headers.
+      const requestMatch = /(GET|POST|PUT|DELETE)\s+(\S+)\s+HTTP\/1\.[01]/.exec(part);
+      if (!requestMatch) {
+        innerResponses.push('Content-Type: application/http\r\ncontent-transfer-encoding: binary\r\n\r\nHTTP/1.1 400 Bad Request\r\nContent-Type: application/xml\r\n\r\n<error>unparseable batch part</error>');
+        continue;
+      }
+      const method = requestMatch[1]!;
+      const innerPath = requestMatch[2]!;
+      // part = MIME headers ␍␍ embedded request (request line + headers ␍␍ body)
+      const sections = part.split(/\r?\n\r?\n/);
+      const embedded = sections.slice(1).join('\r\n\r\n');
+      const embeddedSections = embedded.split(/\r?\n\r?\n/);
+      const innerBody = embeddedSections.length > 1 ? embeddedSections.slice(1).join('\r\n\r\n').replace(/\r?\n$/, '') : undefined;
+      const innerAccept = /Accept:([^\r\n]+)/i.exec(part)?.[1]?.trim();
+      const stub = await dispatchInner(req, state, opts, method, innerPath, innerBody, innerAccept);
+      const headerLines = Object.entries(stub.headers)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('\r\n');
+      innerResponses.push(
+        `Content-Type: application/http\r\ncontent-transfer-encoding: binary\r\n\r\nHTTP/1.1 ${stub.statusCode} ${stub.statusText}\r\n${headerLines}\r\n\r\n${stub.body}`,
+      );
+    }
+    const responseBoundary = `response_${randomUUID()}`;
+    res.setHeader('Content-Type', `multipart/mixed; boundary=${responseBoundary}`);
+    res.end(
+      innerResponses.map((r) => `--${responseBoundary}\r\n${r}`).join('\r\n') + `\r\n--${responseBoundary}--\r\n`,
+    );
+    return;
+  }
+
+  // ---- Structured metadata editors (MSAG / DOMA / DTEL / TTYP) ----
+  const structuredObj = findObject(state, path);
+  const structured = structuredKindFor(structuredObj, req.headers.accept ?? '', req.method);
+  if (structuredObj && structured) {
+    if (req.method === 'GET') {
+      res.setHeader('Content-Type', STRUCTURED_MEDIA[structured].split(',')[0]!.trim());
+      res.end(structuredObj.metadataXml ?? defaultMetadataXml(structuredObj));
+      return;
+    }
+    if (req.method === 'PUT') {
+      if (!checkCsrf(req, res, state)) return;
+      const lockHandle = url.searchParams.get('lockHandle');
+      const lock = state.locked.get(structuredObj.uri);
+      if (!lockHandle || !lock || lock.handle !== lockHandle) {
+        res.statusCode = 400;
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(errorXml(`Object ${structuredObj.name} is not locked (lock first with _action=LOCK)`));
+        return;
+      }
+      const patchBody = await readBody(req);
+      structuredObj.metadataXml = patchBody;
+      structuredObj.changedAt = new Date().toISOString();
+      const corrNr = url.searchParams.get('corrNr');
+      if (corrNr) structuredObj.corrNr = corrNr.toUpperCase();
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(adtXml(`<adtcore:objectReferences xmlns:adtcore="${NS_ADT}"/>`));
+      return;
+    }
   }
 
   // ---- Object version history (Atom feed) ----
@@ -521,7 +720,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
 
   // ---- Object creation (type-specific collections) ----
-  const createMatch = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|msgclass|packages)$/.exec(path);
+  const createMatch = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|msgclass|packages)$/.exec(path);
   if (createMatch && req.method === 'POST') {
     if (!checkCsrf(req, res, state)) return;
     const body = await readBody(req);
@@ -569,7 +768,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   const objByUri = findObject(state, path);
   if (objByUri && action === 'LOCK' && req.method === 'POST') {
     if (!checkCsrf(req, res, state)) return;
-    const corrnr = `MOCKK${String(900000 + Math.floor(Math.random() * 99999))}`;
+    // Like the real backend: an object already belonging to an open request
+    // keeps it (its corrNr is returned); only a fresh transportable object
+    // gets a NEW auto-created task.
+    const corrnr = objByUri.corrNr ?? `MOCKK${String(900000 + Math.floor(Math.random() * 99999))}`;
     const handle = randomUUID();
     const user = parseBasicAuth(req)?.username?.toUpperCase() ?? 'DEMO';
     state.locked.set(objByUri.uri, { handle, corrnr, user });
@@ -606,7 +808,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
     if (req.method === 'GET') {
       if (path.endsWith('/source/main')) {
         const version = url.searchParams.get('version');
-        const source = version && version !== '00001' ? `* mock version ${version}\n${srcObj.source}` : srcObj.source;
+        // `version=active` reads the last-activated snapshot; plain reads
+        // return the current (saved, possibly inactive) source; historical
+        // version ids return a deterministic prefixed variant.
+        const source =
+          version === 'active'
+            ? (srcObj.activeSource ?? srcObj.source)
+            : version && version !== '00001'
+              ? `* mock version ${version}\n${srcObj.source}`
+              : srcObj.source;
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.end(source);
         return;
@@ -629,6 +839,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
       srcObj.source = source;
       srcObj.changedAt = new Date().toISOString();
       srcObj.changedBy = 'DEMO';
+      // The corrNr of the PUT is the request the change is recorded into —
+      // remember it so the next lock reuses it (object joins that open task).
+      const corrNr = url.searchParams.get('corrNr');
+      if (corrNr) srcObj.corrNr = corrNr.toUpperCase();
       res.statusCode = 200;
       res.setHeader('Content-Type', 'application/xml');
       res.end(adtXml(`<adtcore:objectReferences xmlns:adtcore="${NS_ADT}"/>`));
@@ -652,6 +866,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
     <chkl:messages><chkl:msg type="E"><chkl:shortText><chkl:txt>Syntax error: ZBROKEN is not defined</chkl:txt></chkl:shortText></chkl:msg></chkl:messages>
   </adtcore:objectReference>`;
       }
+      // A successful activation promotes the saved source to the active
+      // version (checkOnly leaves the active snapshot untouched).
+      if (method !== 'check') obj.activeSource = obj.source;
       return `<adtcore:objectReference adtcore:uri="${uri}" adtcore:name="${name}" adtcore:status="${method === 'check' ? 'CHECKED' : 'ACTIVATED'}"/>`;
     });
     const hasError = refs.some(([uri, name]) => {
@@ -961,8 +1178,140 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   res.end(errorXml(`Mock ADT: no handler for ${req.method} ${path}`));
 }
 
-function typeForCollection(collection: string): string {
-  switch (collection) {
+// --- Structured metadata editors (MSAG / DOMA / DTEL / TTYP) -----------------
+
+/** Media types of the structured kinds (mirrors @nefevcore/abap-adt-protocol). */
+const STRUCTURED_MEDIA: Record<'MSAG' | 'DOMA' | 'DTEL' | 'TTYP', string> = {
+  MSAG: 'application/vnd.sap.adt.mc.messageclass+xml, application/xml',
+  DOMA: 'application/vnd.sap.adt.domains.v2+xml',
+  DTEL: 'application/vnd.sap.adt.dataelements.v2+xml',
+  TTYP: 'application/vnd.sap.adt.tabletypes.v2+xml',
+};
+
+/** Does this request negotiate a structured editor representation? */
+function structuredKindFor(
+  obj: MockObject | undefined,
+  accept: string | undefined,
+  method: string | undefined,
+): 'MSAG' | 'DOMA' | 'DTEL' | 'TTYP' | undefined {
+  if (!obj || accept === undefined || (method !== 'GET' && method !== 'PUT')) return undefined;
+  const category = obj.category as 'MSAG' | 'DOMA' | 'DTEL' | 'TTYP';
+  if (!(category in STRUCTURED_MEDIA)) return undefined;
+  const media = STRUCTURED_MEDIA[category];
+  const marker = media.split(',')[0]!.trim().split('.')[0]!; // e.g. 'application/vnd'
+  // Match when the Accept header carries the kind-specific media type (or a
+  // wildcard that the generic object handler would not claim more strongly).
+  const acceptsStructured = media
+    .split(',')
+    .some((m) => accept.includes(m.trim()))
+    || (category === 'MSAG' && accept.includes('mc.messageclass'));
+  if (acceptsStructured) return category;
+  // A bare `application/xml` GET is ambiguous — the generic handler serves it.
+  void marker;
+  return undefined;
+}
+
+/** Minimal structured skeleton for objects created without metadata XML. */
+function defaultMetadataXml(obj: MockObject): string {
+  const head =
+    ` adtcore:name="${obj.name}" adtcore:type="${obj.type}" adtcore:description="${xmlEscape(obj.description)}"` +
+    ` adtcore:language="${obj.masterLanguage}" adtcore:masterLanguage="${obj.masterLanguage}"`;
+  const pkg = `  <adtcore:packageRef adtcore:name="${obj.packageName}"/>`;
+  switch (obj.category) {
+    case 'MSAG':
+      return `<?xml version="1.0" encoding="UTF-8"?>\n<mc:messageClass xmlns:mc="http://www.sap.com/adt/MessageClass" xmlns:adtcore="http://www.sap.com/adt/core"${head}>\n${pkg}\n</mc:messageClass>`;
+    case 'DOMA':
+      return `<?xml version="1.0" encoding="UTF-8"?>\n<doma:domain xmlns:doma="http://www.sap.com/adt/ddic/Domains" xmlns:adtcore="http://www.sap.com/adt/core"${head}>\n${pkg}\n  <doma:content>\n    <doma:typeInformation>\n      <doma:datatype>CHAR</doma:datatype>\n      <doma:length>10</doma:length>\n      <doma:decimals>0</doma:decimals>\n    </doma:typeInformation>\n    <doma:fixValues/>\n  </doma:content>\n</doma:domain>`;
+    case 'DTEL':
+      return `<?xml version="1.0" encoding="UTF-8"?>\n<dtel:dataElement xmlns:dtel="http://www.sap.com/adt/ddic/DataElements" xmlns:adtcore="http://www.sap.com/adt/core"${head}>\n${pkg}\n  <dtel:typeKind>builtin</dtel:typeKind>\n  <dtel:dataType>CHAR</dtel:dataType>\n  <dtel:dataTypeLength>000010</dtel:dataTypeLength>\n  <dtel:labels/>\n</dtel:dataElement>`;
+    default:
+      return `<?xml version="1.0" encoding="UTF-8"?>\n<ttypes:tableType xmlns:ttypes="http://www.sap.com/adt/ddic/TableTypes" xmlns:ttyp="http://www.sap.com/adt/ddic/TableTypes" xmlns:adtcore="http://www.sap.com/adt/core"${head}>\n${pkg}\n  <ttyp:typeKind>builtin</ttyp:typeKind>\n  <ttyp:dataType>STRING</ttyp:dataType>\n  <ttyp:accessType>standard</ttyp:accessType>\n</ttypes:tableType>`;
+  }
+}
+
+// --- $batch inner dispatch ----------------------------------------------------
+
+const HTTP_STATUS_TEXT: Record<number, string> = {
+  200: 'OK',
+  201: 'Created',
+  204: 'No Content',
+  400: 'Bad Request',
+  401: 'Unauthorized',
+  403: 'Forbidden',
+  404: 'Not Found',
+  405: 'Method Not Allowed',
+  406: 'Not Acceptable',
+  409: 'Conflict',
+  500: 'Internal Server Error',
+};
+
+/**
+ * Re-dispatch one embedded `$batch` request through the regular mock handler
+ * using stub req/res objects that inherit the outer session (cookies, auth,
+ * CSRF token), then collect the response for the multipart envelope.
+ */
+async function dispatchInner(
+  outer: IncomingMessage,
+  state: MockState,
+  opts: Ctx,
+  method: string,
+  pathWithQuery: string,
+  body: string | undefined,
+  accept: string | undefined,
+): Promise<{ statusCode: number; statusText: string; headers: Record<string, string>; body: string }> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(outer.headers)) {
+    if (typeof value !== 'string') continue;
+    if (['content-type', 'content-length', 'host', 'connection'].includes(key)) continue;
+    headers[key] = value;
+  }
+  if (accept) headers.accept = accept;
+  let statusCode = 200;
+  let responseBody = '';
+  const stubReq = {
+    method,
+    url: pathWithQuery,
+    headers,
+    async *[Symbol.asyncIterator](): AsyncGenerator<Buffer> {
+      if (body !== undefined && body.length > 0) yield Buffer.from(body, 'utf8');
+    },
+  };
+  const outHeaders: Record<string, string> = {};
+  const stubRes = {
+    get statusCode(): number {
+      return statusCode;
+    },
+    set statusCode(value: number) {
+      statusCode = value;
+    },
+    setHeader(key: string, value: string | number): void {
+      outHeaders[String(key).toLowerCase()] = String(value);
+    },
+    getHeader(key: string): string | undefined {
+      return outHeaders[String(key).toLowerCase()];
+    },
+    removeHeader(key: string): void {
+      delete outHeaders[String(key).toLowerCase()];
+    },
+    end(chunk?: string | Buffer): void {
+      if (chunk !== undefined) responseBody = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    },
+  };
+  await handle(
+    stubReq as unknown as IncomingMessage,
+    stubRes as unknown as ServerResponse,
+    state,
+    opts,
+  );
+  const emitted: Record<string, string> = {};
+  for (const [key, value] of Object.entries(outHeaders)) {
+    if (key.startsWith('access-control-') || key === 'content-length' || key === 'set-cookie') continue;
+    emitted[key] = value;
+  }
+  return { statusCode, statusText: HTTP_STATUS_TEXT[statusCode] ?? '', headers: emitted, body: responseBody };
+}
+
+function typeForCollection(collection: string): string {  switch (collection) {
     case 'oo/classes':
       return 'CLAS/OC';
     case 'oo/interfaces':
@@ -975,6 +1324,12 @@ function typeForCollection(collection: string): string {
       return 'TABL/DT';
     case 'ddic/structures':
       return 'STRU/DT';
+    case 'ddic/domains':
+      return 'DOMA/DT';
+    case 'ddic/dataelements':
+      return 'DTEL/DT';
+    case 'ddic/tabletypes':
+      return 'TTYP/DT';
     case 'msgclass':
       return 'MSAG/N';
     case 'packages':
@@ -1012,6 +1367,12 @@ function uriFor(type: string, name: string): string {
       return `/sap/bc/adt/ddic/tables/${name.toLowerCase()}`;
     case 'STRU':
       return `/sap/bc/adt/ddic/structures/${name.toLowerCase()}`;
+    case 'DOMA':
+      return `/sap/bc/adt/ddic/domains/${name.toLowerCase()}`;
+    case 'DTEL':
+      return `/sap/bc/adt/ddic/dataelements/${name.toLowerCase()}`;
+    case 'TTYP':
+      return `/sap/bc/adt/ddic/tabletypes/${name.toLowerCase()}`;
     case 'MSAG':
       return `/sap/bc/adt/msgclass/${name.toLowerCase()}`;
     case 'DEVC':
@@ -1032,6 +1393,12 @@ function initialSourceFor(type: string, name: string): string {
       return `REPORT ${name}.\n\nWRITE / 'Hello'.`;
     case 'DDLS':
       return `@EndUserText.label: '${name}'\ndefine view ${name} as select from t100\n{\n  key msgno,\n      text\n}`;
+    case 'DOMA':
+      return `DOMAIN ${name}.\n  DATA: length TYPE i VALUE 10.\nENDDOMAIN.`;
+    case 'DTEL':
+      return `DATA ELEMENT ${name}.\n  DOMAIN: sychar10.`;
+    case 'TTYP':
+      return `TABLE TYPE ${name}.\n  LINE TYPE: string.`;
     default:
       return `* ${name}`;
   }

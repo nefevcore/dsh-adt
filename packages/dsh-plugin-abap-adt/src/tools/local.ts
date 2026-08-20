@@ -259,13 +259,11 @@ export function localTools(_deps: ToolDeps, ctx: Context) {
     defineTool({
       name: 'adt_local_check',
       description:
-        'Run abaplint (offline static analysis) over a directory of ABAP sources (.abap). ' +
-        'Pairs with adt_export_objects: export a package, check it locally before anything touches SAP, ' +
-        'fix the findings, then write + activate + transport in one pass. ' +
-        'Real ATC cannot run offline (it lives in the SAP backend); abaplint is the local stand-in — ' +
-        'syntax parsing plus lint rules. Reads go through the DSH filesystem (sandbox-aware). ' +
-        'Note: syntax errors are reported by the `parser_error` rule — a custom .abaplint.json that omits it ' +
-        '(e.g. an empty `rules` section) also silences syntax errors.',
+        'Run abaplint (offline static analysis) over a directory of ABAP sources (.abap). Pairs with ' +
+        'adt_export_objects: export a package, check it locally before anything touches SAP, fix findings, ' +
+        'then write + activate + transport in one pass. Real ATC lives in the SAP backend and cannot run ' +
+        'offline; abaplint is the local stand-in. Note: syntax errors are reported by the `parser_error` rule — ' +
+        'a custom .abaplint.json that omits it also silences syntax errors.',
       parameters: {
         dir: {
           type: 'string',

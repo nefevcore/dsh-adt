@@ -18,7 +18,9 @@ import { LockLedger } from './locks.js';
 import { deepCompact } from './tools/common.js';
 import { systemTools } from './tools/system.js';
 import { searchTools } from './tools/search.js';
-import { sourceTools } from './tools/source.js';
+import { readTools } from './tools/read.js';
+import { writeTools } from './tools/write.js';
+import { objectTools } from './tools/objects.js';
 import { lifecycleTools } from './tools/lifecycle.js';
 import { testingTools } from './tools/testing.js';
 import { atcRunTools } from './tools/atc_runs.js';
@@ -32,6 +34,9 @@ import { lockTools } from './tools/lock.js';
 import { versionTools } from './tools/versions.js';
 import { gateTools } from './tools/gate.js';
 import { policyTools } from './tools/policy.js';
+import { dumpTools } from './tools/dumps.js';
+import { executeTools } from './tools/execute.js';
+import { structureTools } from './tools/structure.js';
 
 const name = 'abap-adt';
 const inject = ['tools', 'fs'];
@@ -108,7 +113,9 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
   const tools = [
     ...systemTools(deps),
     ...searchTools(deps),
-    ...sourceTools(deps, ctx),
+    ...readTools(deps),
+    ...writeTools(deps, ctx),
+    ...objectTools(deps),
     ...lifecycleTools(deps),
     ...testingTools(deps),
     ...atcRunTools(deps),
@@ -122,6 +129,9 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
     ...versionTools(deps),
     ...gateTools(deps),
     ...policyTools(deps),
+    ...dumpTools(deps),
+    ...executeTools(deps),
+    ...structureTools(deps),
   ];
 
   for (const tool of tools) {

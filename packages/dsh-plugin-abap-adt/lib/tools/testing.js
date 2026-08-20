@@ -1,30 +1,13 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, destinationOf, text } from './common.js';
-import { resolveObjects, typeLabel } from '../resolve.js';
+import { DESTINATION_PARAM, OBJECTS_PARAM, destinationOf, text } from './common.js';
+import { resolveObjects } from '../resolve.js';
 export function testingTools(deps) {
     const { registry } = deps;
-    const objectListParam = {
-        objects: {
-            type: 'array',
-            required: true,
-            description: 'Objects to test/check. Each entry: {objectUri} or {name, type}.',
-            items: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    objectUri: { type: 'string' },
-                    name: { type: 'string', required: true },
-                    type: { type: 'string', description: 'Object type, e.g. CLAS, PROG.' },
-                },
-            },
-        },
-    };
     const runUnitTests = defineTool({
         name: 'adt_run_unit_tests',
         description: 'Run ABAP Unit tests for the given objects. Reports per-class and per-method results (passed/failed/skipped) with durations.',
         parameters: {
-            ...objectListParam,
-            withCoverage: { type: 'boolean', description: 'Request coverage information (default false).' },
+            ...OBJECTS_PARAM,
             ...DESTINATION_PARAM,
         },
         output: {
@@ -114,7 +97,7 @@ export function testingTools(deps) {
         description: 'Run ABAP Test Cockpit (ATC) checks on the given objects. Returns findings with severity, check and source position. ' +
             'Pass `variant` to use a named ATC check variant.',
         parameters: {
-            ...objectListParam,
+            ...OBJECTS_PARAM,
             variant: { type: 'string', description: 'ATC check variant name (backend-defined).' },
             ...DESTINATION_PARAM,
         },

@@ -1,29 +1,8 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, destinationOf, text } from './common.js';
-import { resolveObjects, resolvePackageName, typeLabel } from '../resolve.js';
-import { AdtPolicyError } from '../policy.js';
+import { DESTINATION_PARAM, OBJECTS_PARAM, assertObjectEditable, destinationOf, text, } from './common.js';
+import { resolveObjects, typeLabel } from '../resolve.js';
 export function lifecycleTools(deps) {
     const { registry } = deps;
-    const objectListParam = {
-        objects: {
-            type: 'array',
-            required: true,
-            description: 'Objects to process. Each entry: {objectUri} or {name, type}.',
-            items: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    objectUri: { type: 'string', description: 'Exact ADT object URI.' },
-                    name: { type: 'string', required: true, description: 'Object name.' },
-                    type: { type: 'string', description: 'Object type, e.g. CLAS, PROG, DDLS.' },
-                    packageName: {
-                        type: 'string',
-                        description: 'Optional package of the object; used for the permission check when the backend does not expose it.',
-                    },
-                },
-            },
-        },
-    };
     const activationOutput = {
         schema: {
             type: 'object',
@@ -57,6 +36,12 @@ export function lifecycleTools(deps) {
                         },
                     },
                 },
+                hints: {
+                    type: 'array',
+                    required: true,
+                    items: { type: 'string' },
+                    description: 'Actionable follow-up hints (include cascading, check-vs-activate scope).',
+                },
             },
         },
         render: (_args, value) => text([
@@ -70,14 +55,21 @@ export function lifecycleTools(deps) {
                 }
                 return lines.join('\n');
             }),
+            ...(value.hints ?? []).map((h) => `HINT: ${h}`),
         ].join('\n')),
     };
     const activate = defineTool({
         name: 'adt_activate',
         description: 'Activate ABAP development objects on the system. Returns per-object status; syntax errors block activation. ' +
+            'IMPORTANT: activate ALL related objects in ONE call — `objects` accepts a list. Most backends do NOT cascade ' +
+            'activation from a PROG main program (or FUGR) to its includes (TOP/SCR/...): a successful result for the main ' +
+            'object alone does NOT mean the program is fully active. Pass the main object AND its includes together, and ' +
+            'verify leftovers with adt_version_diff (saved vs active). Also note adt_check passing does NOT guarantee ' +
+            'activation succeeds — the activation preaudit has a wider scope (cross-object consistency, main program + ' +
+            'includes joint check, duplicate declarations). ' +
             'Pass `transport` when the objects\' package requires a transport request (see adt_list_transports).',
         parameters: {
-            ...objectListParam,
+            ...OBJECTS_PARAM,
             transport: { type: 'string', description: 'Transport request number, e.g. S4HK900001.' },
             checkOnly: { type: 'boolean', description: 'Syntax-check without activating (default false).' },
             ...DESTINATION_PARAM,
@@ -86,36 +78,47 @@ export function lifecycleTools(deps) {
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
             const checkOnly = args.checkOnly === true;
-            const refs = await resolveObjects(entry.client, args.objects, exec.signal);
+            const inputs = args.objects;
+            const refs = await resolveObjects(entry.client, inputs, exec.signal);
             // Permission checks. checkOnly (syntax pre-audit) changes nothing and is
             // always allowed; a real activation is an edit and must satisfy the
             // policy for every object.
-            if (!checkOnly) {
-                if (typeof args.transport === 'string' && args.transport.trim().length > 0) {
-                    registry.policy.assertTransportsEnabled('adt_activate');
-                    registry.policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
-                }
-                const inputs = args.objects;
-                for (let i = 0; i < refs.length; i++) {
-                    const ref = refs[i];
-                    const hint = inputs[i]?.packageName;
-                    const packageName = await resolvePackageName(entry.client, ref, hint, exec.signal);
-                    if (!packageName) {
-                        throw new AdtPolicyError('allowedPackages', `adt_activate: cannot determine the package of ${ref.name} for the permission check; ` +
-                            'pass `packageName` on the object entry or read the object first');
-                    }
-                    registry.policy.assertEditAllowed(packageName, `adt_activate (${ref.name})`);
-                }
+            const transport = typeof args.transport === 'string' && args.transport.trim().length > 0 ? args.transport.trim() : undefined;
+            if (transport) {
+                entry.policy.assertTransportsEnabled('adt_activate');
+                entry.policy.assertTransportAllowed(transport, 'adt_activate');
             }
-            else if (typeof args.transport === 'string' && args.transport.trim().length > 0) {
-                registry.policy.assertTransportsEnabled('adt_activate');
-                registry.policy.assertTransportAllowed(args.transport.trim(), 'adt_activate');
+            if (!checkOnly) {
+                for (let i = 0; i < refs.length; i++) {
+                    await assertObjectEditable(entry, refs[i], {
+                        toolName: `adt_activate (${refs[i].name})`,
+                        packageHint: inputs[i]?.packageName,
+                        signal: exec.signal,
+                    });
+                }
             }
             const result = await entry.client.activate(refs, {
-                transport: typeof args.transport === 'string' ? args.transport : undefined,
+                transport,
                 checkOnly,
                 signal: exec.signal,
             });
+            // Actionable follow-up hints (also part of the structured output):
+            //  - a real (non-checkOnly) activation that succeeds for PROG/FUGR
+            //    mains: most backends do NOT cascade to includes — say so before
+            //    the agent mistakes "main activated" for "program fully active".
+            //  - a failed activation: adt_check passing is NOT evidence it should
+            //    have worked — the preaudit has a wider scope.
+            const hints = [];
+            const mains = refs.filter((r) => r.category === 'PROG' || r.category === 'FUGR');
+            if (!checkOnly && result.success && mains.length > 0) {
+                hints.push(`${mains.map((r) => r.name).join(', ')}: activation of a main program / function group does NOT cascade to its includes (TOP/SCR/...) on some backends — pass the main object AND its includes together in \`objects\` (one call), and verify leftovers with adt_version_diff (saved version vs active)`);
+            }
+            if (!result.success) {
+                hints.push('activation failed — note that adt_check PASSING does not guarantee activation succeeds: the activation ' +
+                    'preaudit has a wider scope (cross-object consistency, main program + includes joint check, duplicate ' +
+                    'declarations). Fix the per-object errors above (line numbers refer to the current source) and ' +
+                    're-activate with ALL related objects in one call');
+            }
             return {
                 success: result.success,
                 items: result.items.map((i) => ({
@@ -129,14 +132,19 @@ export function lifecycleTools(deps) {
                         code: e.code,
                     })),
                 })),
+                hints,
             };
         },
     });
     const check = defineTool({
         name: 'adt_check',
-        description: 'Run a syntax check (without activating) on ABAP objects. Reports per-object errors/warnings.',
+        description: 'Run a syntax check (without activating) on ABAP objects. Reports per-object errors/warnings ' +
+            '(each message carries the object it belongs to). ' +
+            'SCOPE WARNING: this checkrun is narrower than the activation preaudit — PASSING here does NOT guarantee ' +
+            'adt_activate will succeed (cross-object consistency, main program + includes joint checks and duplicate ' +
+            'declarations are only caught at activation). Treat a pass as "no local syntax errors", not "ready".',
         parameters: {
-            ...objectListParam,
+            ...OBJECTS_PARAM,
             ...DESTINATION_PARAM,
         },
         output: {
@@ -152,6 +160,7 @@ export function lifecycleTools(deps) {
                             type: 'object',
                             additionalProperties: false,
                             properties: {
+                                objectName: { type: 'string', required: true },
                                 severity: { type: 'string', required: true },
                                 text: { type: 'string', required: true },
                                 line: { type: 'integer' },
@@ -159,26 +168,51 @@ export function lifecycleTools(deps) {
                             },
                         },
                     },
+                    hints: {
+                        type: 'array',
+                        required: true,
+                        items: { type: 'string' },
+                        description: 'Scope caveats of the check vs the activation preaudit.',
+                    },
                 },
             },
             render: (_args, value) => text([
                 value.success ? 'CHECK PASSED' : 'CHECK FAILED',
-                ...value.messages.map((m) => `  ${m.severity}${m.line ? `:${m.line}` : ''}: ${m.text}`),
+                ...value.messages.map((m) => `  ${m.objectName} ${m.severity}${m.line ? `:${m.line}` : ''}: ${m.text}`),
+                ...(value.hints ?? []).map((h) => `HINT: ${h}`),
             ].join('\n')),
         },
         isConcurrencySafe: () => true,
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
-            const refs = await resolveObjects(entry.client, args.objects, exec.signal);
-            const result = await entry.client.check(refs, { signal: exec.signal });
+            const inputs = args.objects;
+            const refs = await resolveObjects(entry.client, inputs, exec.signal);
+            // The checkrun response carries no per-object attribution, so multi-
+            // object checks run one checkrun per object and tag every message.
+            // Syntax checks are cheap; correctness of attribution is worth the N
+            // round-trips.
+            const messages = [];
+            for (const ref of refs) {
+                const result = await entry.client.check([ref], { signal: exec.signal });
+                for (const m of result.messages) {
+                    messages.push({
+                        objectName: ref.name,
+                        severity: m.severity,
+                        text: m.text,
+                        line: m.line,
+                        code: m.code,
+                    });
+                }
+            }
+            const success = messages.every((m) => m.severity !== 'E' && m.severity !== 'A');
             return {
-                success: result.success,
-                messages: result.messages.map((m) => ({
-                    severity: m.severity,
-                    text: m.text,
-                    line: m.line,
-                    code: m.code,
-                })),
+                success,
+                messages,
+                hints: success
+                    ? [
+                        'syntax check passed — this does NOT guarantee activation will succeed: the activation preaudit has a wider scope (cross-object consistency, main program + includes joint check, duplicate declarations). When activation matters, run adt_activate (checkOnly for the preaudit-grade check) with ALL related objects in one call',
+                    ]
+                    : ['fix the errors above (line numbers refer to the current source); note activation can still surface additional cross-object errors adt_check does not see'],
             };
         },
     });

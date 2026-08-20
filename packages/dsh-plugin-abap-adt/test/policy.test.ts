@@ -78,11 +78,15 @@ test('resolve: built-in defaults when nothing is configured', () => {
   assert.deepEqual(p.allowedTransports, ['*']);
   assert.equal(p.allowTransportableEdits, true);
   assert.deepEqual(p.allowedPackages, ['*']);
+  assert.equal(p.allowExecution, true);
+  assert.equal(p.allowBatchWrites, false);
   assert.deepEqual(p.sources, {
     enableTransports: 'default',
     allowedTransports: 'default',
     allowTransportableEdits: 'default',
     allowedPackages: 'default',
+    allowExecution: 'default',
+    allowBatchWrites: 'default',
   });
 });
 
@@ -92,17 +96,23 @@ test('resolve: SAP_* environment variables override defaults', () => {
     [POLICY_ENV.allowedTransports]: 'D01K96*',
     [POLICY_ENV.allowTransportableEdits]: 'true',
     [POLICY_ENV.allowedPackages]: 'Z*,$TMP',
+    [POLICY_ENV.allowExecution]: 'false',
+    [POLICY_ENV.allowBatchWrites]: 'true',
   };
   const p = AdtPolicy.resolve({}, env);
   assert.equal(p.enableTransports, true);
   assert.deepEqual(p.allowedTransports, ['D01K96*']);
   assert.equal(p.allowTransportableEdits, true);
   assert.deepEqual(p.allowedPackages, ['Z*', '$TMP']);
+  assert.equal(p.allowExecution, false);
+  assert.equal(p.allowBatchWrites, true);
   assert.deepEqual(p.sources, {
     enableTransports: 'env',
     allowedTransports: 'env',
     allowTransportableEdits: 'env',
     allowedPackages: 'env',
+    allowExecution: 'env',
+    allowBatchWrites: 'env',
   });
 });
 

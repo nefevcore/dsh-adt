@@ -268,10 +268,11 @@ test('where-used returns referencing objects', async () => {
 test('data preview returns columns and rows (ddic + cds + freestyle)', async () => {
   const c = client();
   const cds = await c.dataPreview('ZCDS_DEMO', 'cds', { top: 5 });
-  assert.equal(cds.totalRows, 2);
+  assert.equal(cds.totalRows, 1234); // virtual server-side total
   assert.ok(cds.columns.some((col) => col.name === 'MANDT'));
-  assert.ok(cds.rows.length >= 2);
-  assert.equal(cds.rows[0]?.CARRID, 'LH');
+  assert.equal(cds.rows.length, 5); // exactly `top` generated rows
+  assert.equal(cds.rows[0]?.ID, '1');
+  assert.equal(cds.rows.at(-1)?.TEXT, 'Row 5');
 
   const ddic = await c.dataPreview('T001', 'ddic');
   assert.ok(ddic.columns.some((col) => col.name === 'MANDT'));
@@ -318,4 +319,123 @@ test('lock state is exposed via object metadata', async () => {
   await c.unlock(uri, handle);
   const released = await c.getObjectLock(uri);
   assert.equal(released.locked, undefined);
+});
+
+test('runtime dumps: list (user filter), structured detail, formatted view', async () => {
+  const c = client();
+  const all = await c.listDumps();
+  assert.equal(all.length, 2);
+
+  const mine = await c.listDumps({ user: 'DEMO' });
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0]!.title, 'UNCAUGHT_EXCEPTION');
+  assert.equal(mine[0]!.category, 'ABAP Programming Error');
+
+  const paged = await c.listDumps({ skip: 1 });
+  assert.equal(paged.length, 1);
+
+  const detail = await c.getDump(mine[0]!.id);
+  assert.equal(detail.view, 'default');
+  assert.equal(detail.title, 'UNCAUGHT_EXCEPTION');
+  const program = detail.sections.find((s) => s.name === 'program');
+  assert.equal(program?.value, 'ZPROG_DEMO');
+
+  const formatted = await c.getDump(mine[0]!.id, { view: 'formatted' });
+  assert.ok(formatted.raw?.startsWith('Runtime Errors: UNCAUGHT_EXCEPTION'));
+
+  await assert.rejects(() => c.getDump('20990101000000nohost_X_Y_00NOPE0000001'), /not found|404|does not exist/i);
+});
+
+test('program and class execution return console output', async () => {
+  const c = client();
+  const prog = await c.runProgram('ZPROG_DEMO');
+  assert.equal(prog.status, 200);
+  assert.ok(prog.output.includes('Hello, World!'));
+
+  const cls = await c.runClass('ZCL_RUNNER');
+  assert.equal(cls.status, 200);
+  assert.ok(cls.output.includes('Hello from ZCL_RUNNER'));
+
+  // A class without if_oo_adt_classrun is rejected by the backend.
+  await assert.rejects(() => c.runClass('ZCL_DEMO'), /runnable|400/i);
+  await assert.rejects(() => c.runProgram('Z_MISSING_PROG'), /not exist|404/i);
+});
+
+test('$batch executes embedded requests in one round-trip', async () => {
+  const c = client();
+  const parts = await c.batch([
+    { method: 'GET', path: '/sap/bc/adt/oo/classes/zcl_demo/source/main', accept: 'text/plain' },
+    { method: 'GET', path: '/sap/bc/adt/programs/programs/zprog_demo/source/main', accept: 'text/plain' },
+    { method: 'GET', path: '/sap/bc/adt/runtime/dumps' },
+  ]);
+  assert.equal(parts.length, 3);
+  assert.equal(parts[0]!.status, 200);
+  assert.ok(parts[0]!.body.startsWith('CLASS'));
+  assert.ok(parts[1]!.body.includes('REPORT zprog_demo'));
+  assert.ok(parts[2]!.body.includes('<feed'));
+  // Inner requests carry the destination session context (sap-client).
+});
+
+test('structured editors: MSAG / DOMA / DTEL / TTYP read-modify-write', async () => {
+  const c = client();
+
+  // MSAG — read 3 messages, rewrite to 2 (one kept, one added, one deleted).
+  const msag = await c.readStructure('/sap/bc/adt/msgclass/zmsg_demo', 'MSAG');
+  assert.equal(msag.kind, 'MSAG');
+  assert.equal(msag.name, 'ZMSG_DEMO');
+  assert.equal(msag.messages.length, 3);
+  const msagWritten = await c.writeStructure('/sap/bc/adt/msgclass/zmsg_demo', 'MSAG', {
+    description: 'Updated message class',
+    messages: [
+      { number: '001', text: 'Hello &1, welcome to the demo' },
+      { number: '004', text: 'Brand new message &1' },
+    ],
+  });
+  assert.equal(msagWritten.success, true);
+  assert.equal(msagWritten.data.description, 'Updated message class');
+  assert.deepEqual(msagWritten.data.messages.map((m) => m.number), ['001', '004']);
+
+  // DOMA — patch length + replace fixed values.
+  const doma = await c.readStructure('/sap/bc/adt/ddic/domains/zdoma_demo', 'DOMA');
+  assert.equal(doma.properties.datatype, 'CHAR');
+  assert.deepEqual(doma.fixedValues.map((f) => f.low), ['AA', 'BB']);
+  const domaWritten = await c.writeStructure('/sap/bc/adt/ddic/domains/zdoma_demo', 'DOMA', {
+    properties: { length: '4' },
+    fixedValues: [
+      { low: 'AA', description: 'Alpha mode' },
+      { low: 'CC', description: 'Gamma mode' },
+    ],
+  });
+  assert.equal(domaWritten.data.properties.length, '4');
+  assert.deepEqual(domaWritten.data.fixedValues.map((f) => f.low), ['AA', 'CC']);
+
+  // DTEL — patch a label, keep the domain reference.
+  const dtel = await c.readStructure('/sap/bc/adt/ddic/dataelements/zdtel_demo', 'DTEL');
+  assert.equal(dtel.properties.typeName, 'ZDOMA_DEMO');
+  assert.equal(dtel.labels.shortText, 'Demo');
+  const dtelWritten = await c.writeStructure('/sap/bc/adt/ddic/dataelements/zdtel_demo', 'DTEL', {
+    labels: { shortText: 'Demo (patched)' },
+  });
+  assert.equal(dtelWritten.data.labels.shortText, 'Demo (patched)');
+  // Untouched properties round-trip.
+  assert.equal(dtelWritten.data.properties.typeName, 'ZDOMA_DEMO');
+
+  // TTYP — patch the access type.
+  const ttyp = await c.readStructure('/sap/bc/adt/ddic/tabletypes/zttyp_demo', 'TTYP');
+  assert.equal(ttyp.properties.accessType, 'standard');
+  const ttypWritten = await c.writeStructure('/sap/bc/adt/ddic/tabletypes/zttyp_demo', 'TTYP', {
+    properties: { accessType: 'sorted' },
+  });
+  assert.equal(ttypWritten.data.properties.accessType, 'sorted');
+});
+
+test('data preview offset/length window slices the generated rows', async () => {
+  const c = client();
+  // Fetch 10 rows; the client returns them all — slicing is the tool layer's job,
+  // verified in the plugin tests. Here: rows honor the requested rowNumber.
+  const full = await c.dataPreview('ZCDS_DEMO', 'cds', { top: 10 });
+  assert.equal(full.rows.length, 10);
+  const offsetRows = full.rows.slice(3, 3 + 4);
+  assert.equal(offsetRows[0]?.ID, '4');
+  assert.equal(offsetRows.at(-1)?.ID, '7');
 });
