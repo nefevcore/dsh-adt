@@ -507,3 +507,47 @@ test('adt_edit_object: single-line replacement (start == end, and end omitted)',
     await client.updateSource(uri, original);
   }
 });
+
+test('adt_edit_object: real-world Mod-block with Chinese comments (regression, impc-dev report)', async () => {
+  const by = tools();
+  const client = registry.require().client;
+  const uri = '/sap/bc/adt/programs/programs/zprog_demo';
+  const original = (await client.readSource(uri)).source;
+
+  // Exact shape of the reported source: full-line `*&&---` mod markers and
+  // a Chinese `"` tail comment around the single line to replace. Proves the
+  // comment stripping handles these (they strip to empty and never match)
+  // and the failure was purely the single-line start==end gap.
+  const modBlock = [
+    '*&&--------Begin of Mod: S/4 SHYY_ABAP04_20.08.2026 16:47:36 母码信息导出EXCEL',
+    '      " 母码页签放出导出按钮',
+    "      DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.",
+    '*&&--------End of Mod: S/4 SHYY_ABAP04_20.08.2026 16:47:36 母码信息导出EXCEL',
+  ].join('\n');
+  try {
+    await client.updateSource(uri, `${original}\n${modBlock}\n`);
+
+    const edited = await by.get('adt_edit_object')!.execute(
+      {
+        objectUri: uri,
+        type: 'PROG',
+        start: "DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.",
+        end: "DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.",
+        source: "      DELETE ct_extab WHERE fcode = 'ZEXP_VOL'.",
+      },
+      exec,
+    );
+    assert.equal(edited.replaced, true);
+    assert.equal(edited.oldLines, 1);
+    assert.equal(edited.startLineNumber, edited.endLineNumber);
+
+    const after = (await client.readSource(uri)).source;
+    assert.ok(after.includes("'ZEXP_VOL'"));
+    assert.ok(!after.includes('ZEXPORT_VOL'));
+    // The mod markers and the Chinese comment survive untouched.
+    assert.ok(after.includes('*&&--------Begin of Mod:'));
+    assert.ok(after.includes('母码页签放出导出按钮'));
+  } finally {
+    await client.updateSource(uri, original);
+  }
+});
