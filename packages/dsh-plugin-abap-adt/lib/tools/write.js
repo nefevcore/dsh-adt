@@ -67,57 +67,76 @@ export function stripAbapComment(line) {
     return line;
 }
 const norm = (s) => s.trim().toLowerCase().replace(/\s+/g, ' ');
-/**
- * Locate a block by start/end line markers in the source and replace it
- * wholesale; bytes outside the block are preserved. Line-ending style follows
- * the source file (CRLF/LF). Matching rules (DSH-`edit` semantics):
- *  - markers match case-insensitively as line substrings of the
- *    COMMENT-STRIPPED line, so `" METHOD x.` / `* METHOD x.` never match;
- *  - ambiguous markers (more than one candidate line) fail loudly with the
- *    candidate line numbers instead of silently picking the first;
- *  - the END search INCLUDES the start line, so `start == end` targets a
- *    single line and compact one-liners (`METHOD x. ENDMETHOD.`) work too.
- */
-export function replaceSourceBlock(source, startText, endText, replacement) {
-    const nl = source.includes('\r\n') ? '\r\n' : '\n';
-    const lines = source.split(/\r\n|\n/);
-    const startKey = norm(startText);
-    const endKey = norm(endText);
-    if (!startKey || !endKey)
-        throw new Error('adt_edit_object: start/end must not be empty');
-    const notFoundHint = 'the source line may differ from what you expect (comment stripping, whitespace, changed content) — ' +
-        'read the CURRENT source back (adt_read_object with startLine/endLine) and copy the exact line text';
-    const startHits = [];
+/** Aggressive normalization: all whitespace removed — tolerates spacing
+ * differences INSIDE string literals (`'BUKRS  '` vs `'BUKRS'`) and any
+ * indentation. A later match tier than `norm`. */
+const nospace = (s) => s.toLowerCase().replace(/\s+/g, '');
+/** Token-set similarity for not-found suggestions (code + CJK runs). */
+function suggestLines(lines, marker, limit = 3) {
+    const tokens = new Set((stripAbapComment(marker).toLowerCase().match(/[a-z0-9_\u4e00-\u9fff]+/g) ?? []).filter((t) => t.length > 1));
+    if (tokens.size === 0)
+        return [];
+    const scored = [];
     for (let i = 0; i < lines.length; i++) {
-        if (norm(stripAbapComment(lines[i] ?? '')).includes(startKey))
-            startHits.push(i);
+        const lineTokens = new Set((stripAbapComment(lines[i] ?? '').toLowerCase().match(/[a-z0-9_\u4e00-\u9fff]+/g) ?? []).filter((t) => t.length > 1));
+        if (lineTokens.size === 0)
+            continue;
+        let hit = 0;
+        for (const t of tokens)
+            if (lineTokens.has(t))
+                hit++;
+        const score = hit / tokens.size;
+        if (score >= 0.6)
+            scored.push({ i, score });
     }
-    if (startHits.length === 0) {
-        throw new Error(`adt_edit_object: start line "${startText}" not found in the ${lines.length}-line source; ${notFoundHint}`);
+    return scored
+        .sort((a, b) => b.score - a.score || a.i - b.i)
+        .slice(0, limit)
+        .map((s) => `line ${s.i + 1}: ${(lines[s.i] ?? '').trim()}`);
+}
+/** Find the lines a marker matches, tier by tier (first tier with hits wins). */
+function findMarkerHits(lines, marker) {
+    // Tier 1: comment-stripped on both sides, whitespace collapsed. Comment
+    // lines never match; a marker copied verbatim INCLUDING a tail comment
+    // still matches (both sides stripped).
+    const strippedKey = norm(stripAbapComment(marker));
+    if (strippedKey) {
+        const hits = [];
+        for (let i = 0; i < lines.length; i++) {
+            if (norm(stripAbapComment(lines[i] ?? '')).includes(strippedKey))
+                hits.push(i);
+        }
+        if (hits.length > 0)
+            return { hits, mode: 'text' };
     }
-    if (startHits.length > 1) {
-        const candidates = startHits.map((i) => `line ${i + 1}: ${(lines[i] ?? '').trim()}`).join('; ');
-        throw new Error(`adt_edit_object: start marker "${startText}" is ambiguous (${startHits.length} matches: ${candidates}); ` +
-            'make the marker more specific (e.g. the full "METHOD name." line)');
+    // Tier 2: whitespace-free on stripped sides — spacing variance inside
+    // quotes (`'BUKRS  '` vs `'BUKRS'`) and arbitrary indentation.
+    const looseKey = nospace(stripAbapComment(marker));
+    if (looseKey) {
+        const hits = [];
+        for (let i = 0; i < lines.length; i++) {
+            if (nospace(stripAbapComment(lines[i] ?? '')).includes(looseKey))
+                hits.push(i);
+        }
+        if (hits.length > 0)
+            return { hits, mode: 'text-loose' };
     }
-    const startIdx = startHits[0];
-    // The end search starts AT the start line: start == end means a single-line
-    // replacement, and a same-line closer (`METHOD x. ENDMETHOD.`) also matches.
-    const endHits = [];
-    for (let i = startIdx; i < lines.length; i++) {
-        if (norm(stripAbapComment(lines[i] ?? '')).includes(endKey))
-            endHits.push(i);
+    // Tier 3: raw lines (comments kept) — the only way to address commented-out
+    // code (`* some_code.`) or to match on comment text.
+    const rawKey = norm(marker);
+    if (rawKey) {
+        const hits = [];
+        for (let i = 0; i < lines.length; i++) {
+            if (norm(lines[i] ?? '').includes(rawKey))
+                hits.push(i);
+        }
+        if (hits.length > 0)
+            return { hits, mode: 'text-raw' };
     }
-    if (endHits.length === 0) {
-        throw new Error(`adt_edit_object: end line "${endText}" not found at/after the start line ` +
-            `(start matched at line ${startIdx + 1}: ${(lines[startIdx] ?? '').trim()}); ${notFoundHint}`);
-    }
-    if (endHits.length > 1) {
-        const candidates = endHits.map((i) => `line ${i + 1}: ${(lines[i] ?? '').trim()}`).join('; ');
-        throw new Error(`adt_edit_object: end marker "${endText}" is ambiguous (${endHits.length} matches at/after the start: ${candidates}); ` +
-            'provide a more specific `end` marker');
-    }
-    const endIdx = endHits[0];
+    return { hits: [], mode: 'text' };
+}
+/** Assemble the replaced source from resolved line indices. */
+function spliceBlock(lines, startIdx, endIdx, replacement, nl, matchMode, occurrence) {
     const block = replacement.replace(/\r\n/g, '\n').replace(/\n/g, nl);
     const before = lines.slice(0, startIdx);
     const after = lines.slice(endIdx + 1);
@@ -129,7 +148,97 @@ export function replaceSourceBlock(source, startText, endText, replacement) {
         newLines: block.split(/\r\n|\n/).length,
         startLineNumber: startIdx + 1,
         endLineNumber: endIdx + 1,
+        matchMode,
+        occurrence: occurrence && occurrence > 1 ? occurrence : undefined,
     };
+}
+/**
+ * Locate a block by start/end line markers in the source and replace it
+ * wholesale; bytes outside the block are preserved. Line-ending style follows
+ * the source file (CRLF/LF).
+ *
+ * Marker matching runs in TIERS (see findMarkerHits): comment-stripped →
+ * whitespace-free → raw. Disambiguation and fallbacks:
+ *  - a start marker matching MULTIPLE lines errors with the numbered
+ *    candidates unless `occurrence` (1-based, file order) picks one — the only
+ *    way to edit exact-duplicate lines;
+ *  - the END search starts AT the start line (start == end = single line) and
+ *    takes the FIRST match — closers repeat massively in real code
+ *    (ENDFORM./ENDIF./…) and the first one at/after the block start is the
+ *    block's own;
+ *  - `startLine`/`endLine` switch to line-number mode (verify the `start`
+ *    marker against that line when both are given — stale-number guard);
+ *  - zero-hit markers report the closest lines (token similarity) so the
+ *    caller can self-correct in one round trip.
+ */
+export function replaceSourceBlock(source, startText, endText, replacement, options = {}) {
+    const nl = source.includes('\r\n') ? '\r\n' : '\n';
+    const lines = source.split(/\r\n|\n/);
+    if (!norm(startText) && !norm(endText) && options.startLine === undefined) {
+        throw new Error('adt_edit_object: start/end must not be empty');
+    }
+    // ---- Line-number mode: position-driven, immune to duplicate text. ----
+    if (options.startLine !== undefined) {
+        const startIdx = Math.floor(options.startLine) - 1;
+        const endIdx = Math.floor(options.endLine ?? options.startLine) - 1;
+        if (startIdx < 0 || endIdx < startIdx || endIdx >= lines.length) {
+            throw new Error(`adt_edit_object: startLine/endLine out of range (source has ${lines.length} lines, got ` +
+                `${options.startLine}..${options.endLine ?? options.startLine})`);
+        }
+        if (norm(startText)) {
+            const line = lines[startIdx] ?? '';
+            const markerStripped = stripAbapComment(startText);
+            const ok = norm(stripAbapComment(line)).includes(norm(markerStripped)) ||
+                nospace(stripAbapComment(line)).includes(nospace(markerStripped));
+            if (!ok) {
+                throw new Error(`adt_edit_object: startLine ${options.startLine} does not contain the given start marker — ` +
+                    `that line is: ${line.trim()} (line numbers moved? re-read with adt_read_object)`);
+            }
+        }
+        return spliceBlock(lines, startIdx, endIdx, replacement, nl, 'line-number', options.occurrence);
+    }
+    // ---- Marker mode. ----
+    const notFoundHint = ' — the line may differ from what you expect (comments, spacing inside quotes, changed content): ' +
+        'read the CURRENT source (adt_read_object with startLine/endLine) and copy the exact text, ' +
+        'or edit by position (startLine/endLine)';
+    const start = findMarkerHits(lines, startText);
+    if (start.hits.length === 0) {
+        const closest = suggestLines(lines, startText);
+        throw new Error(`adt_edit_object: start line "${startText}" not found in the ${lines.length}-line source` +
+            (closest.length ? `; closest lines: ${closest.join(' | ')}` : '') +
+            notFoundHint);
+    }
+    let startIdx = start.hits[0];
+    const occurrence = options.occurrence;
+    if (start.hits.length > 1) {
+        if (occurrence === undefined) {
+            const candidates = start.hits
+                .map((i, n) => `#${n + 1} line ${i + 1}: ${(lines[i] ?? '').trim()}`)
+                .join('; ');
+            throw new Error(`adt_edit_object: start marker matches ${start.hits.length} lines (${candidates}); ` +
+                'pass `occurrence` (1-based in file order) to pick one, make the marker more specific, ' +
+                'or use startLine/endLine');
+        }
+        if (occurrence < 1 || occurrence > start.hits.length) {
+            throw new Error(`adt_edit_object: occurrence ${occurrence} is out of range — the marker matches ` +
+                `${start.hits.length} lines (1..${start.hits.length})`);
+        }
+        startIdx = start.hits[occurrence - 1];
+    }
+    else if (occurrence !== undefined && occurrence !== 1) {
+        throw new Error(`adt_edit_object: occurrence ${occurrence} is out of range — the marker matches exactly 1 line`);
+    }
+    // End: first match at/after (or ON) the start line.
+    const end = findMarkerHits(lines.slice(startIdx), endText);
+    if (end.hits.length === 0) {
+        const closest = suggestLines(lines, endText);
+        throw new Error(`adt_edit_object: end line "${endText}" not found at/after the start line ` +
+            `(start matched at line ${startIdx + 1}: ${(lines[startIdx] ?? '').trim()})` +
+            (closest.length ? `; closest lines: ${closest.join(' | ')}` : '') +
+            notFoundHint);
+    }
+    const endIdx = startIdx + end.hits[0];
+    return spliceBlock(lines, startIdx, endIdx, replacement, nl, start.mode, occurrence);
 }
 export function writeTools(deps, ctx) {
     const { registry, ledger } = deps;
@@ -280,27 +389,42 @@ export function writeTools(deps, ctx) {
         name: 'adt_edit_object',
         description: 'Replace ONE code block of an existing source object (class method, FORM, function module, MODULE, include, ' +
             'a SINGLE LINE, or any marker-delimited block) without uploading the whole object: locks the object, reads the ' +
-            'current source, replaces only the block between the `start` and `end` line markers, writes the full source ' +
-            'back and unlocks; optionally activates. Matching follows DSH-`edit` semantics: markers are compared against ' +
-            'comment-stripped lines (case-insensitive substring) and an AMBIGUOUS marker fails with the candidate ' +
-            'lines listed — never a silent first-match. `end` auto-derives for METHOD/FORM/FUNCTION/MODULE blocks and ' +
-            'defaults to the `start` line for anything else — so a one-line edit is just `start` + `source` (or ' +
-            'start == end explicitly). Markers must match the CURRENT content: when a marker is not found, read the ' +
-            'source back first (adt_read_object with startLine/endLine) and copy the exact line. ' +
+            'current source, replaces only the block, writes the full source back and unlocks; optionally activates. ' +
+            'MATCHING (case-insensitive, in tiers): comment-stripped substring → whitespace-free (spacing inside quotes ' +
+            "like 'BUKRS  ' vs 'BUKRS' tolerated) → raw lines (can address commented-out code). Markers copied verbatim " +
+            'with tail comments ("… " some comment") still match. `end` auto-derives for METHOD/FORM/FUNCTION/MODULE, ' +
+            'defaults to the `start` line otherwise; the end search takes the FIRST match at/after the start (closers like ' +
+            'ENDFORM. repeat — the first one after the block start is the block own). DUPLICATE lines: pass `occurrence` ' +
+            '(1-based among the matches, listed in the error). By POSITION: `startLine`/`endLine` (from adt_read_object) ' +
+            'bypass markers entirely — give `start` too and it is verified against that line as a stale-number guard. ' +
+            'Not-found errors list the closest lines (token similarity) — self-correct in one retry. ' +
             'Provide the replacement block via `source` or `sourceFile`. Subject to the permission policy.',
         parameters: {
             ...OBJECT_REF_PARAMS,
             ...PACKAGE_HINT_PARAM,
             start: {
                 type: 'string',
-                required: true,
-                description: 'First line of the block to replace, e.g. "METHOD chat_audit." / "FORM frm_xxx." — must match the current source line.',
+                description: 'First line of the block to replace, e.g. "METHOD chat_audit." / "DELETE ct_extab WHERE …." — copied ' +
+                    'verbatim from the current source works (tail comments tolerated). Required unless startLine is used.',
             },
             end: {
                 type: 'string',
                 description: 'Last line of the block, e.g. "ENDMETHOD.". Optional: auto-derived for METHOD/FORM/FUNCTION/MODULE; ' +
-                    'defaults to the `start` line (single-line replacement) for anything else. Pass end == start explicitly ' +
-                    'to replace exactly one line.',
+                    'defaults to the `start` line (single-line replacement) for anything else.',
+            },
+            occurrence: {
+                type: 'integer',
+                description: '1-based index among the start marker\'s matches, when the SAME line appears multiple times in the ' +
+                    'source (the ambiguity error lists them as #1, #2, … in file order).',
+            },
+            startLine: {
+                type: 'integer',
+                description: 'Position mode: 1-based line number of the block start (from adt_read_object output). Replaces ' +
+                    'startLine..endLine directly; when `start` is also given it is verified against that line.',
+            },
+            endLine: {
+                type: 'integer',
+                description: 'Position mode: 1-based line number of the block end (defaults to startLine — single line).',
             },
             source: { type: 'string', description: 'Replacement block text (the full new block, including its start/end lines).' },
             sourceFile: {
@@ -335,6 +459,13 @@ export function writeTools(deps, ctx) {
                     endLineNumber: { type: 'integer', required: true },
                     oldLines: { type: 'integer', required: true },
                     newLines: { type: 'integer', required: true },
+                    matchMode: {
+                        type: 'string',
+                        required: true,
+                        enum: ['text', 'text-loose', 'text-raw', 'line-number'],
+                        description: 'text = comment-stripped match; text-loose = spacing-tolerant; text-raw = matched comment text; line-number = position mode.',
+                    },
+                    occurrence: { type: 'integer', description: 'Which duplicate match was edited (when occurrence was used).' },
                     unlocked: { type: 'boolean' },
                     activated: { type: 'boolean' },
                     transport: {
@@ -374,8 +505,17 @@ export function writeTools(deps, ctx) {
                 signal: exec.signal,
             });
             const startText = String(args.start ?? '').trim();
-            if (!startText)
-                throw new Error('adt_edit_object: `start` is required');
+            const hasStartLine = args.startLine !== undefined && args.startLine !== null;
+            if (!startText && !hasStartLine) {
+                throw new Error('adt_edit_object: provide `start` (text marker) or `startLine` (position)');
+            }
+            if (args.endLine !== undefined && !hasStartLine) {
+                throw new Error('adt_edit_object: `endLine` requires `startLine` (position mode)');
+            }
+            const occurrence = args.occurrence !== undefined ? Number(args.occurrence) : undefined;
+            if (occurrence !== undefined && (!Number.isInteger(occurrence) || occurrence < 1)) {
+                throw new Error('adt_edit_object: `occurrence` must be a positive integer (1-based)');
+            }
             // End resolution: explicit `end` > derived closer (METHOD/FORM/…) >
             // the start line itself (single-line replacement).
             const endText = String(args.end ?? '').trim() || defaultEndFor(startText) || startText;
@@ -398,7 +538,11 @@ export function writeTools(deps, ctx) {
             try {
                 entry.policy.assertTransportUsage(effectiveTransport, `adt_edit_object (${ref.name})`);
                 const current = (await entry.client.readSource(ref.uri, { signal: exec.signal })).source;
-                replaced = replaceSourceBlock(current, startText, endText, replacement);
+                replaced = replaceSourceBlock(current, startText, endText, replacement, {
+                    occurrence,
+                    startLine: hasStartLine ? Number(args.startLine) : undefined,
+                    endLine: args.endLine !== undefined ? Number(args.endLine) : undefined,
+                });
                 await entry.client.writeSource(ref.uri, replaced.full, { lockHandle: handle, transport: effectiveTransport ?? undefined, signal: exec.signal });
                 if (args.activate === true) {
                     const act = await entry.client.activate([ref], { transport: effectiveTransport ?? undefined, signal: exec.signal });
@@ -433,6 +577,8 @@ export function writeTools(deps, ctx) {
                 endLineNumber: replaced?.endLineNumber ?? 0,
                 oldLines: replaced?.oldLines ?? 0,
                 newLines: replaced?.newLines ?? 0,
+                matchMode: replaced?.matchMode ?? 'text',
+                occurrence: replaced?.occurrence,
                 unlocked,
                 activated: activated || undefined,
                 transport: effectiveTransport,

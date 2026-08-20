@@ -13,7 +13,17 @@ import { writeTools } from '../lib/tools/write.js';
 import { objectTools } from '../lib/tools/objects.js';
 import { lifecycleTools } from '../lib/tools/lifecycle.js';
 import { versionTools } from '../lib/tools/versions.js';
+import { replaceSourceBlock } from '../lib/tools/write.js';
 import type { Context } from '@deepseek-ai/cordis';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+/** The real production include (ZFIR_GXYH040_FRM, 2063 lines) as test data. */
+const REAL_SOURCE = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'zfir_gxyh040_frm.abap'),
+  'utf8',
+);
 
 /**
  * Tool-layer tests for the agent-scale additions: runtime dumps (error
@@ -547,6 +557,154 @@ test('adt_edit_object: real-world Mod-block with Chinese comments (regression, i
     // The mod markers and the Chinese comment survive untouched.
     assert.ok(after.includes('*&&--------Begin of Mod:'));
     assert.ok(after.includes('母码页签放出导出按钮'));
+  } finally {
+    await client.updateSource(uri, original);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Real production include (ZFIR_GXYH040_FRM, 2063 lines, Chinese comments,
+// Mod markers, macros, duplicate lines, 31× ENDFORM / 59× ENDIF) — matcher
+// scenarios run directly against replaceSourceBlock (pure function, fast).
+// ---------------------------------------------------------------------------
+
+test('real-world include: FORM block via derived closer (31 ENDFORMs in file)', () => {
+  // start = FORM frm_get_data. → derived end = ENDFORM. — the FIRST ENDFORM
+  // at/after the start must be the block's own (line 38), not an error.
+  const r = replaceSourceBlock(
+    REAL_SOURCE,
+    'FORM frm_get_data .',
+    'ENDFORM.',
+    'FORM frm_get_data .\n  " replaced\nENDFORM.',
+  );
+  assert.equal(r.startLineNumber, 24);
+  assert.equal(r.endLineNumber, 38);
+  assert.equal(r.matchMode, 'text');
+  assert.ok(r.full.includes('" replaced'));
+});
+
+test('real-world include: marker copied verbatim WITH tail comment still matches', () => {
+  // Line 322: `( fcode = 'ZPRINT_SUB' ) " 打印子码` — copying the full line
+  // (comment included) must match (both sides comment-stripped).
+  const marker = "( fcode = 'ZPRINT_SUB' ) \" 打印子码";
+  const r = replaceSourceBlock(REAL_SOURCE, marker, marker, "    ( fcode = 'ZPRINT_SUB' ) \" 打印子码2", {
+    occurrence: 1,
+  });
+  assert.equal(r.matchMode, 'text');
+  assert.equal(r.startLineNumber, 322);
+  // Matches BOTH duplicate lines (322 and 323) → ambiguous without occurrence.
+  assert.throws(
+    () => replaceSourceBlock(REAL_SOURCE, marker, marker, 'x'),
+    /matches 2 lines.*#1 line 322.*#2 line 323/s,
+  );
+});
+
+test('real-world include: occurrence disambiguates exact-duplicate lines', () => {
+  const marker = "( fcode = 'ZPRINT_SUB' )";
+  const second = replaceSourceBlock(
+    REAL_SOURCE,
+    marker,
+    marker,
+    "    ( fcode = 'ZPRINT_SUB2' )",
+    { occurrence: 2 },
+  );
+  assert.equal(second.startLineNumber, 323); // the second duplicate
+  assert.equal(second.occurrence, 2);
+  assert.ok(second.full.includes("'ZPRINT_SUB2'"));
+  const first = replaceSourceBlock(REAL_SOURCE, marker, marker, "    ( fcode = 'ZPRINT_SUB1' )", { occurrence: 1 });
+  assert.equal(first.startLineNumber, 322);
+  assert.throws(
+    () => replaceSourceBlock(REAL_SOURCE, marker, marker, 'x', { occurrence: 3 }),
+    /occurrence 3 is out of range.*matches 2 lines/,
+  );
+});
+
+test('real-world include: spacing inside quotes tolerated (loose tier)', () => {
+  // Line 181: `_init_fieldcat 'BUKRS  ' '公司代码' …` — agent writes 'BUKRS'
+  // (single space collapsed/no space) → loose tier matches.
+  const marker = "_init_fieldcat 'BUKRS' '公司代码' 'ZFIT_YSFJ_0003' 'BUKRS'.";
+  const r = replaceSourceBlock(REAL_SOURCE, marker, marker, "  _init_fieldcat 'BUKRS' '公司代码2' 'ZFIT_YSFJ_0003' 'BUKRS'.");
+  assert.equal(r.matchMode, 'text-loose');
+  assert.equal(r.startLineNumber, 181);
+  assert.ok(r.full.includes('公司代码2'));
+});
+
+test('real-world include: commented-out code addressable (raw tier)', () => {
+  // Lines 223-225 are `*  _init_fieldcat …` — unreachable for stripped
+  // matching; the raw tier must reach them.
+  const marker = "*  _init_fieldcat 'ZSEL' '选择项' '' ''.";
+  const r = replaceSourceBlock(REAL_SOURCE, marker, marker, "  _init_fieldcat 'ZSEL' '选择项' '' ''. \" re-enabled");
+  assert.equal(r.matchMode, 'text-raw');
+  assert.equal(r.startLineNumber, 223);
+  assert.ok(r.full.includes('re-enabled'));
+  // Marker without the `*` prefix also resolves to the commented line (raw tier).
+  const bare = replaceSourceBlock(
+    REAL_SOURCE,
+    "_init_fieldcat 'ZSEL' '选择项' '' ''.",
+    "_init_fieldcat 'ZSEL' '选择项' '' ''.",
+    "  _init_fieldcat 'ZSEL' '选择项' '' ''. \" on",
+  );
+  assert.equal(bare.matchMode, 'text-raw');
+});
+
+test('real-world include: not-found errors suggest the closest real lines', () => {
+  // A near-miss marker (wrong fc code) must list the actual DELETE siblings.
+  assert.throws(
+    () => replaceSourceBlock(REAL_SOURCE, "DELETE ct_extab WHERE fcode = 'ZPRINT_PP'.", "DELETE ct_extab WHERE fcode = 'ZPRINT_PP'.", 'x'),
+    /not found.*closest lines:.*line 333.*CR_VOLUME.*line 334.*DE_VOLUME/s,
+  );
+  // A completely alien marker degrades to the generic hint without suggestions.
+  assert.throws(
+    () => replaceSourceBlock(REAL_SOURCE, 'QWERTYUIOP_ASDFGH', 'QWERTYUIOP_ASDFGH', 'x'),
+    /not found in the 2063-line source.*(read the CURRENT source|startLine)/s,
+  );
+});
+
+test('real-world include: line-number mode with stale-marker verification', () => {
+  // Exact position edit: line 338 is the ZEXPORT_VOL DELETE inside the mod block.
+  const r = replaceSourceBlock(REAL_SOURCE, '', '', "      DELETE ct_extab WHERE fcode = 'ZEXP_VOL'.", { startLine: 338 });
+  assert.equal(r.matchMode, 'line-number');
+  assert.equal(r.startLineNumber, 338);
+  assert.ok(r.full.includes("'ZEXP_VOL'"));
+  // Multi-line range: 336..339 (the whole Begin/End-of-Mod block incl. markers).
+  const block = replaceSourceBlock(REAL_SOURCE, '', '', '      " gone', { startLine: 336, endLine: 339 });
+  assert.equal(block.oldLines, 4);
+  // Stale verification: wrong marker for that line must fail with the actual line.
+  assert.throws(
+    () => replaceSourceBlock(REAL_SOURCE, 'FORM frm_main .', '', 'x', { startLine: 338 }),
+    /startLine 338 does not contain.*DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'/s,
+  );
+  // Out of range.
+  assert.throws(
+    () => replaceSourceBlock(REAL_SOURCE, '', '', 'x', { startLine: 99999 }),
+    /out of range.*2063 lines/,
+  );
+});
+
+test('real-world include: single-line edit via the tool against the mock', async () => {
+  const by = tools();
+  const client = registry.require().client;
+  const uri = '/sap/bc/adt/programs/programs/zprog_demo';
+  const original = (await client.readSource(uri)).source;
+  try {
+    await client.updateSource(uri, REAL_SOURCE);
+    const edited = await by.get('adt_edit_object')!.execute(
+      {
+        objectUri: uri,
+        type: 'PROG',
+        start: "DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.",
+        source: "      DELETE ct_extab WHERE fcode = 'ZEXP_VOL'.",
+        transport: 'S4HK900001',
+      },
+      exec,
+    );
+    assert.equal(edited.replaced, true);
+    assert.equal(edited.oldLines, 1);
+    assert.equal(edited.startLineNumber, 338);
+    assert.equal(edited.matchMode, 'text');
+    const after = (await client.readSource(uri)).source;
+    assert.ok(after.includes("'ZEXP_VOL'"));
+    assert.equal(after.split('\n').length, REAL_SOURCE.split('\n').length); // only that line changed
   } finally {
     await client.updateSource(uri, original);
   }
