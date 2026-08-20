@@ -81,7 +81,9 @@ const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
  *  - markers match case-insensitively as line substrings of the
  *    COMMENT-STRIPPED line, so `" METHOD x.` / `* METHOD x.` never match;
  *  - ambiguous markers (more than one candidate line) fail loudly with the
- *    candidate line numbers instead of silently picking the first.
+ *    candidate line numbers instead of silently picking the first;
+ *  - the END search INCLUDES the start line, so `start == end` targets a
+ *    single line and compact one-liners (`METHOD x. ENDMETHOD.`) work too.
  */
 export function replaceSourceBlock(
   source: string,
@@ -95,11 +97,17 @@ export function replaceSourceBlock(
   const endKey = norm(endText);
   if (!startKey || !endKey) throw new Error('adt_edit_object: start/end must not be empty');
 
+  const notFoundHint =
+    'the source line may differ from what you expect (comment stripping, whitespace, changed content) — ' +
+    'read the CURRENT source back (adt_read_object with startLine/endLine) and copy the exact line text';
+
   const startHits: number[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (norm(stripAbapComment(lines[i] ?? '')).includes(startKey)) startHits.push(i);
   }
-  if (startHits.length === 0) throw new Error(`adt_edit_object: start line "${startText}" not found`);
+  if (startHits.length === 0) {
+    throw new Error(`adt_edit_object: start line "${startText}" not found in the ${lines.length}-line source; ${notFoundHint}`);
+  }
   if (startHits.length > 1) {
     const candidates = startHits.map((i) => `line ${i + 1}: ${(lines[i] ?? '').trim()}`).join('; ');
     throw new Error(
@@ -109,17 +117,22 @@ export function replaceSourceBlock(
   }
   const startIdx = startHits[0]!;
 
+  // The end search starts AT the start line: start == end means a single-line
+  // replacement, and a same-line closer (`METHOD x. ENDMETHOD.`) also matches.
   const endHits: number[] = [];
-  for (let i = startIdx + 1; i < lines.length; i++) {
+  for (let i = startIdx; i < lines.length; i++) {
     if (norm(stripAbapComment(lines[i] ?? '')).includes(endKey)) endHits.push(i);
   }
   if (endHits.length === 0) {
-    throw new Error(`adt_edit_object: end line "${endText}" not found after "${startText}"`);
+    throw new Error(
+      `adt_edit_object: end line "${endText}" not found at/after the start line ` +
+        `(start matched at line ${startIdx + 1}: ${(lines[startIdx] ?? '').trim()}); ${notFoundHint}`,
+    );
   }
   if (endHits.length > 1) {
     const candidates = endHits.map((i) => `line ${i + 1}: ${(lines[i] ?? '').trim()}`).join('; ');
     throw new Error(
-      `adt_edit_object: end marker "${endText}" is ambiguous (${endHits.length} matches after the start: ${candidates}); ` +
+      `adt_edit_object: end marker "${endText}" is ambiguous (${endHits.length} matches at/after the start: ${candidates}); ` +
         'provide a more specific `end` marker',
     );
   }
@@ -302,11 +315,14 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
     name: 'adt_edit_object',
     description:
       'Replace ONE code block of an existing source object (class method, FORM, function module, MODULE, include, ' +
-      'or any marker-delimited block) without uploading the whole object: locks the object, reads the current ' +
-      'source, replaces only the block between the `start` and `end` line markers, writes the full source back ' +
-      'and unlocks; optionally activates. Matching follows DSH-`edit` semantics: markers are compared against ' +
+      'a SINGLE LINE, or any marker-delimited block) without uploading the whole object: locks the object, reads the ' +
+      'current source, replaces only the block between the `start` and `end` line markers, writes the full source ' +
+      'back and unlocks; optionally activates. Matching follows DSH-`edit` semantics: markers are compared against ' +
       'comment-stripped lines (case-insensitive substring) and an AMBIGUOUS marker fails with the candidate ' +
-      'lines listed — never a silent first-match. `end` auto-derives for METHOD/FORM/FUNCTION/MODULE blocks. ' +
+      'lines listed — never a silent first-match. `end` auto-derives for METHOD/FORM/FUNCTION/MODULE blocks and ' +
+      'defaults to the `start` line for anything else — so a one-line edit is just `start` + `source` (or ' +
+      'start == end explicitly). Markers must match the CURRENT content: when a marker is not found, read the ' +
+      'source back first (adt_read_object with startLine/endLine) and copy the exact line. ' +
       'Provide the replacement block via `source` or `sourceFile`. Subject to the permission policy.',
     parameters: {
       ...OBJECT_REF_PARAMS,
@@ -314,12 +330,14 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       start: {
         type: 'string',
         required: true,
-        description: 'First line of the block to replace, e.g. "METHOD chat_audit." / "FORM frm_xxx.".',
+        description: 'First line of the block to replace, e.g. "METHOD chat_audit." / "FORM frm_xxx." — must match the current source line.',
       },
       end: {
         type: 'string',
         description:
-          'Last line of the block, e.g. "ENDMETHOD.". Optional: auto-derived from the block type.',
+          'Last line of the block, e.g. "ENDMETHOD.". Optional: auto-derived for METHOD/FORM/FUNCTION/MODULE; ' +
+          'defaults to the `start` line (single-line replacement) for anything else. Pass end == start explicitly ' +
+          'to replace exactly one line.',
       },
       source: { type: 'string', description: 'Replacement block text (the full new block, including its start/end lines).' },
       sourceFile: {
@@ -401,12 +419,9 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
 
       const startText = String(args.start ?? '').trim();
       if (!startText) throw new Error('adt_edit_object: `start` is required');
-      const endText = String(args.end ?? '').trim() || defaultEndFor(startText) || '';
-      if (!endText) {
-        throw new Error(
-          `adt_edit_object: cannot auto-derive the end line for "${startText}" — provide \`end\` explicitly`,
-        );
-      }
+      // End resolution: explicit `end` > derived closer (METHOD/FORM/…) >
+      // the start line itself (single-line replacement).
+      const endText = String(args.end ?? '').trim() || defaultEndFor(startText) || startText;
       const replacement = await resolveSourceInput(ctx, args);
 
       // Explicitly-passed transport: policy-check up front, then the write
