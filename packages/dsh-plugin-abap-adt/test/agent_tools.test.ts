@@ -427,3 +427,83 @@ test('adt_version_diff: default = saved vs active (pending-activation check)', a
     await by.get('adt_activate')!.execute({ objects: [{ name, type: 'CLAS' }] }, exec);
   }
 });
+
+test('adt_edit_object: single-line replacement (start == end, and end omitted)', async () => {
+  const by = tools();
+  const client = registry.require().client;
+  const uri = '/sap/bc/adt/programs/programs/zprog_demo';
+  const original = (await client.readSource(uri)).source;
+
+  try {
+    // Seed a deterministic line to edit, exactly like the agent scenario
+    // (a DELETE ... WHERE line inside a form include).
+    const seeded = original.replace(
+      'DATA(lo_demo) = NEW zcl_demo( ).',
+      "DATA(lo_demo) = NEW zcl_demo( ).\n      DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.",
+    );
+    await client.updateSource(uri, seeded);
+
+    // 1. The reported bug: start == end (same single line) must replace
+    //    exactly that line, not fail with "end not found".
+    const same = await by.get('adt_edit_object')!.execute(
+      {
+        objectUri: uri,
+        type: 'PROG',
+        start: "DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.",
+        end: "DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.",
+        source: "      DELETE ct_extab WHERE fcode = 'ZEXP_VOL'.",
+      },
+      exec,
+    );
+    assert.equal(same.replaced, true);
+    assert.equal(same.oldLines, 1);
+    assert.equal(same.newLines, 1);
+    const afterSame = (await client.readSource(uri)).source;
+    assert.ok(afterSame.includes("'ZEXP_VOL'"));
+    assert.ok(!afterSame.includes('ZEXPORT_VOL'));
+
+    // 2. Same edit with `end` OMITTED — defaults to the start line.
+    await client.updateSource(uri, seeded);
+    const omitted = await by.get('adt_edit_object')!.execute(
+      {
+        objectUri: uri,
+        type: 'PROG',
+        start: "DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.",
+        source: "      DELETE ct_extab WHERE fcode = 'ZEXP_VOL'.",
+      },
+      exec,
+    );
+    assert.equal(omitted.replaced, true);
+    assert.equal(omitted.oldLines, 1);
+    assert.ok((await client.readSource(uri)).source.includes("'ZEXP_VOL'"));
+
+    // 3. Not-found errors now carry the actionable hint (read back first).
+    await assert.rejects(
+      () =>
+        by.get('adt_edit_object')!.execute(
+          { objectUri: uri, type: 'PROG', start: 'NO SUCH LINE ANYWHERE.', source: 'x' },
+          exec,
+        ),
+      /not found.*adt_read_object with startLine\/endLine/s,
+    );
+
+    // 4. Compact one-liner block: start and closer on the SAME line.
+    const compact = `${original}\nFORM frm_one. ENDFORM.`;
+    await client.updateSource(uri, compact);
+    const one = await by.get('adt_edit_object')!.execute(
+      {
+        objectUri: uri,
+        type: 'PROG',
+        start: 'FORM frm_one.',
+        end: 'ENDFORM.',
+        source: 'FORM frm_one. "done\nENDFORM.',
+      },
+      exec,
+    );
+    assert.equal(one.replaced, true);
+    assert.equal(one.oldLines, 1);
+    assert.ok((await client.readSource(uri)).source.includes('"done'));
+  } finally {
+    await client.updateSource(uri, original);
+  }
+});
