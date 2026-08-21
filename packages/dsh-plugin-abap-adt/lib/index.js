@@ -107,7 +107,7 @@ async function apply(ctx, config) {
     const tools = [
         ...systemTools(deps),
         ...searchTools(deps),
-        ...readTools(deps),
+        ...readTools(deps, ctx),
         ...writeTools(deps, ctx),
         ...objectTools(deps),
         ...lifecycleTools(deps),

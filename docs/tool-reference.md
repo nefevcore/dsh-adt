@@ -1,6 +1,6 @@
 # adt_* 工具清单 — 入参 / 返回参考
 
-> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **34 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代）。
+> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **35 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代）。
 > 标记约定：🛡 = 经过**目标目的地**的权限策略校验；⏱ = 自定义超时；🔒 = 声明 `isConcurrencySafe`（可并发/只读）。
 > 通用参数 `destination`（string，可省略 = 默认目的地）适用于除 `adt_local_check` / `adt_permissions` / `adt_list_destinations` 外的所有工具，下表不再重复。
 > 通用对象引用三元组：`objectUri`（精确 URI，优先）/ `name` / `type`（短码或 ADT 形式，如 CLAS 或 CLAS/OC）。
@@ -48,28 +48,34 @@
 - **入参**：对象三元组；`enableAllTypes`（bool，默认 false；true 明显变慢）。
 - **返回**：`objectUri, totalReferences, note?, references[] { name, type, uri, packageName?, responsible?, usageInformation? }`。
 
-## 3. 对象源码 CRUD（5）
+## 3. 对象源码 CRUD（6）
 
 ### adt_read_object 🔒
-读取对象源码 + 元数据。支持行窗口分页读取大对象。
-- **入参**：对象三元组；`startLine`（1 起含，默认 1）；`endLine`（含，默认末行）。
-- **返回**：`uri, name, type, source（窗口内）, description?, properties{}, startLine, endLine, totalLines`。全量读取（≤2000 行）仍重放为行号化 read 卡片。
+读取对象源码 + 元数据。支持行窗口分页读取大对象。**默认同时在本地留全量快照**（`.adt-snapshots/<目的地>/…`，沙箱感知）+ sidecar 记录读取时刻的服务端内容哈希——这是冲突安全编辑的基础（edit 对快照匹配、push 校验后上传）。
+- **入参**：对象三元组；`startLine`（1 起含，默认 1）；`endLine`（含，默认末行）；`snapshot`（默认 true；false 关闭本地快照）。
+- **返回**：`uri, name, type, source（窗口内）, description?, properties{}, startLine, endLine, totalLines, localCopy?（快照路径）, snapshotHash?（冲突校验基准哈希）`。全量读取（≤2000 行）仍重放为行号化 read 卡片。
+
+### adt_push_object 🛡（pull→edit→push 的 push 半）
+把本地编辑后的快照上传服务器，**上传前在持锁状态下做哈希校验**：服务端仍是快照基准状态 → 上传；被他人改过 → `[CONFLICT]` 拒绝且服务端不动，本地文件保留——重读、合并、再推。
+- **入参**：对象三元组；`packageName`；`path`（默认 = adt_read_object 建立的跟踪快照；自定义路径=无基准不校验）；`activate`；`transport`。
+- **返回**：`uri, name, pushed, verified, localCopy, unlocked?, activated?, transport?, transportSource?, activation?`。
 
 ### adt_write_object 🛡
-整体替换对象源码，lock → write → unlock 自动完成，支持写后即激活。
+整体替换对象源码，lock → write → unlock 自动完成，支持写后即激活。**存在快照时写前校验**（服务端与快照基准不符 → `[CONFLICT]` 拒绝）；写后从回读刷新快照。
 - **入参**：对象三元组；`packageName`（策略提示）；`source` 或 `sourceFile`（二选一）；`unlock`（默认 true）；`activate`（默认 false，写后同调用内激活并返回 activation 结果）；`transport`（**指定修改计入的传输请求号**；省略时由后端在 lock 时决定——已在 open 请求中的对象留在原请求，否则自动新建 task）。
 - **返回**：`uri, name, updated, unlocked?, activated?, transport?, transportSource? ('user'|'auto'), activation? { success, message }`——`transport` 告诉你修改实际计入了哪个请求，`transportSource='auto'` 提醒这是后端自动分配（可能是新请求，下次可显式传 `transport` 控制）。
 - **策略**：allowedPackages + allowTransportableEdits + CORRNR 的 allowedTransports 校验（显式传入与自动分配都校验），不匹配即回滚锁；unlock 失败时如实返回 `unlocked: false` 并保留锁账本条目。
 - **传输语义**：显式 `transport` 经 PUT `?corrNr=` 精确生效（用户值优先于 lock 分配值，对齐官方编辑器行为）。
 
 ### adt_edit_object 🛡
-只替换源码的一部分——**双模式**，与 DSH `edit` 同心智：
-- **模式 1（推荐，精确编辑）：`oldText` + `newText`**。从刚读的 `adt_read_object` 输出**原样引用**要替换的文本（多行 OK、含尾注释 OK），给出替换文本。匹配跑在**当前远端源码**上——远端被他人改动则匹配失败（安全）。不唯一 → 错误列出全部位置，**多引上下文行即可消歧**（或 `occurrence`）；找不到 → 列最接近行，重读一次重试即收敛。多行引用按行匹配（剥注释/大小写/缩进容忍）。
+只替换源码的一部分——**双模式**，与 DSH `edit` 同心智。**冲突安全（默认）**：存在本地快照（adt_read_object 建立）时，匹配跑在**你读到的快照**上（确定性，非对漂移文本的模糊匹配），且上传前在持锁状态下哈希校验服务端未变——他人改过 → `[CONFLICT]` 拒绝、服务端不动；重读后再改即恢复：
+- **模式 1（推荐，精确编辑）：`oldText` + `newText`**。从刚读的 `adt_read_object` 输出**原样引用**要替换的文本（多行 OK、含尾注释 OK），给出替换文本。不唯一 → 错误列出全部位置，**多引上下文行即可消歧**（或 `occurrence`）；找不到 → 列最接近行，重读一次重试即收敛。多行引用按行匹配（剥注释/大小写/缩进容忍）。
 - **模式 2（整块替换，省上下文）：`start`/`end` 块标记**。替换整个 METHOD/FORM 而无需引用其全文。裸闭合语句（ENDFORM./ENDIF./…）按**嵌套深度结构化解析**（2063 行语料 ENDFORM.×31/ENDIF.×59 下取对本块闭合）；同名重复行用 `occurrence`；按位置用 `startLine`/`endLine`（同时给 `start` 时校验该行防行号过期）。
+- 也可**自己编辑本地快照文件**（路径见 read 输出 `localCopy`），再 `adt_push_object` 校验上传。
 - start 匹配层级：①注释剥离子串 → ②去空白（引号内空格容差 `'BUKRS  '` vs `'BUKRS'`）→ ③原始行（可编辑注释掉的代码）。
 - **入参**：对象三元组；`packageName`；模式 1（`oldText`/`newText`）或 模式 2（`start`/`end`/`source`/`sourceFile`/`startLine`/`endLine`）；共用 `occurrence`/`activate`/`transport`。
 - **返回**：`uri, name, start, end, replaced, startLineNumber, endLineNumber, oldLines, newLines, matchMode ('structured'|'text'|'text-loose'|'text-raw'|'line-number'), occurrence?, unlocked?, activated?, transport?, transportSource?, activation?`。
-- **回退链**：结构化失败（起始行非块开头/深度失衡）自动回退文本匹配，不会静默错编。
+- **回退链**：无快照 → 对拉取的服务端源码匹配（旧行为）；结构化失败（起始行非块开头/深度失衡）→ 自动回退文本匹配，不会静默错编。
 - **实测语料**：2063 行生产 include 回归（`test/fixtures/zfir_gxyh040_frm.abap`：中文注释、Mod 标记、宏、重复行、嵌套块）。
 
 ### adt_create_object 🛡

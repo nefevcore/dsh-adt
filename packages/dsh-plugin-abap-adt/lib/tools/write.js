@@ -12,6 +12,7 @@
  * candidates — never a silent first-match.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import { hashSource, loadSnapshot, saveSnapshot, SnapshotConflictError, } from '../snapshots.js';
 import { DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, } from './common.js';
 /** Read a UTF-8 text file through the sandbox-aware DSH filesystem service. */
 async function readSourceFile(ctx, filePath) {
@@ -512,6 +513,16 @@ export function writeTools(deps, ctx) {
                 // be within allowedTransports, or the edit is rolled back.
                 entry.policy.assertTransportUsage(effectiveTransport, `adt_write_object (${ref.name})`);
                 const src = await resolveSourceInput(ctx, args);
+                // Optimistic-concurrency guard: when a local snapshot exists (the
+                // agent READ this object before), refuse to overwrite a server copy
+                // that changed in between — verify under the lock (exclusive writers).
+                const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
+                if (snapshot) {
+                    const current = await entry.client.readSource(ref.uri, { signal: exec.signal });
+                    if (hashSource(current.source) !== snapshot.sidecar.baseHash) {
+                        throw new SnapshotConflictError(ref.name, snapshot.path, snapshot.sidecar.fetchedAt, 'adt_write_object');
+                    }
+                }
                 await entry.client.writeSource(ref.uri, src, { lockHandle: handle, transport: effectiveTransport ?? undefined, signal: exec.signal });
                 if (args.activate === true) {
                     const act = await entry.client.activate([ref], { transport: effectiveTransport ?? undefined, signal: exec.signal });
@@ -541,6 +552,14 @@ export function writeTools(deps, ctx) {
                 unlocked = true;
                 throw error;
             }
+            // Refresh the local snapshot from a read-back so the OCC base reflects
+            // the real server state (not what we SENT — backends may normalize).
+            if (ctx.fs) {
+                const readBack = await entry.client.readSource(ref.uri, { signal: exec.signal }).catch(() => undefined);
+                if (readBack) {
+                    await saveSnapshot(ctx, entry.config.name, ref, readBack.source).catch(() => undefined);
+                }
+            }
             const transportSource = effectiveTransport
                 ? transport
                     ? 'user'
@@ -561,16 +580,19 @@ export function writeTools(deps, ctx) {
     const editSource = defineTool({
         name: 'adt_edit_object',
         description: 'Replace part of an existing source object — DSH-`edit` style, without uploading the whole object: ' +
-            'locks, patches the current server-side source, writes back, unlocks; optionally activates. ' +
+            'locks, patches, writes back, unlocks; optionally activates. ' +
+            'CONFLICT-SAFE by default: when a local snapshot exists (created by adt_read_object), matching runs ' +
+            'against THE SNAPSHOT YOU READ (deterministic — never a fuzzy match against drifted server text) and the ' +
+            'server copy is hash-verified under the lock first; if someone changed it since your read you get a ' +
+            '[CONFLICT] error and nothing is applied — re-read and redo. ' +
             'TWO MODES — prefer (1) for precise edits, (2) for whole blocks: ' +
-            '(1) oldText + newText (recommended): quote the exact text to replace VERBATIM from a recent ' +
-            'adt_read_object (multi-line OK, tail comments tolerated) and give its replacement. Match runs ' +
-            'against the CURRENT remote source — if someone changed it meanwhile, the match fails safely. ' +
-            'Not unique → include neighboring lines in the quote (or `occurrence`); not found → the error ' +
-            'lists the closest lines; one re-read + retry converges. ' +
+            '(1) oldText + newText (recommended): quote the exact text to replace VERBATIM from your adt_read_object ' +
+            '(multi-line OK, tail comments tolerated) and give its replacement. Not unique → include neighboring ' +
+            'lines in the quote (or `occurrence`); not found → the error lists the closest lines. ' +
             '(2) start/end block markers (whole METHOD/FORM/etc. without quoting it): bare closers ' +
             '(ENDFORM./ENDIF./…) resolve structurally by nesting depth; DUPLICATE lines take `occurrence`; ' +
             'by position use startLine/endLine. ' +
+            'Tip: edit the local snapshot file yourself (path from adt_read_object) and upload via adt_push_object. ' +
             'Provide the replacement via `newText` (mode 1) or `source`/`sourceFile` (mode 2). ' +
             'Subject to the permission policy.',
         parameters: {
@@ -736,12 +758,26 @@ export function writeTools(deps, ctx) {
             ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: effectiveTransport });
             try {
                 entry.policy.assertTransportUsage(effectiveTransport, `adt_edit_object (${ref.name})`);
-                const current = (await entry.client.readSource(ref.uri, { signal: exec.signal })).source;
+                const current = await entry.client.readSource(ref.uri, { signal: exec.signal });
+                // OCC: with a snapshot, verify the server still matches what the agent
+                // read and match against THE SNAPSHOT (deterministic). Without one,
+                // match against the fetched server source (legacy behavior).
+                const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
+                let base;
+                if (snapshot) {
+                    if (hashSource(current.source) !== snapshot.sidecar.baseHash) {
+                        throw new SnapshotConflictError(ref.name, snapshot.path, snapshot.sidecar.fetchedAt, 'adt_edit_object');
+                    }
+                    base = snapshot.source;
+                }
+                else {
+                    base = current.source;
+                }
                 const replacementText = oldText !== undefined ? String(args.newText ?? '') : replacement;
                 replaced =
                     oldText !== undefined
-                        ? replaceSourceText(current, oldText, replacementText, { occurrence })
-                        : replaceSourceBlock(current, startText, endText, replacementText, {
+                        ? replaceSourceText(base, oldText, replacementText, { occurrence })
+                        : replaceSourceBlock(base, startText, endText, replacementText, {
                             occurrence,
                             startLine: hasStartLine ? Number(args.startLine) : undefined,
                             endLine: args.endLine !== undefined ? Number(args.endLine) : undefined,
@@ -764,6 +800,13 @@ export function writeTools(deps, ctx) {
                 if (released)
                     ledger.deregister(entry.config.name, ref.uri);
                 unlocked = released;
+            }
+            // Refresh the snapshot from a read-back (OCC base = real server state).
+            if (replaced && ctx.fs) {
+                const readBack = await entry.client.readSource(ref.uri, { signal: exec.signal }).catch(() => undefined);
+                if (readBack) {
+                    await saveSnapshot(ctx, entry.config.name, ref, readBack.source).catch(() => undefined);
+                }
             }
             const transportSource = effectiveTransport
                 ? transport
@@ -794,6 +837,169 @@ export function writeTools(deps, ctx) {
             };
         },
     });
-    return [writeObject, editSource];
+    /**
+     * adt_push_object — the PUSH half of the pull→edit-local→push flow.
+     * Uploads the local snapshot (possibly edited in place with local file
+     * tools) after verifying under the lock that the server still matches the
+     * snapshot's fetch-time hash. [CONFLICT] and nothing applied otherwise.
+     */
+    const pushObject = defineTool({
+        name: 'adt_push_object',
+        description: 'Upload a locally edited object snapshot to the server with conflict verification — the push half of ' +
+            'pull→edit-local→push. Workflow: adt_read_object (creates the local snapshot, path in `localCopy`) → ' +
+            'edit that file with your LOCAL file tools → adt_push_object. Before writing, the server source is ' +
+            'hash-verified against the snapshot\'s fetch-time state (under the lock): changed in between → ' +
+            '[CONFLICT], nothing applied, your local file is kept — re-read, merge, push again. ' +
+            'Subject to the permission policy; `transport` selects the request the change is recorded into.',
+        parameters: {
+            ...OBJECT_REF_PARAMS,
+            ...PACKAGE_HINT_PARAM,
+            path: {
+                type: 'string',
+                description: 'Local file to upload. Default: the tracked snapshot from adt_read_object (see its `localCopy` ' +
+                    'output). A custom path uploads verbatim WITHOUT conflict verification (no known base).',
+            },
+            activate: { type: 'boolean', description: 'Also activate the object after writing (default false).' },
+            transport: {
+                type: 'string',
+                description: 'Transport request number the change is recorded into. Omitted → backend decides on lock ' +
+                    '(existing open request, otherwise a NEW auto-created one).',
+            },
+            ...DESTINATION_PARAM,
+        },
+        output: {
+            schema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    uri: { type: 'string', required: true },
+                    name: { type: 'string', required: true },
+                    pushed: { type: 'boolean', required: true },
+                    verified: {
+                        type: 'boolean',
+                        required: true,
+                        description: 'false when a custom `path` was uploaded without a known base (no conflict check).',
+                    },
+                    localCopy: { type: 'string', required: true },
+                    unlocked: { type: 'boolean' },
+                    activated: { type: 'boolean' },
+                    transport: { type: 'string' },
+                    transportSource: { type: 'string', enum: ['user', 'auto'] },
+                    activation: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                            success: { type: 'boolean' },
+                            message: { type: 'string' },
+                        },
+                    },
+                },
+            },
+            render: (_args, value) => text(`${value.name}: pushed ${value.localCopy} → server` +
+                `${value.verified ? ' (conflict-verified)' : ' (NOT verified — custom path)'}` +
+                `${value.unlocked === false ? ' (still locked)' : ''}` +
+                `${value.activated ? ' · activated' : ''}` +
+                (value.transport
+                    ? ` · change recorded in transport ${value.transport}${value.transportSource === 'auto' ? ' (backend-assigned — pass transport to choose)' : ''}`
+                    : '') +
+                `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}`),
+        },
+        timeoutMs: 180_000,
+        execute: async (args, exec) => {
+            const entry = registry.require(destinationOf(args));
+            const ref = await resolveToolObject(entry.client, args, exec.signal);
+            await assertObjectEditable(entry, ref, {
+                toolName: 'adt_push_object',
+                packageHint: optStr(args.packageName),
+                signal: exec.signal,
+            });
+            if (!ctx.fs)
+                throw new Error('adt_push_object requires the dsh filesystem service');
+            const customPath = optStr(args.path);
+            const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
+            let localSource;
+            let verified;
+            let localCopy;
+            if (customPath) {
+                localSource = await readSourceFile(ctx, customPath);
+                localCopy = customPath;
+                verified = false;
+                if (!snapshot) {
+                    throw new Error(`adt_push_object: no tracked snapshot for ${ref.name} — run adt_read_object first (it creates the ` +
+                        'snapshot that makes conflict verification possible)');
+                }
+            }
+            else {
+                if (!snapshot) {
+                    throw new Error(`adt_push_object: no local snapshot for ${ref.name} — run adt_read_object first (it creates one; ` +
+                        'then edit the file and push), or pass `path` for a verbatim unverified upload');
+                }
+                localSource = snapshot.source; // the (possibly locally edited) file
+                localCopy = snapshot.path;
+                verified = true;
+            }
+            const transport = optStr(args.transport);
+            if (transport) {
+                entry.policy.assertTransportsEnabled('adt_push_object');
+                entry.policy.assertTransportAllowed(transport, `adt_push_object (${ref.name})`);
+            }
+            let unlocked = false;
+            let activated = false;
+            let activationResult;
+            const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri, { signal: exec.signal });
+            const effectiveTransport = transport ?? assignedTransport;
+            ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: effectiveTransport });
+            try {
+                entry.policy.assertTransportUsage(effectiveTransport, `adt_push_object (${ref.name})`);
+                if (verified) {
+                    const current = await entry.client.readSource(ref.uri, { signal: exec.signal });
+                    if (hashSource(current.source) !== snapshot.sidecar.baseHash) {
+                        throw new SnapshotConflictError(ref.name, localCopy, snapshot.sidecar.fetchedAt, 'adt_push_object');
+                    }
+                }
+                await entry.client.writeSource(ref.uri, localSource, { lockHandle: handle, transport: effectiveTransport ?? undefined, signal: exec.signal });
+                if (args.activate === true) {
+                    const act = await entry.client.activate([ref], { transport: effectiveTransport ?? undefined, signal: exec.signal });
+                    activated = act.success;
+                    activationResult = {
+                        success: act.success,
+                        message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ` ${i.message}` : ''}`).join('; ') || undefined,
+                    };
+                }
+            }
+            finally {
+                const released = await entry.client
+                    .unlock(ref.uri, handle)
+                    .then(() => true)
+                    .catch(() => false);
+                if (released)
+                    ledger.deregister(entry.config.name, ref.uri);
+                unlocked = released;
+            }
+            // Refresh the snapshot from a read-back (new OCC base).
+            const readBack = await entry.client.readSource(ref.uri, { signal: exec.signal }).catch(() => undefined);
+            if (readBack) {
+                await saveSnapshot(ctx, entry.config.name, ref, readBack.source).catch(() => undefined);
+            }
+            const transportSource = effectiveTransport
+                ? transport
+                    ? 'user'
+                    : 'auto'
+                : undefined;
+            return {
+                uri: ref.uri,
+                name: ref.name,
+                pushed: true,
+                verified,
+                localCopy,
+                unlocked,
+                activated: activated || undefined,
+                transport: effectiveTransport,
+                transportSource,
+                activation: activationResult,
+            };
+        },
+    });
+    return [writeObject, editSource, pushObject];
 }
 //# sourceMappingURL=write.js.map

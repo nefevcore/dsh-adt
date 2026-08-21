@@ -2,10 +2,10 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-139-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-141-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
-> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **34 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, local export, offline abaplint). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system.
+> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **35 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, conflict-checked local snapshots, local export, offline abaplint). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system.
 
 在 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 上直接访问 SAP ABAP 系统的插件与协议客户端。
 
@@ -53,7 +53,8 @@ dsh plugin --profile web exec abap-adt-preset --force
 
 ## 核心能力
 
-- **代理原生工具**：34 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **代理原生工具**：35 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **冲突安全编辑（OCC）**：`adt_read_object` 默认在本地留对象快照（含服务端内容哈希）；`adt_edit_object` 对**你读到的快照**做确定性匹配，上传前在持锁状态下哈希校验服务端未变——他人改动 → `[CONFLICT]` 显式拒绝而非静默错配；也可直接编辑本地快照文件后用 `adt_push_object` 校验上传（pull→edit→push）
 - **错误分析**：`adt_list_dumps` / `adt_get_dump` 直接读取 ABAP 短转储（ST22）做排障闭环
 - **代码执行**：`adt_execute` 运行可执行程序 / `if_oo_adt_classrun` 类并取回控制台输出
 - **结构化编辑器**：`adt_read_structure` / `adt_write_structure` 元数据级读写消息类（MSAG）/域（DOMA）/数据元素（DTEL）/表类型（TTYP）
@@ -170,7 +171,7 @@ abap-adt:
 
 ## 测试
 
-共 **139 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）、abaplint 本地检查、版本 diff、发布门禁、配置分层。
+共 **141 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层。
 
 ## 路线图（可扩展方向）
 

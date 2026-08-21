@@ -9,6 +9,7 @@ import { executeTools } from '../lib/tools/execute.js';
 import { structureTools } from '../lib/tools/structure.js';
 import { batchTools } from '../lib/tools/batch.js';
 import { dataPreviewTools } from '../lib/tools/datapreview.js';
+import { readTools } from '../lib/tools/read.js';
 import { writeTools } from '../lib/tools/write.js';
 import { objectTools } from '../lib/tools/objects.js';
 import { lifecycleTools } from '../lib/tools/lifecycle.js';
@@ -54,14 +55,15 @@ after(async () => {
   await strictRegistry.dispose();
 });
 
-function tools(deps = { registry, ledger: new LockLedger() }) {
+function tools(deps = { registry, ledger: new LockLedger() }, ctx: Context = fakeCtx) {
   const flat = [
+    ...readTools(deps, ctx),
+    ...writeTools(deps, ctx),
     ...dumpTools(deps),
     ...executeTools(deps),
     ...structureTools(deps),
     ...batchTools(deps, fakeCtx),
     ...dataPreviewTools(deps),
-    ...writeTools(deps, fakeCtx),
     ...objectTools(deps),
     ...lifecycleTools(deps),
     ...versionTools(deps),
@@ -914,6 +916,141 @@ test('oldText mode via the tool against the mock (mode exclusivity + happy path)
     assert.equal(edited.startLineNumber, 306);
     const after = (await client.readSource(uri)).source;
     assert.ok(after.includes("'NEW TITLE'"));
+  } finally {
+    await client.updateSource(uri, original);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Snapshot OCC flow: read → edit local / edit via tool → verify → push
+// ---------------------------------------------------------------------------
+
+/** In-memory fake of the DSH filesystem service (enough for snapshots). */
+function memFs() {
+  const files = new Map<string, string>();
+  const fs = {
+    resolve: async (p: string) => p,
+    readText: async (t: string) => {
+      const v = files.get(t);
+      if (v === undefined) throw new Error(`ENOENT: ${t}`);
+      return v;
+    },
+    writeText: async (t: string, c: string) => {
+      files.set(t, c);
+    },
+    listDir: async () => [] as string[],
+  };
+  return { files, ctx: { fs } as unknown as Context };
+}
+
+test('snapshot OCC: read creates snapshot; edit matches it; drift → [CONFLICT]', async () => {
+  const mem = memFs();
+  const by = tools({ registry, ledger: new LockLedger() }, mem.ctx);
+  const client = registry.require().client;
+  const uri = '/sap/bc/adt/oo/classes/zcl_flaky';
+  const original = (await client.readSource(uri)).source;
+
+  try {
+    // 1. adt_read_object creates the local snapshot + sidecar (base hash).
+    const r = await by.get('adt_read_object')!.execute({ name: 'ZCL_FLAKY', type: 'CLAS' }, exec);
+    const snapPath = r.localCopy as string;
+    assert.ok(snapPath.includes('.adt-snapshots/demo/zcl_flaky.clas.abap'));
+    assert.ok(r.snapshotHash);
+    assert.equal(mem.files.get(snapPath), original);
+    const sidecar = JSON.parse(mem.files.get(`${snapPath}.json`)!);
+    assert.equal(sidecar.baseHash, r.snapshotHash);
+    assert.equal(sidecar.uri, uri);
+
+    // 2. Edit via oldText — matched against the SNAPSHOT; applies; the
+    //    snapshot is refreshed from the read-back.
+    const e1 = await by.get('adt_edit_object')!.execute(
+      { name: 'ZCL_FLAKY', type: 'CLAS', oldText: 'rv_q = iv_a / iv_b.', newText: '    rv_q = iv_a DIV iv_b.' },
+      exec,
+    );
+    assert.equal(e1.replaced, true);
+    const afterEdit = (await client.readSource(uri)).source;
+    assert.ok(afterEdit.includes('DIV iv_b'));
+    assert.equal(mem.files.get(snapPath), afterEdit); // refreshed
+
+    // 3. Someone else writes (out-of-band) → edit refuses with [CONFLICT],
+    //    server untouched, snapshot NOT clobbered.
+    await client.updateSource(uri, `${afterEdit}\n* drifted`);
+    await assert.rejects(
+      () =>
+        by.get('adt_edit_object')!.execute(
+          { name: 'ZCL_FLAKY', type: 'CLAS', oldText: 'rv_q = iv_a DIV iv_b.', newText: 'x' },
+          exec,
+        ),
+      (error: unknown) => /\[CONFLICT\]/.test((error as Error).message) && /adt_read_object/.test((error as Error).message),
+    );
+    assert.ok((await client.readSource(uri)).source.includes('drifted'));
+
+    // 4. Re-read refreshes the base → the same edit now applies.
+    await by.get('adt_read_object')!.execute({ name: 'ZCL_FLAKY', type: 'CLAS' }, exec);
+    const e2 = await by.get('adt_edit_object')!.execute(
+      { name: 'ZCL_FLAKY', type: 'CLAS', oldText: 'rv_q = iv_a DIV iv_b.', newText: '    rv_q = iv_a / iv_b.' },
+      exec,
+    );
+    assert.equal(e2.replaced, true);
+  } finally {
+    await client.updateSource(uri, original);
+  }
+});
+
+test('snapshot OCC: write_object refuses stale view; push uploads a locally edited file', async () => {
+  const mem = memFs();
+  const by = tools({ registry, ledger: new LockLedger() }, mem.ctx);
+  const client = registry.require().client;
+  const uri = '/sap/bc/adt/oo/classes/zcl_flaky';
+  const original = (await client.readSource(uri)).source;
+
+  try {
+    const r = await by.get('adt_read_object')!.execute({ name: 'ZCL_FLAKY', type: 'CLAS' }, exec);
+    const snapPath = r.localCopy as string;
+
+    // Fresh snapshot → full write passes and refreshes the snapshot.
+    const w = await by.get('adt_write_object')!.execute({ name: 'ZCL_FLAKY', type: 'CLAS', source: original }, exec);
+    assert.equal(w.updated, true);
+
+    // Out-of-band drift → write refuses ([CONFLICT]) and the server keeps
+    // the drifted state.
+    await client.updateSource(uri, `${original}\n* drifted`);
+    await assert.rejects(
+      () => by.get('adt_write_object')!.execute({ name: 'ZCL_FLAKY', type: 'CLAS', source: original }, exec),
+      /\[CONFLICT\]/,
+    );
+    assert.ok((await client.readSource(uri)).source.includes('drifted'));
+
+    // Pull → edit the LOCAL file in place (simulating local file tools) →
+    // push: verified upload lands, snapshot refreshed from read-back.
+    await by.get('adt_read_object')!.execute({ name: 'ZCL_FLAKY', type: 'CLAS' }, exec);
+    const local = (mem.files.get(snapPath) ?? '').replace('rv_q = iv_a / iv_b.', 'rv_q = iv_a DIV iv_b.');
+    mem.files.set(snapPath, local);
+    const p = await by.get('adt_push_object')!.execute({ name: 'ZCL_FLAKY', type: 'CLAS' }, exec);
+    assert.equal(p.pushed, true);
+    assert.equal(p.verified, true);
+    assert.equal(p.localCopy, snapPath);
+    const pushed = (await client.readSource(uri)).source;
+    assert.ok(pushed.includes('DIV iv_b'));
+    assert.equal(mem.files.get(snapPath), pushed); // refreshed after push
+
+    // Drift again → push refuses with [CONFLICT]; local edit preserved.
+    await client.updateSource(uri, `${pushed}\n* drifted2`);
+    mem.files.set(snapPath, (mem.files.get(snapPath) ?? '').replace('DIV iv_b', 'MOD iv_b'));
+    await assert.rejects(
+      () => by.get('adt_push_object')!.execute({ name: 'ZCL_FLAKY', type: 'CLAS' }, exec),
+      /\[CONFLICT\]/,
+    );
+    assert.ok((mem.files.get(snapPath) ?? '').includes('MOD iv_b')); // local edit kept
+    assert.ok((await client.readSource(uri)).source.includes('drifted2'));
+
+    // No snapshot at all → push tells the agent to read first.
+    const fresh = memFs();
+    const byFresh = tools({ registry, ledger: new LockLedger() }, fresh.ctx);
+    await assert.rejects(
+      () => byFresh.get('adt_push_object')!.execute({ name: 'ZCL_FLAKY', type: 'CLAS' }, exec),
+      /no local snapshot.*adt_read_object first/s,
+    );
   } finally {
     await client.updateSource(uri, original);
   }

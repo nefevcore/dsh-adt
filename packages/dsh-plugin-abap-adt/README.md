@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/badge/license-MIT-green)](https://github.com/nefevcore/dsh-adt)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
-Agent-native SAP ABAP access for the [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that registers **34 `adt_*` tools** speaking the ADT REST protocol directly — no SAP libraries, no IDE required (headless). An AI agent gets the full development loop: **search → read → edit → activate → unit test → ATC → transport → execute → error analysis**, plus agent-scale capabilities (protocol-level `$batch`, DDIC structured editors, source export to local `.abap`, offline abaplint, release gates). Releasing a transport is deliberately left to humans — the agent stages everything up to a releasable request.
+Agent-native SAP ABAP access for the [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that registers **35 `adt_*` tools** speaking the ADT REST protocol directly — no SAP libraries, no IDE required (headless). An AI agent gets the full development loop: **search → read → edit → activate → unit test → ATC → transport → execute → error analysis**, plus agent-scale capabilities (protocol-level `$batch`, DDIC structured editors, conflict-checked local snapshots, source export to local `.abap`, offline abaplint, release gates). Releasing a transport is deliberately left to humans — the agent stages everything up to a releasable request.
 
 Looking for more DSH plugins? Browse the [`dsh-plugin`](https://github.com/topics/dsh-plugin) topic on GitHub (this plugin is listed there).
 
@@ -119,9 +119,9 @@ destinations:
 
 Inspect the effective policy at runtime with the `adt_permissions` tool.
 
-## Tool family (34 tools)
+## Tool family (35 tools)
 
-System & connections (`adt_list_destinations`, `adt_system_info`, `adt_ping`, `adt_permissions`) · search & browse (`adt_search`, `adt_package_content`, `adt_where_used`) · source (`adt_read_object`, `adt_write_object`, `adt_edit_object`, `adt_create_object`, `adt_delete_object`) · structured editors (`adt_read_structure`, `adt_write_structure` — MSAG/DOMA/DTEL/TTYP) · lifecycle (`adt_activate`, `adt_check`, `adt_lock_info`, `adt_unlock_all`) · testing (`adt_run_unit_tests`, `adt_run_atc`, `adt_list_atc_runs`, `adt_get_atc_result`) · transports (`adt_object_versions`, `adt_list_transports`, `adt_get_transport` — release is intentionally not exposed) · data (`adt_data_preview` with offset/length window) · versions (`adt_version_diff`) · batch/local (`adt_batch`, `adt_release_gate`, `adt_export_objects`, `adt_local_check`) · execution & errors (`adt_execute`, `adt_list_dumps`, `adt_get_dump`).
+System & connections (`adt_list_destinations`, `adt_system_info`, `adt_ping`, `adt_permissions`) · search & browse (`adt_search`, `adt_package_content`, `adt_where_used`) · source (`adt_read_object` with local snapshot, `adt_write_object`, `adt_edit_object`, `adt_push_object`, `adt_create_object`, `adt_delete_object`) · structured editors (`adt_read_structure`, `adt_write_structure` — MSAG/DOMA/DTEL/TTYP) · lifecycle (`adt_activate`, `adt_check`, `adt_lock_info`, `adt_unlock_all`) · testing (`adt_run_unit_tests`, `adt_run_atc`, `adt_list_atc_runs`, `adt_get_atc_result`) · transports (`adt_object_versions`, `adt_list_transports`, `adt_get_transport` — release is intentionally not exposed) · data (`adt_data_preview` with offset/length window) · versions (`adt_version_diff`) · batch/local (`adt_batch`, `adt_release_gate`, `adt_export_objects`, `adt_local_check`) · execution & errors (`adt_execute`, `adt_list_dumps`, `adt_get_dump`).
 
 Full documentation: [dsh-adt repository](https://github.com/nefevcore/dsh-adt).
 

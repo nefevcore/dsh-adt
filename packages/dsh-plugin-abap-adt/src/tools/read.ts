@@ -4,11 +4,19 @@
  * read in slices; the response always carries `totalLines` for paging.
  * Full reads (no window) up to a size cap replay as a line-numbered read
  * card; windowed reads render inline.
+ *
+ * By default the FULL source is also kept as a LOCAL SNAPSHOT
+ * (`.adt-snapshots/<destination>/…`, sandbox-aware) with the server content
+ * hash in a sidecar — the base of the conflict-checked edit/push flow
+ * (adt_edit_object matches against this snapshot; adt_push_object uploads a
+ * locally edited copy after verifying the server still matches).
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { JsonValue } from '@deepseek-ai/dsh-tools';
+import type { Context } from '@deepseek-ai/cordis';
 import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
 import { typeLabel } from '../resolve.js';
+import { hashSource, saveSnapshot } from '../snapshots.js';
 
 /** Upper bound for read-card metadata lines; larger sources fall back to the
  * generic card instead of persisting a second copy of a huge source. */
@@ -38,7 +46,7 @@ function readPresentationMeta(value: { name: string; type: string; source: strin
   };
 }
 
-export function readTools(deps: ToolDeps) {
+export function readTools(deps: ToolDeps, ctx?: Context) {
   const { registry } = deps;
 
   const readObject = defineTool({
@@ -47,7 +55,10 @@ export function readTools(deps: ToolDeps) {
       'Read the source code and metadata of an ABAP development object (class, interface, program, CDS view, ' +
       'table, domain, ...). Pass `objectUri` (from search results) or `name` + optional `type`. ' +
       'Optionally window the source with `startLine`/`endLine` (1-based, inclusive) — the response always ' +
-      'carries `totalLines` so large objects can be read in slices.',
+      'carries `totalLines` so large objects can be read in slices. ' +
+      'By default the full source is also kept as a local snapshot (see `localCopy` in the output): ' +
+      'adt_edit_object matches against that snapshot and refuses with [CONFLICT] when the server copy changed ' +
+      'since this read; adt_push_object uploads a locally edited copy after the same verification.',
     parameters: {
       ...OBJECT_REF_PARAMS,
       startLine: {
@@ -57,6 +68,12 @@ export function readTools(deps: ToolDeps) {
       endLine: {
         type: 'integer',
         description: 'Last source line to return (inclusive). Default: last line (totalLines).',
+      },
+      snapshot: {
+        type: 'boolean',
+        description:
+          'Keep/refresh a local snapshot of the FULL source for conflict-checked editing (default true). ' +
+          'The snapshot is what adt_edit_object matches against; disable only to save disk.',
       },
       ...DESTINATION_PARAM,
     },
@@ -78,6 +95,14 @@ export function readTools(deps: ToolDeps) {
           startLine: { type: 'integer', required: true },
           endLine: { type: 'integer', required: true },
           totalLines: { type: 'integer', required: true },
+          localCopy: {
+            type: 'string',
+            description: 'Workspace path of the local snapshot (full source, not the windowed slice).',
+          },
+          snapshotHash: {
+            type: 'string',
+            description: 'Content hash of the server source at read time — the conflict-check base.',
+          },
         },
       },
       render: (_args, value) => {
@@ -135,6 +160,21 @@ export function readTools(deps: ToolDeps) {
         Math.max(totalLines, 1),
       );
       const source = rawLines.slice(startLine - 1, endLine).join('\n');
+
+      // Local snapshot (default on): the full source + its server-side hash.
+      // This is what adt_edit_object matches against and what
+      // adt_push_object verifies/uploads — the base of the OCC edit flow.
+      let localCopy: string | undefined;
+      let snapshotHash: string | undefined;
+      if (ctx?.fs && args.snapshot !== false) {
+        try {
+          localCopy = await saveSnapshot(ctx, entry.config.name, ref, parsed.source);
+          snapshotHash = hashSource(parsed.source);
+        } catch {
+          // Snapshotting is an optimization of the edit flow, never a read
+          // failure — degrade silently (edit falls back to server matching).
+        }
+      }
       return {
         uri: ref.uri,
         name: ref.name,
@@ -145,6 +185,8 @@ export function readTools(deps: ToolDeps) {
         startLine,
         endLine,
         totalLines,
+        localCopy,
+        snapshotHash,
       };
     },
   });
