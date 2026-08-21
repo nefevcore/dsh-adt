@@ -63,12 +63,14 @@
 - **传输语义**：显式 `transport` 经 PUT `?corrNr=` 精确生效（用户值优先于 lock 分配值，对齐官方编辑器行为）。
 
 ### adt_edit_object 🛡
-只替换源码中的**一个块**（含**单行替换**）。匹配按**层级**进行（大小写不敏感）：①注释剥离子串 → ②去空白（容忍引号内空格差异如 `'BUKRS  '` vs `'BUKRS'`）→ ③原始行（可编辑**注释掉的代码** `* …`）。**原样复制整行（含尾注释）也能匹配**（两侧同剥注释）。
-- **入参**：对象三元组；`packageName`；`start`（起始行标记）；`end`（结束标记——METHOD/FORM/FUNCTION/MODULE 自动推导，其余默认 = start 行）；**`occurrence`**（同名重复行按序号选择，歧义错误列出 #1/#2…）；**`startLine`/`endLine`**（按行号定位，来自 adt_read_object——同时给出 `start` 时会校验该行内容防行号过期）；`source`/`sourceFile`；`activate`；`transport`。
-- **返回**：`uri, name, start, end, replaced, startLineNumber, endLineNumber, oldLines, newLines, matchMode ('text'|'text-loose'|'text-raw'|'line-number'), occurrence?, unlocked?, activated?, transport?, transportSource?, activation?`。
-- **end 语义**：从 start 行起**取第一个命中**——闭合语句在真实代码中大量重复（实测 2063 行文件 ENDFORM.×31、ENDIF.×59），块起始后的第一个就是本块的。
-- **匹配失败时**：错误列出**最接近的真实行**（token 相似度）+ 建议——一次重试即可自纠；或改用 startLine/endLine 按位置编辑。
-- **实测语料**：以 2063 行生产 include（中文注释、Mod 标记、宏、重复行）回归（`test/fixtures/zfir_gxyh040_frm.abap`）。
+只替换源码的一部分——**双模式**，与 DSH `edit` 同心智：
+- **模式 1（推荐，精确编辑）：`oldText` + `newText`**。从刚读的 `adt_read_object` 输出**原样引用**要替换的文本（多行 OK、含尾注释 OK），给出替换文本。匹配跑在**当前远端源码**上——远端被他人改动则匹配失败（安全）。不唯一 → 错误列出全部位置，**多引上下文行即可消歧**（或 `occurrence`）；找不到 → 列最接近行，重读一次重试即收敛。多行引用按行匹配（剥注释/大小写/缩进容忍）。
+- **模式 2（整块替换，省上下文）：`start`/`end` 块标记**。替换整个 METHOD/FORM 而无需引用其全文。裸闭合语句（ENDFORM./ENDIF./…）按**嵌套深度结构化解析**（2063 行语料 ENDFORM.×31/ENDIF.×59 下取对本块闭合）；同名重复行用 `occurrence`；按位置用 `startLine`/`endLine`（同时给 `start` 时校验该行防行号过期）。
+- start 匹配层级：①注释剥离子串 → ②去空白（引号内空格容差 `'BUKRS  '` vs `'BUKRS'`）→ ③原始行（可编辑注释掉的代码）。
+- **入参**：对象三元组；`packageName`；模式 1（`oldText`/`newText`）或 模式 2（`start`/`end`/`source`/`sourceFile`/`startLine`/`endLine`）；共用 `occurrence`/`activate`/`transport`。
+- **返回**：`uri, name, start, end, replaced, startLineNumber, endLineNumber, oldLines, newLines, matchMode ('structured'|'text'|'text-loose'|'text-raw'|'line-number'), occurrence?, unlocked?, activated?, transport?, transportSource?, activation?`。
+- **回退链**：结构化失败（起始行非块开头/深度失衡）自动回退文本匹配，不会静默错编。
+- **实测语料**：2063 行生产 include 回归（`test/fixtures/zfir_gxyh040_frm.abap`：中文注释、Mod 标记、宏、重复行、嵌套块）。
 
 ### adt_create_object 🛡
 新建对象。支持的类型：CLAS / INTF / PROG / DDLS / TABL / STRU / **DOMA / DTEL / TTYP** / MSAG / FUNC / DEVC。

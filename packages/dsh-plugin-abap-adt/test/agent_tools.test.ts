@@ -13,7 +13,7 @@ import { writeTools } from '../lib/tools/write.js';
 import { objectTools } from '../lib/tools/objects.js';
 import { lifecycleTools } from '../lib/tools/lifecycle.js';
 import { versionTools } from '../lib/tools/versions.js';
-import { replaceSourceBlock } from '../lib/tools/write.js';
+import { replaceSourceBlock, replaceSourceText } from '../lib/tools/write.js';
 import type { Context } from '@deepseek-ai/cordis';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -569,8 +569,8 @@ test('adt_edit_object: real-world Mod-block with Chinese comments (regression, i
 // ---------------------------------------------------------------------------
 
 test('real-world include: FORM block via derived closer (31 ENDFORMs in file)', () => {
-  // start = FORM frm_get_data. → derived end = ENDFORM. — the FIRST ENDFORM
-  // at/after the start must be the block's own (line 38), not an error.
+  // start = FORM frm_get_data. → derived end = ENDFORM. — depth-paired to
+  // the block's own closer (line 38), not any of the other 30 ENDFORMs.
   const r = replaceSourceBlock(
     REAL_SOURCE,
     'FORM frm_get_data .',
@@ -579,7 +579,7 @@ test('real-world include: FORM block via derived closer (31 ENDFORMs in file)', 
   );
   assert.equal(r.startLineNumber, 24);
   assert.equal(r.endLineNumber, 38);
-  assert.equal(r.matchMode, 'text');
+  assert.equal(r.matchMode, 'structured');
   assert.ok(r.full.includes('" replaced'));
 });
 
@@ -705,6 +705,215 @@ test('real-world include: single-line edit via the tool against the mock', async
     const after = (await client.readSource(uri)).source;
     assert.ok(after.includes("'ZEXP_VOL'"));
     assert.equal(after.split('\n').length, REAL_SOURCE.split('\n').length); // only that line changed
+  } finally {
+    await client.updateSource(uri, original);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Structured end resolution (ENDFORM & friends by nesting depth)
+// ---------------------------------------------------------------------------
+
+test('structured ends: FORM resolved by depth, not first text hit', () => {
+  // Explicit naked ENDFORM. → structural (depth-balanced), still line 38 even
+  // though 30 more ENDFORMs follow.
+  const r = replaceSourceBlock(REAL_SOURCE, 'FORM frm_get_data .', 'ENDFORM.', 'FORM frm_get_data .\nENDFORM.');
+  assert.equal(r.matchMode, 'structured');
+  assert.equal(r.startLineNumber, 24);
+  assert.equal(r.endLineNumber, 38);
+  // The inner IF/ENDIF nesting of the FORM is irrelevant for FORM pairing.
+});
+
+test('structured ends: nested IF resolved to the OUTER closer', () => {
+  // Construct: an outer IF containing a nested IF — the first ENDIF belongs
+  // to the INNER block; depth pairing must return the outer one.
+  const src = [
+    'FORM f.',
+    '  IF a = 1.',
+    '    IF b = 2.',
+    '      DO 3 TIMES.',
+    '      ENDDO.',
+    '    ENDIF.',
+    '    x = 1.',
+    '  ENDIF.',
+    '  y = 2.',
+    'ENDFORM.',
+  ].join('\n');
+  const outer = replaceSourceBlock(src, 'IF a = 1.', 'ENDIF.', 'IF a = 1.\nENDIF.');
+  assert.equal(outer.matchMode, 'structured');
+  assert.equal(outer.startLineNumber, 2);
+  assert.equal(outer.endLineNumber, 8); // NOT line 6 (the inner ENDIF)
+  const inner = replaceSourceBlock(src, 'IF b = 2.', 'ENDIF.', 'IF b = 2.\nENDIF.');
+  assert.equal(inner.endLineNumber, 6);
+  assert.equal(inner.matchMode, 'structured');
+  // Mixed families nest freely: DO inside IF does not disturb IF pairing.
+  // (`DO 3 TIMES.` rather than bare `DO.` — a bare DO. is a substring of
+  // ENDDO. and correctly reports a 2-line start ambiguity.)
+  const doBlock = replaceSourceBlock(src, 'DO 3 TIMES.', 'ENDDO.', 'DO 3 TIMES.\nENDDO.');
+  assert.equal(doBlock.endLineNumber, 5);
+  assert.equal(doBlock.matchMode, 'structured');
+});
+
+test('structured ends: keyword text in strings, comments and CALL forms never counts', () => {
+  const src = [
+    'FORM f.',
+    "  lv = 'xxx ENDFORM. yyy'. \" ENDFORM. in a tail comment",
+    '* ENDFORM. fully commented',
+    "  CALL FUNCTION 'SSF_OPEN'.",
+    '  CALL METHOD lo_grid->check_changed_data.',
+    '  lv2 = |tpl ENDFORM end|.',
+    '  CLASS-METHODS: none_here.',
+    '  ENDFORM.',
+    'ENDFORM.',
+  ].join('\n');
+  // Only the last line balances the opener; everything above must not count.
+  const r = replaceSourceBlock(src, 'FORM f.', 'ENDFORM.', 'FORM f.\nENDFORM.');
+  assert.equal(r.matchMode, 'structured');
+  assert.equal(r.endLineNumber, 8);
+});
+
+test('structured ends: TO UPPER/LOWER CASE does not open a CASE block', () => {
+  const src = ['CASE sy-ucomm.', '  TRANSLATE lv TO UPPER CASE.', '  WHEN OTHERS.', 'ENDCASE.', 'ENDFORM.'].join('\n');
+  const r = replaceSourceBlock(src, 'CASE sy-ucomm.', 'ENDCASE.', 'CASE sy-ucomm.\nENDCASE.');
+  assert.equal(r.matchMode, 'structured');
+  assert.equal(r.endLineNumber, 4);
+});
+
+test('structured ends: DEFINE pairs with END-OF-DEFINITION (real macro block)', () => {
+  // Real lines 49-54: DEFINE _def_fetch_text. … END-OF-DEFINITION.
+  const r = replaceSourceBlock(
+    REAL_SOURCE,
+    'DEFINE _def_fetch_text.',
+    'END-OF-DEFINITION.',
+    'DEFINE _def_fetch_text.\nEND-OF-DEFINITION.',
+  );
+  assert.equal(r.matchMode, 'structured');
+  assert.equal(r.startLineNumber, 49);
+  assert.equal(r.endLineNumber, 54);
+});
+
+test('structured ends: non-opener start with a naked closer falls back to text tiers', () => {
+  // start = a PERFORM line inside frm_main, end = ENDFORM. → the start line
+  // opens no block, so structural resolution is impossible; text matching
+  // applies (first ENDFORM. at/after the start).
+  const r = replaceSourceBlock(REAL_SOURCE, 'PERFORM frm_auth_check.', 'ENDFORM.', 'PERFORM frm_auth_check.\nENDFORM.');
+  assert.equal(r.matchMode, 'text');
+  assert.equal(r.startLineNumber, 11);
+  assert.equal(r.endLineNumber, 18); // frm_main's ENDFORM.
+});
+
+test('structured ends: unbalanced depth falls back instead of mis-editing', () => {
+  // A FORM whose ENDFORM was lost (syntax-broken source): depth never closes
+  // → undefined → text fallback finds the FIRST ENDFORM (of the NEXT form),
+  // which at least matches what text matching always did — no silent wrong
+  // structural answer.
+  const broken = 'FORM broken.\n  x = 1.\nFORM next.\nENDFORM.';
+  const r = replaceSourceBlock(broken, 'FORM broken.', 'ENDFORM.', 'FORM broken.\nENDFORM.');
+  assert.equal(r.matchMode, 'text');
+  assert.equal(r.endLineNumber, 4);
+});
+
+test('structured ends: same-line compact block still resolves', () => {
+  const src = 'REPORT x.\nFORM one. ENDFORM.\nFORM two.\nENDFORM.';
+  const r = replaceSourceBlock(src, 'FORM one.', 'ENDFORM.', 'FORM one. ENDFORM.');
+  assert.equal(r.matchMode, 'structured');
+  assert.equal(r.startLineNumber, 2);
+  assert.equal(r.endLineNumber, 2);
+});
+
+// ---------------------------------------------------------------------------
+// oldText/newText mode (DSH-edit semantics)
+// ---------------------------------------------------------------------------
+
+test('oldText mode: multi-line verbatim quote incl. comments and CJK (real Mod block)', () => {
+  // Quote lines 336-339 verbatim (the *&& Begin/End-of-Mod block with the
+  // ZEXPORT_VOL DELETE and the Chinese comment inside) — must replace exactly.
+  const quote = [
+    '*&&--------Begin of Mod: S/4 SHYY_ABAP04_20.08.2026 16:47:36 母码信息导出EXCEL',
+    '      " 母码页签放出导出按钮',
+    "      DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.",
+    '*&&--------End of Mod: S/4 SHYY_ABAP04_20.08.2026 16:47:36 母码信息导出EXCEL',
+  ].join('\n');
+  const r = replaceSourceText(REAL_SOURCE, quote, '      " mod removed');
+  assert.equal(r.matchMode, 'text');
+  assert.equal(r.startLineNumber, 336);
+  assert.equal(r.endLineNumber, 339);
+  assert.equal(r.oldLines, 4);
+  // The DELETE inside the mod block is gone (the fcode-LIST entry at line
+  // 327 mentions ZEXPORT_VOL too and must SURVIVE).
+  assert.ok(!r.full.includes("DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'"));
+  assert.ok(r.full.includes("( fcode = 'ZEXPORT_VOL' ) \" 导出母码信息EXCEL"));
+  // Verbatim quote with CRLF line endings matches an LF source just as well.
+  const crlf = replaceSourceText(REAL_SOURCE, quote.replace(/\n/g, '\r\n'), 'x');
+  assert.equal(crlf.startLineNumber, 336);
+});
+
+test('oldText mode: single-line quote goes through the tiered path', () => {
+  const r = replaceSourceText(REAL_SOURCE, "DELETE ct_extab WHERE fcode = 'ZEXPORT_VOL'.", "      DELETE ct_extab WHERE fcode = 'ZEXP_VOL'.");
+  assert.equal(r.oldLines, 1);
+  assert.equal(r.startLineNumber, 338);
+  // Spacing variance inside quotes (loose tier).
+  const loose = replaceSourceText(REAL_SOURCE, "_init_fieldcat 'BUKRS' '公司代码' 'ZFIT_YSFJ_0003' 'BUKRS'.", '  x.');
+  assert.equal(loose.matchMode, 'text-loose');
+  assert.equal(loose.startLineNumber, 181);
+});
+
+test('oldText mode: ambiguity demands more context; occurrence picks', () => {
+  const dup = "( fcode = 'ZPRINT_SUB' ) \" 打印子码";
+  assert.throws(
+    () => replaceSourceText(REAL_SOURCE, dup, 'x'),
+    /matches 2 locations.*#1 line 322.*#2 line 323.*include neighboring lines/s,
+  );
+  // DSH-style disambiguation: extend the quote with a neighboring line. In
+  // the source the order is SUB(322) SUB(323) PAR(324) — quote "SUB then PAR"
+  // which matches only the SECOND duplicate (323..324).
+  const extended = `${dup}\n( fcode = 'ZPRINT_PAR' ) " 打印母码`;
+  const r = replaceSourceText(REAL_SOURCE, extended, '    ( fcode = ' + "'X'" + ' )');
+  assert.equal(r.startLineNumber, 323); // the ZPRINT_SUB right before ZPRINT_PAR
+  assert.equal(r.oldLines, 2);
+  // occurrence also works on single-line duplicates.
+  const second = replaceSourceText(REAL_SOURCE, dup, 'x', { occurrence: 2 });
+  assert.equal(second.startLineNumber, 323);
+});
+
+test('oldText mode: not-found lists closest lines; mixed params rejected', () => {
+  assert.throws(
+    () => replaceSourceText(REAL_SOURCE, "DELETE ct_extab WHERE fcode = 'NOPE_X'.", 'x'),
+    /not found.*closest lines/s,
+  );
+});
+
+test('oldText mode via the tool against the mock (mode exclusivity + happy path)', async () => {
+  const by = tools();
+  const client = registry.require().client;
+  const uri = '/sap/bc/adt/programs/programs/zprog_demo';
+  const original = (await client.readSource(uri)).source;
+  try {
+    await client.updateSource(uri, REAL_SOURCE);
+    // Mixed params rejected.
+    await assert.rejects(
+      () =>
+        by.get('adt_edit_object')!.execute(
+          { objectUri: uri, type: 'PROG', oldText: 'FORM frm_main .', newText: 'x', start: 'FORM' },
+          exec,
+        ),
+      /oldText.*cannot be combined/s,
+    );
+    // Happy path: replace the lv_title assignment (single line, unique).
+    const edited = await by.get('adt_edit_object')!.execute(
+      {
+        objectUri: uri,
+        type: 'PROG',
+        oldText: "lv_title = '子码母码实时打印'.",
+        newText: "  lv_title = 'NEW TITLE'.",
+      },
+      exec,
+    );
+    assert.equal(edited.replaced, true);
+    assert.equal(edited.oldLines, 1);
+    assert.equal(edited.startLineNumber, 306);
+    const after = (await client.readSource(uri)).source;
+    assert.ok(after.includes("'NEW TITLE'"));
   } finally {
     await client.updateSource(uri, original);
   }

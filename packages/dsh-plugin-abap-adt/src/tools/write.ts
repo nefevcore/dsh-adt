@@ -92,8 +92,8 @@ export interface ReplaceBlockResult {
   newLines: number;
   startLineNumber: number;
   endLineNumber: number;
-  /** Which matcher tier resolved the start marker. */
-  matchMode: 'text' | 'text-loose' | 'text-raw' | 'line-number';
+  /** How the block was located: structured = ENDxxx resolved by nesting depth. */
+  matchMode: 'structured' | 'text' | 'text-loose' | 'text-raw' | 'line-number';
   occurrence?: number;
 }
 
@@ -159,6 +159,96 @@ function findMarkerHits(
     if (hits.length > 0) return { hits, mode: 'text-raw' };
   }
   return { hits: [], mode: 'text' };
+}
+
+// ---------------------------------------------------------------------------
+// Structured block pairing (ENDFORM & friends)
+// ---------------------------------------------------------------------------
+
+interface BlockPair {
+  /** Matches the OPENER token in prepared line text (comments/strings/guards removed). */
+  opener: RegExp;
+  /** Closer token, e.g. `ENDFORM`, `END-OF-DEFINITION`. */
+  closer: string;
+  closerRe: RegExp;
+}
+
+function pair(openerSource: string, closer: string): BlockPair {
+  return {
+    opener: new RegExp(`\\b(?:${openerSource})\\b`, 'gi'),
+    closer,
+    closerRe: new RegExp(`\\b${closer.replace(/[-]/g, '\\-')}\\b`, 'gi'),
+  };
+}
+
+/**
+ * ABAP block pairs. Only unambiguous, non-nesting-conflicting constructs are
+ * listed — anything riskier (AT/ENDAT vs event AT, BEGIN OF/END OF inline
+ * declarations) keeps the text-tier fallback instead of a wrong structural
+ * answer. `ELSE/ELSEIF/WHEN/CATCH/...` middle segments never affect depth.
+ */
+const BLOCK_PAIRS: BlockPair[] = [
+  pair('FORM', 'ENDFORM'),
+  pair('FUNCTION', 'ENDFUNCTION'),
+  pair('MODULE', 'ENDMODULE'),
+  pair('METHOD', 'ENDMETHOD'),
+  pair('IF', 'ENDIF'),
+  pair('CASE', 'ENDCASE'),
+  pair('DO', 'ENDDO'),
+  pair('LOOP', 'ENDLOOP'),
+  pair('WHILE', 'ENDWHILE'),
+  pair('TRY', 'ENDTRY'),
+  pair('DEFINE', 'END-OF-DEFINITION'),
+];
+const CLOSER_TO_PAIR = new Map(BLOCK_PAIRS.map((p) => [p.closer, p]));
+
+/**
+ * Prepare a line for structural token counting: comments stripped, string
+ * literals blanked (so 'xxx ENDFORM .' inside a literal never counts), and
+ * same-word false openers guarded (CALL FUNCTION, CALL METHOD, CLASS-METHOD,
+ * FUNCTION-POOL, TO UPPER/LOWER CASE).
+ */
+function prepareStructuralLine(line: string): string {
+  return stripAbapComment(line)
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/\|(?:[^|\\]|\\.)*\|/g, '')
+    .replace(/\bCALL\s+FUNCTION\b/gi, '')
+    .replace(/\bCALL\s+METHOD\b/gi, '')
+    .replace(/\bCLASS-METHOD\b/gi, '')
+    .replace(/\bFUNCTION-POOL\b/gi, '')
+    .replace(/\b(?:UPPER|LOWER)\s+CASE\b/gi, '');
+}
+
+const countMatches = (text: string, re: RegExp): number => (text.match(re) ?? []).length;
+
+/**
+ * Resolve the block end by NESTING DEPTH from the start line: count opener
+ * vs closer tokens of the SAME pair family; the line where the depth returns
+ * to zero is the block's own closer. Immune to duplicate closers (31×
+ * ENDFORM), nested blocks, keyword text inside strings/comments and CALL
+ * FUNCTION false openers. Returns undefined when the start line has no known
+ * opener or the depth never closes (→ caller falls back to text matching).
+ */
+function findStructuredEnd(lines: string[], startIdx: number): { endIdx: number; closer: string } | undefined {
+  const startLine = prepareStructuralLine(lines[startIdx] ?? '');
+  const active = BLOCK_PAIRS.filter((p) => p.opener.test(startLine));
+  if (active.length === 0) return undefined;
+  // A start line can only open ONE family in practice; the first match wins.
+  const p = active[0]!;
+  let depth = 0;
+  for (let i = startIdx; i < lines.length; i++) {
+    const text = prepareStructuralLine(lines[i] ?? '');
+    depth += countMatches(text, p.opener);
+    depth -= countMatches(text, p.closerRe);
+    if (depth <= 0) return { endIdx: i, closer: p.closer };
+  }
+  return undefined;
+}
+
+/** Is this end marker a NAKED closer (ENDFORM. / ENDIF / END-OF-DEFINITION.)? */
+function nakedCloser(endText: string): string | undefined {
+  const token = stripAbapComment(endText).trim().replace(/\.$/, '').toUpperCase().replace(/\s+/g, '');
+  return CLOSER_TO_PAIR.has(token) ? token : undefined;
 }
 
 /** Assemble the replaced source from resolved line indices. */
@@ -286,19 +376,136 @@ export function replaceSourceBlock(
     );
   }
 
-  // End: first match at/after (or ON) the start line.
-  const end = findMarkerHits(lines.slice(startIdx), endText);
-  if (end.hits.length === 0) {
-    const closest = suggestLines(lines, endText);
+  // End resolution. A NAKED closer (ENDFORM. / ENDIF. / END-OF-DEFINITION.)
+  // resolves STRUCTURALLY by nesting depth — immune to duplicate closers,
+  // nested blocks, keyword text inside strings/comments and CALL FUNCTION
+  // false openers. Anything else falls back to text matching (first hit
+  // at/after the start line).
+  let endIdx: number | undefined;
+  let endMode: ReplaceBlockResult['matchMode'] = start.mode;
+  if (nakedCloser(endText)) {
+    const structured = findStructuredEnd(lines, startIdx);
+    if (structured) {
+      endIdx = structured.endIdx;
+      endMode = 'structured';
+    }
+  }
+  if (endIdx === undefined) {
+    const end = findMarkerHits(lines.slice(startIdx), endText);
+    if (end.hits.length === 0) {
+      const closest = suggestLines(lines, endText);
+      throw new Error(
+        `adt_edit_object: end line "${endText}" not found at/after the start line ` +
+          `(start matched at line ${startIdx + 1}: ${(lines[startIdx] ?? '').trim()})` +
+          (closest.length ? `; closest lines: ${closest.join(' | ')}` : '') +
+          notFoundHint,
+      );
+    }
+    endIdx = startIdx + end.hits[0]!;
+  }
+  return spliceBlock(lines, startIdx, endIdx, replacement, nl, endMode, occurrence);
+}
+
+/**
+ * DSH-`edit` semantics for remote objects: replace an EXACT quoted text with
+ * new text. The agent quotes `oldText` verbatim from a recent
+ * adt_read_object (multi-line OK, tail comments tolerated) and the match runs
+ * against the CURRENT server-side source — if the remote changed meanwhile,
+ * the match simply fails (safe). Ambiguity is resolved the DSH way: include
+ * neighboring lines in the quote (or `occurrence`); not-found lists the
+ * closest lines so one re-read + retry converges.
+ *
+ * Matching: a single-line oldText goes through the tiered marker path
+ * (substring-friendly). A multi-line oldText requires per-line equality
+ * (comment-stripped, case-insensitive, whitespace collapsed; tier 2 tolerates
+ * spacing inside quotes) — i.e. quote exactly what you read.
+ */
+export function replaceSourceText(
+  source: string,
+  oldText: string,
+  newText: string,
+  options: { occurrence?: number } = {},
+): ReplaceBlockResult {
+  const oldLines = oldText.replace(/\r\n/g, '\n').split('\n');
+  if (oldLines.length <= 1) {
+    // Single line: route through the tiered marker path, but report
+    // ambiguity in DSH-edit terms (extend the quote, not tool parameters).
+    const probe = findMarkerHits(source.split(/\r\n|\n/), oldText);
+    if (probe.hits.length > 1 && options.occurrence === undefined) {
+      const candidates = probe.hits.map((i, n) => `#${n + 1} line ${i + 1}`).join('; ');
+      throw new Error(
+        `adt_edit_object: oldText matches ${probe.hits.length} locations (${candidates}); ` +
+          'include neighboring lines in oldText to make it unique, pass `occurrence`, or use startLine/endLine',
+      );
+    }
+    return replaceSourceBlock(source, oldText, oldText, newText, { occurrence: options.occurrence });
+  }
+
+  const nl = source.includes('\r\n') ? '\r\n' : '\n';
+  const lines = source.split(/\r\n|\n/);
+  const k = oldLines.length;
+
+  /** Per-line tier: 1 = stripped+collapsed equality, 2 = whitespace-free. */
+  const lineTier = (candidate: string, quoted: string): 0 | 1 | 2 => {
+    const a = stripAbapComment(candidate);
+    const b = stripAbapComment(quoted);
+    if (norm(a) === norm(b)) return 1;
+    if (nospace(a) === nospace(b)) return 2;
+    return 0;
+  };
+
+  const matches: Array<{ i: number; tier: 1 | 2 }> = [];
+  for (let i = 0; i + k <= lines.length; i++) {
+    let tier: 0 | 1 | 2 = 1;
+    for (let j = 0; j < k; j++) {
+      const t = lineTier(lines[i + j] ?? '', oldLines[j] ?? '');
+      if (t === 0) {
+        tier = 0;
+        break;
+      }
+      if (t === 2) tier = 2; // window degrades to tier 2 if ANY line needs it
+    }
+    if (tier !== 0) matches.push({ i, tier });
+  }
+  // Prefer exact-tier windows when any exist.
+  const exact = matches.filter((m) => m.tier === 1);
+  const chosen = exact.length > 0 ? exact : matches;
+
+  const notFoundHint =
+    ' — quote the text verbatim from a FRESH adt_read_object (the remote source may have changed), ' +
+    'and include neighboring lines to disambiguate';
+
+  if (chosen.length === 0) {
+    const closest = suggestLines(lines, oldLines[0] ?? oldText);
     throw new Error(
-      `adt_edit_object: end line "${endText}" not found at/after the start line ` +
-        `(start matched at line ${startIdx + 1}: ${(lines[startIdx] ?? '').trim()})` +
-        (closest.length ? `; closest lines: ${closest.join(' | ')}` : '') +
+      `adt_edit_object: oldText (${k} lines) not found in the ${lines.length}-line source` +
+        (closest.length ? `; closest lines to its first line: ${closest.join(' | ')}` : '') +
         notFoundHint,
     );
   }
-  const endIdx = startIdx + end.hits[0]!;
-  return spliceBlock(lines, startIdx, endIdx, replacement, nl, start.mode, occurrence);
+  const pick = (offset: number): ReplaceBlockResult =>
+    spliceBlock(lines, chosen[offset]!.i, chosen[offset]!.i + k - 1, newText, nl, exact.length > 0 ? 'text' : 'text-loose', options.occurrence);
+
+  if (chosen.length > 1) {
+    const occurrence = options.occurrence;
+    if (occurrence === undefined) {
+      const candidates = chosen
+        .map((m, n) => `#${n + 1} line ${m.i + 1}`)
+        .join('; ');
+      throw new Error(
+        `adt_edit_object: oldText matches ${chosen.length} locations (${candidates}); ` +
+          'include more surrounding lines in oldText to make it unique, pass `occurrence`, or use startLine/endLine',
+      );
+    }
+    if (occurrence < 1 || occurrence > chosen.length) {
+      throw new Error(
+        `adt_edit_object: occurrence ${occurrence} is out of range — oldText matches ` +
+          `${chosen.length} locations (1..${chosen.length})`,
+      );
+    }
+    return pick(occurrence - 1);
+  }
+  return pick(0);
 }
 
 export function writeTools(deps: ToolDeps, ctx: Context) {
@@ -463,38 +670,51 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
   const editSource = defineTool({
     name: 'adt_edit_object',
     description:
-      'Replace ONE code block of an existing source object (class method, FORM, function module, MODULE, include, ' +
-      'a SINGLE LINE, or any marker-delimited block) without uploading the whole object: locks the object, reads the ' +
-      'current source, replaces only the block, writes the full source back and unlocks; optionally activates. ' +
-      'MATCHING (case-insensitive, in tiers): comment-stripped substring → whitespace-free (spacing inside quotes ' +
-      "like 'BUKRS  ' vs 'BUKRS' tolerated) → raw lines (can address commented-out code). Markers copied verbatim " +
-      'with tail comments ("… " some comment") still match. `end` auto-derives for METHOD/FORM/FUNCTION/MODULE, ' +
-      'defaults to the `start` line otherwise; the end search takes the FIRST match at/after the start (closers like ' +
-      'ENDFORM. repeat — the first one after the block start is the block own). DUPLICATE lines: pass `occurrence` ' +
-      '(1-based among the matches, listed in the error). By POSITION: `startLine`/`endLine` (from adt_read_object) ' +
-      'bypass markers entirely — give `start` too and it is verified against that line as a stale-number guard. ' +
-      'Not-found errors list the closest lines (token similarity) — self-correct in one retry. ' +
-      'Provide the replacement block via `source` or `sourceFile`. Subject to the permission policy.',
+      'Replace part of an existing source object — DSH-`edit` style, without uploading the whole object: ' +
+      'locks, patches the current server-side source, writes back, unlocks; optionally activates. ' +
+      'TWO MODES — prefer (1) for precise edits, (2) for whole blocks: ' +
+      '(1) oldText + newText (recommended): quote the exact text to replace VERBATIM from a recent ' +
+      'adt_read_object (multi-line OK, tail comments tolerated) and give its replacement. Match runs ' +
+      'against the CURRENT remote source — if someone changed it meanwhile, the match fails safely. ' +
+      'Not unique → include neighboring lines in the quote (or `occurrence`); not found → the error ' +
+      'lists the closest lines; one re-read + retry converges. ' +
+      '(2) start/end block markers (whole METHOD/FORM/etc. without quoting it): bare closers ' +
+      '(ENDFORM./ENDIF./…) resolve structurally by nesting depth; DUPLICATE lines take `occurrence`; ' +
+      'by position use startLine/endLine. ' +
+      'Provide the replacement via `newText` (mode 1) or `source`/`sourceFile` (mode 2). ' +
+      'Subject to the permission policy.',
     parameters: {
       ...OBJECT_REF_PARAMS,
       ...PACKAGE_HINT_PARAM,
+      oldText: {
+        type: 'string',
+        description:
+          'Mode 1 (DSH-edit style): the exact text to replace, quoted verbatim from a recent adt_read_object. ' +
+          'Multi-line quotes are matched per line (comment/case/indent tolerant); make it unique by including ' +
+          'neighboring lines.',
+      },
+      newText: {
+        type: 'string',
+        description: 'Mode 1: the replacement text (full replacement of oldText; empty string deletes it).',
+      },
       start: {
         type: 'string',
         description:
-          'First line of the block to replace, e.g. "METHOD chat_audit." / "DELETE ct_extab WHERE …." — copied ' +
-          'verbatim from the current source works (tail comments tolerated). Required unless startLine is used.',
+          'Mode 2: first line of the block to replace (e.g. "METHOD chat_audit." / "FORM frm_xxx.") — ' +
+          'copied verbatim from the current source works (tail comments tolerated).',
       },
       end: {
         type: 'string',
         description:
-          'Last line of the block, e.g. "ENDMETHOD.". Optional: auto-derived for METHOD/FORM/FUNCTION/MODULE; ' +
-          'defaults to the `start` line (single-line replacement) for anything else.',
+          'Mode 2: last line of the block. A BARE closer (ENDFORM. / ENDIF. / ENDMETHOD. / END-OF-DEFINITION. …) ' +
+          'resolves structurally by nesting depth — recommended. Custom line text matches by tiers. Optional: ' +
+          'auto-derived for METHOD/FORM/FUNCTION/MODULE; defaults to the `start` line.',
       },
       occurrence: {
         type: 'integer',
         description:
-          '1-based index among the start marker\'s matches, when the SAME line appears multiple times in the ' +
-          'source (the ambiguity error lists them as #1, #2, … in file order).',
+          '1-based index among the matches (start marker or oldText), when the same text appears multiple ' +
+          'times (the ambiguity error lists them as #1, #2, … in file order).',
       },
       startLine: {
         type: 'integer',
@@ -506,10 +726,10 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         type: 'integer',
         description: 'Position mode: 1-based line number of the block end (defaults to startLine — single line).',
       },
-      source: { type: 'string', description: 'Replacement block text (the full new block, including its start/end lines).' },
+      source: { type: 'string', description: 'Mode 2: replacement block text (the full new block, including its start/end lines).' },
       sourceFile: {
         type: 'string',
-        description: 'Alternative to `source`: absolute path of a local UTF-8 file holding the replacement block.',
+        description: 'Mode 2 alternative to `source`: absolute path of a local UTF-8 file holding the replacement block.',
       },
       activate: {
         type: 'boolean',
@@ -545,8 +765,8 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           matchMode: {
             type: 'string',
             required: true,
-            enum: ['text', 'text-loose', 'text-raw', 'line-number'],
-            description: 'text = comment-stripped match; text-loose = spacing-tolerant; text-raw = matched comment text; line-number = position mode.',
+            enum: ['structured', 'text', 'text-loose', 'text-raw', 'line-number'],
+            description: 'structured = ENDxxx resolved by nesting depth (safest); text = comment-stripped match; text-loose = spacing-tolerant; text-raw = matched comment text; line-number = position mode.',
           },
           occurrence: { type: 'integer', description: 'Which duplicate match was edited (when occurrence was used).' },
           unlocked: { type: 'boolean' },
@@ -591,10 +811,27 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         signal: exec.signal,
       });
 
+      // ---- Mode validation: oldText (mode 1) vs start/startLine (mode 2). ----
+      const oldText = typeof args.oldText === 'string' ? args.oldText : undefined;
       const startText = String(args.start ?? '').trim();
       const hasStartLine = args.startLine !== undefined && args.startLine !== null;
-      if (!startText && !hasStartLine) {
-        throw new Error('adt_edit_object: provide `start` (text marker) or `startLine` (position)');
+      if (oldText !== undefined) {
+        if (startText || hasStartLine || args.end !== undefined || args.endLine !== undefined) {
+          throw new Error(
+            'adt_edit_object: `oldText` cannot be combined with `start`/`end`/`startLine`/`endLine` — ' +
+              'oldText+newText replaces the quoted text directly',
+          );
+        }
+        if (typeof args.newText !== 'string') {
+          throw new Error('adt_edit_object: `oldText` requires `newText` (the replacement; empty string deletes)');
+        }
+        if (args.source !== undefined || args.sourceFile !== undefined) {
+          throw new Error('adt_edit_object: `oldText` mode uses `newText`, not `source`/`sourceFile`');
+        }
+      } else if (!startText && !hasStartLine) {
+        throw new Error(
+          'adt_edit_object: provide `oldText`+`newText` (quote-and-replace, preferred) or `start`/`startLine` (block mode)',
+        );
       }
       if (args.endLine !== undefined && !hasStartLine) {
         throw new Error('adt_edit_object: `endLine` requires `startLine` (position mode)');
@@ -603,10 +840,10 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       if (occurrence !== undefined && (!Number.isInteger(occurrence) || occurrence < 1)) {
         throw new Error('adt_edit_object: `occurrence` must be a positive integer (1-based)');
       }
-      // End resolution: explicit `end` > derived closer (METHOD/FORM/…) >
-      // the start line itself (single-line replacement).
+      // Mode 2 end resolution: explicit `end` > derived closer (METHOD/FORM/…)
+      // > the start line itself (single-line replacement).
       const endText = String(args.end ?? '').trim() || defaultEndFor(startText) || startText;
-      const replacement = await resolveSourceInput(ctx, args);
+      const replacement = oldText !== undefined ? args.newText : await resolveSourceInput(ctx, args);
 
       // Explicitly-passed transport: policy-check up front, then the write
       // (PUT ?corrNr=…) records the change into EXACTLY this request.
@@ -627,11 +864,15 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       try {
         entry.policy.assertTransportUsage(effectiveTransport, `adt_edit_object (${ref.name})`);
         const current = (await entry.client.readSource(ref.uri, { signal: exec.signal })).source;
-        replaced = replaceSourceBlock(current, startText, endText, replacement, {
-          occurrence,
-          startLine: hasStartLine ? Number(args.startLine) : undefined,
-          endLine: args.endLine !== undefined ? Number(args.endLine) : undefined,
-        });
+        const replacementText = oldText !== undefined ? String(args.newText ?? '') : (replacement as string);
+        replaced =
+          oldText !== undefined
+            ? replaceSourceText(current, oldText, replacementText, { occurrence })
+            : replaceSourceBlock(current, startText, endText, replacementText, {
+                occurrence,
+                startLine: hasStartLine ? Number(args.startLine) : undefined,
+                endLine: args.endLine !== undefined ? Number(args.endLine) : undefined,
+              });
         await entry.client.writeSource(ref.uri, replaced.full, { lockHandle: handle, transport: effectiveTransport ?? undefined, signal: exec.signal });
         if (args.activate === true) {
           const act = await entry.client.activate([ref], { transport: effectiveTransport ?? undefined, signal: exec.signal });
@@ -654,11 +895,15 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           ? 'user'
           : 'auto'
         : undefined;
+      // In oldText mode report the first/last quoted line as the block labels.
+      const oldQuoteLines = oldText !== undefined ? oldText.replace(/\r\n/g, '\n').split('\n') : undefined;
+      const startLabel = oldQuoteLines ? (oldQuoteLines[0] ?? '').trim() : startText;
+      const endLabel = oldQuoteLines ? (oldQuoteLines[oldQuoteLines.length - 1] ?? '').trim() : endText;
       return {
         uri: ref.uri,
         name: ref.name,
-        start: startText,
-        end: endText,
+        start: startLabel,
+        end: endLabel,
         replaced: true,
         startLineNumber: replaced?.startLineNumber ?? 0,
         endLineNumber: replaced?.endLineNumber ?? 0,
