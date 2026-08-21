@@ -186,6 +186,19 @@ function normalizeUri(uri: string): string {
   return uri.startsWith('/sap/bc/adt') ? uri : `/sap/bc/adt${uri.startsWith('/') ? '' : '/'}${uri}`;
 }
 
+/**
+ * An object's BASE URI: the content-subresource suffix `/source/main` is
+ * stripped when present. Agents frequently copy SOURCE-form URIs from
+ * read/search outputs (`…/programs/programs/zfoo/source/main`); object-level
+ * endpoints (versions, lock, metadata, deletion, transport relations) answer
+ * 404 on the suffixed form, so every object-level method normalizes through
+ * here first.
+ */
+function objectBaseUri(objectUri: string): string {
+  const uri = normalizeUri(objectUri);
+  return uri.endsWith('/source/main') ? uri.slice(0, -'/source/main'.length) : uri;
+}
+
 export class AdtClient {
   readonly destination: AdtDestination;
   private readonly cookies = new Map<string, string>();
@@ -599,7 +612,7 @@ export class AdtClient {
    * unlock) and the transport request the backend assigned (CORRNR).
    */
   async lock(objectUri: string, options: { signal?: AbortSignal } = {}): Promise<{ handle: string; transport?: string }> {
-    const uri = normalizeUri(objectUri);
+    const uri = objectBaseUri(objectUri);
     const query = this.baseQuery({ _action: 'LOCK', accessMode: 'MODIFY' });
     const res = await this.request({
       method: 'POST',
@@ -616,7 +629,7 @@ export class AdtClient {
 
   /** Unlock an object previously locked with the given handle. */
   async unlock(objectUri: string, handle: string, options: { signal?: AbortSignal } = {}): Promise<void> {
-    const uri = normalizeUri(objectUri);
+    const uri = objectBaseUri(objectUri);
     const query = this.baseQuery({ _action: 'UNLOCK', lockHandle: handle });
     await this.request({
       method: 'POST',
@@ -638,7 +651,7 @@ export class AdtClient {
     handle?: string,
     options: { signal?: AbortSignal } = {},
   ): Promise<{ released: boolean; note?: string }> {
-    const uri = normalizeUri(objectUri);
+    const uri = objectBaseUri(objectUri);
     if (handle) {
       try {
         await this.unlock(uri, handle, options);
@@ -1000,7 +1013,9 @@ export class AdtClient {
    * resolve is an open task of an unreleased request.
    */
   async getVersions(objectUri: string, options: { signal?: AbortSignal } = {}): Promise<AdtObjectVersion[]> {
-    const uri = normalizeUri(objectUri);
+    // Object-level endpoint: tolerate source-form URIs (…/source/main) —
+    // appending to them used to produce …/source/main/source/main/versions → 404.
+    const uri = objectBaseUri(objectUri);
     const res = await this.request({
       path: `${uri}/source/main/versions${toQuery(this.baseQuery())}`,
       accept: 'application/atom+xml;type=feed',
@@ -1037,7 +1052,7 @@ export class AdtClient {
     objectUri: string,
     options: { enableAllTypes?: boolean; signal?: AbortSignal } = {},
   ): Promise<AdtWhereUsedResult> {
-    const uri = normalizeUri(objectUri);
+    const uri = objectBaseUri(objectUri);
     const params = this.baseQuery({ uri });
     if (options.enableAllTypes) params.enableAllTypes = true;
     const res = await this.request({
@@ -1130,7 +1145,7 @@ export class AdtClient {
     type?: string,
     options: { signal?: AbortSignal } = {},
   ): Promise<AdtObjectLockInfo> {
-    const uri = normalizeUri(objectUri);
+    const uri = objectBaseUri(objectUri);
     // Strict backends negotiate object metadata by the TYPE-specific media
     // type (e.g. application/vnd.sap.adt.oo.classes.v4+xml for a class) and
     // reject the generic object media type with HTTP 406; other backends (and
@@ -1343,7 +1358,7 @@ export class AdtClient {
     objectUri: string,
     options: { transport?: string; signal?: AbortSignal } = {},
   ): Promise<void> {
-    const uri = normalizeUri(objectUri);
+    const uri = objectBaseUri(objectUri);
     // 1) Modern deletion service (NW 7.5x+; strictly negotiated media types).
     try {
       const body = `<?xml version="1.0" encoding="UTF-8"?>
@@ -1561,7 +1576,7 @@ export class AdtClient {
     kind: AdtStructureKind,
     options: { signal?: AbortSignal } = {},
   ): Promise<AdtStructureData> {
-    const uri = normalizeUri(objectUri);
+    const uri = objectBaseUri(objectUri);
     const res = await this.request({
       path: `${uri}${toQuery(this.baseQuery({}))}`,
       accept: structureMediaType(kind),
@@ -1587,7 +1602,7 @@ export class AdtClient {
       signal?: AbortSignal;
     } = {},
   ): Promise<AdtStructureWriteResult> {
-    const uri = normalizeUri(objectUri);
+    const uri = objectBaseUri(objectUri);
     const { handle, transport: assigned } = await this.lock(uri, { signal: options.signal });
     try {
       if (options.onLocked) options.onLocked(options.transport ? undefined : assigned);

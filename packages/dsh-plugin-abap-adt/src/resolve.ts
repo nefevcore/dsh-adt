@@ -70,9 +70,12 @@ export async function resolveObject(
   signal?: AbortSignal,
 ): Promise<AdtObjectRef> {
   if (input.objectUri) {
-    const uri = input.objectUri.startsWith('/sap/bc/adt')
+    let uri = input.objectUri.startsWith('/sap/bc/adt')
       ? input.objectUri
       : `/sap/bc/adt${input.objectUri.startsWith('/') ? '' : '/'}${input.objectUri}`;
+    // Agents frequently copy SOURCE-form URIs (…/source/main) from read/search
+    // outputs; the OBJECT form is what every tool wants downstream.
+    if (uri.endsWith('/source/main')) uri = uri.slice(0, -'/source/main'.length);
     const t = normalizeType(input.type);
     return { uri, type: t.type, name: input.name?.toUpperCase() ?? uri.split('/').pop() ?? '', category: t.type.split('/')[0] };
   }

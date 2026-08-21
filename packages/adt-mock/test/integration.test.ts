@@ -282,6 +282,25 @@ test('data preview returns columns and rows (ddic + cds + freestyle)', async () 
   assert.ok(sql.columns.length >= 2);
 });
 
+test('object-level endpoints tolerate source-form URIs (…/source/main)', async () => {
+  const c = client();
+  const sourceForm = '/sap/bc/adt/oo/classes/zcl_demo/source/main';
+
+  // getVersions on a source-form URI (the reported impc-dev 404: the client
+  // used to append → …/source/main/source/main/versions).
+  const versions = await c.getVersions(sourceForm);
+  assert.ok(versions.length >= 2);
+
+  // lock/unlock accept the source form as well.
+  const { handle } = await c.lock(sourceForm);
+  assert.ok(handle);
+  await c.unlock(sourceForm, handle);
+
+  // where-used normalizes too.
+  const wu = await c.getWhereUsed('/sap/bc/adt/oo/interfaces/zif_demo/source/main');
+  assert.equal(wu.totalReferences, 1);
+});
+
 test('version history exposes content URIs and version sources', async () => {
   const c = client();
   const uri = '/sap/bc/adt/oo/classes/zcl_demo';

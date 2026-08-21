@@ -11,6 +11,7 @@
 
 - 所有资源挂 `/sap/bc/adt/` 前缀；对象 URI 命名一律**小写**
 - 子资源模式：`<uri>/source/main`（源码）、`<uri>/source/main/versions`（版本）、`<uri>/includes/<段>`（类段）、`<uri>/transport`
+- URI 有两种形态：**对象 URI**（`…/oo/classes/zcl_demo`）与**源码形态**（`…/oo/classes/zcl_demo/source/main`，读/搜索输出常见）。对象级端点（versions、lock、where-used、transport、删除等）只认对象形态，直接对源码形态拼接会得到 `…/source/main/source/main/versions` → 404；客户端所有对象级方法先经 `objectBaseUri()` 剥掉 `/source/main` 后缀再拼接
 - 旧系统（BASIS ≤ 7.40）仅 `/sap/bc/adt/discovery`，现代系统 `/sap/bc/adt/core/discovery`
 
 ### 认证
