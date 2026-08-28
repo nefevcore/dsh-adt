@@ -337,6 +337,8 @@ export function localTools(_deps: ToolDeps, ctx: Context) {
         },
         render: (args, value: LocalCheckResult) => text(renderLocalCheck(args ?? {}, value)),
       },
+      // 300s: pure-CPU abaplint over a workspace directory (no network); the
+      // cap only guards against pathological input trees.
       timeoutMs: 300_000,
       execute: async (args, exec) => {
         // Optional service (audit D1): resolved at call time, not injected.

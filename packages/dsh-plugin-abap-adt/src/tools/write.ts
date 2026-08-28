@@ -681,6 +681,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       // fresh object gets a NEW auto-created task).
       const effectiveTransport = transport ?? assignedTransport;
       ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: effectiveTransport });
+      let succeeded = false;
       try {
         // Whatever transport is finally used — user's or auto-assigned — must
         // be within allowedTransports, or the edit is rolled back.
@@ -705,26 +706,22 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
             message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ' ' + i.message : ''}`).join('; ') || undefined,
           };
         }
-        if (unlock) {
+        succeeded = true;
+      } finally {
+        // Same finally shape as adt_edit_object / adt_push_object: on ERROR
+        // always roll back the lock (even with unlock:false — there is
+        // nothing to keep locked when the edit failed); on SUCCESS unlock
+        // only when unlock !== false. The ledger entry is forgotten only
+        // when the unlock actually happened — otherwise adt_unlock_all must
+        // still be able to retry it.
+        if (!succeeded || unlock) {
           const released = await entry.client
             .unlock(ref.uri, handle)
             .then(() => true)
             .catch(() => false);
-          if (released) {
-            // Only forget the ledger entry when the unlock actually happened;
-            // otherwise adt_unlock_all must still be able to retry.
-            ledger.deregister(entry.config.name, ref.uri);
-            unlocked = true;
-          }
+          if (released) ledger.deregister(entry.config.name, ref.uri);
+          unlocked = released;
         }
-      } catch (error) {
-        // Policy denial or write failure → always roll back the lock. Keep the
-        // ledger entry when the rollback unlock fails so it stays retryable.
-        await entry.client.unlock(ref.uri, handle).then(
-          () => ledger.deregister(entry.config.name, ref.uri),
-          () => undefined,
-        );
-        throw error;
       }
       // Post-write persistence verification + snapshot refresh from the same
       // read-back (OCC base = real server state, not what we SENT — backends
@@ -1140,6 +1137,8 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
                 : ''),
         ),
     },
+    // 180s: push = verify (GET) + write (PUT) + optional activate + unlock;
+    // a handful of client round trips, each with its own deadline.
     timeoutMs: 180_000,
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));

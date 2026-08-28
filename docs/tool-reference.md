@@ -56,7 +56,7 @@
 - **返回**：`uri, name, type, source（窗口内）, description?, properties{}, startLine, endLine, totalLines, localCopy?（快照路径）, snapshotHash?（冲突校验基准哈希）`。全量读取（≤2000 行）仍重放为行号化 read 卡片。
 - **include 解析**（impc-dev 实战）：`name+type=PROG` 传 include 名不再 404——PROG/INCL 族的按约定 URI 是二义的（`/programs/programs/` vs `/programs/includes/`），解析先做精确名搜索取真实 URI/type，搜索不可用才回落约定 URI。
 
-### adt_push_object 🛡（pull→edit→push 的 push 半）
+### adt_push_object 🛡⏱180s（pull→edit→push 的 push 半）
 把本地编辑后的快照上传服务器，**上传前在持锁状态下做哈希校验**：服务端仍是快照基准状态 → 上传；被他人改过 → `[CONFLICT]` 拒绝且服务端不动，本地文件保留——重读、合并、再推。上传后**回读验证持久性**（见 adt_write_object 的 `persisted`）。
 - **入参**：对象三元组；`packageName`；`path`（默认 = adt_read_object 建立的跟踪快照；自定义路径=无基准不校验）；`activate`；`transport`。
 - **返回**：`uri, name, pushed, verified, localCopy, unlocked?, activated?, persisted?, warning?, transport?, transportSource?, activation?`。
@@ -220,7 +220,7 @@
 - **入参**：对象三元组；`kind`（枚举，默认按类型码推导）。
 - **返回**：`kind, name, description?, packageName?` + 按类型：MSAG `messages[]`；DOMA `properties{} + fixedValues[]`；DTEL `properties{} + labels{}`；TTYP `properties{}`。
 
-### adt_write_structure
+### adt_write_structure 🛡⏱180s
 改 DDIC 对象的结构化元数据——read-modify-write：lock → GET 原文 → **只补丁显式提供的字段** → PUT → unlock（SAP 管理属性全量保留）。与所有编辑工具同策略（包白名单 + 传输管控含 CORRNR 回滚）。
 - **入参**：对象三元组；`kind`；按类型提供 `description` / `messages[]`（MSAG 全量替换，缺号即删）/ `properties{}`（DOMA/DTEL/TTYP 局部补丁）/ `fixedValues[]`（DOMA 全量替换）/ `labels{}`（DTEL 局部补丁）；`transport`；`packageName`（策略 hint）。
 - **返回**：`name, kind, changed[]（应用的字段）, transport?, data（写后生效结构）`。

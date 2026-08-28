@@ -108,23 +108,15 @@ export class AdtRegistry {
     try {
       actualPort = await mock.listen();
     } catch (error) {
-      // HMR reload can race the previous mock's port release; fall back to a
-      // random free port instead of failing the whole plugin load.
+      // HMR reload can race the previous mock's port release; re-listen the
+      // SAME server on a random free port instead of failing the load.
       if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-        const retry = createMockAdtServer({
-          port: 0,
-          host: '127.0.0.1',
-          username,
-          password,
-        });
-        actualPort = await retry.listen();
-        void mock.close().catch(() => undefined);
-        this.mockServer = retry;
+        actualPort = await mock.listen(0);
       } else {
         throw error;
       }
     }
-    if (!this.mockServer) this.mockServer = mock;
+    this.mockServer = mock;
     this.mockPort = actualPort;
     this.destinations.set('demo', {
       config: {

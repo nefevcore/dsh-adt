@@ -71,6 +71,8 @@ export function testingTools(deps: ToolDeps) {
         return text(lines.join('\n'));
       },
     },
+    // 330s: unit run = POST + async poll loop; each round trip carries its own
+    // client deadline (default 60s), this is the total budget + margin.
     timeoutMs: 330_000,
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
@@ -196,6 +198,8 @@ export function testingTools(deps: ToolDeps) {
         return text(lines.join('\n'));
       },
     },
+    // 660s = 2× the unit budget: ATC check runs are measurably slower on real
+    // backends (full variant execution) and poll with the same loop shape.
     timeoutMs: 660_000,
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));

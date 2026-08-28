@@ -186,6 +186,8 @@ export function batchTools(deps, ctx) {
                 return text(lines.join('\n'));
             },
         },
+        // 180s: one $batch POST (single client deadline, default 60s) + response
+        // assembly; generous headroom for large multipart payloads.
         timeoutMs: 180_000,
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
@@ -311,6 +313,8 @@ export function batchTools(deps, ctx) {
                 ...value.files.map((f) => `- ${f.name} → ${f.path}${f.chars ? ` (${f.chars} chars)` : ''}`),
             ].join('\n')),
         },
+        // 600s: N sequential read round trips (one client deadline each) + local
+        // file writes; sized for large object sets, degraded per-entry on errors.
         timeoutMs: 600_000,
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));

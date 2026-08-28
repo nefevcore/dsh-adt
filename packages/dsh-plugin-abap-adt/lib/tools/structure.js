@@ -230,6 +230,8 @@ export function structureTools(deps) {
             },
             render: (_args, value) => text([`${value.name} (${value.kind}) updated${value.transport ? ` [transport ${value.transport}]` : ''}:`, `  changed: ${value.changed.join(', ') || '(nothing)'}`, '', ...renderStructure(value.data)].join('\n')),
         },
+        // 180s: lock + GET metadata + PUT patch + unlock (4 client round trips,
+        // each with its own deadline) + activation headroom.
         timeoutMs: 180_000,
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));

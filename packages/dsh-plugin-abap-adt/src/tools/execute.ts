@@ -66,6 +66,8 @@ export function executeTools(deps: ToolDeps) {
             ].join('\n'),
           ),
       },
+      // 330s = worst-case destination client deadline (300s) + margin; a single
+      // run call, so no multi-round-trip budget is needed.
       timeoutMs: 330_000,
       execute: async (args, exec) => {
         const entry = registry.require(destinationOf(args));
