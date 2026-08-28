@@ -25,10 +25,11 @@
 
 ## 分层
 
-### 1. `@nefevcore/abap-adt-protocol` — 协议客户端（零依赖，纯 Node）
+### 1. `@nefevcore/abap-adt-protocol` — 协议客户端（运行时仅 undici 依赖，懒加载）
 - `AdtClient`：单目的地 HTTP 客户端。封装认证（Basic）、CSRF 握手与重试、会话 cookie 管理（含 `sap-usercontext` 强制覆盖）、`sap-adt-connection-id` / stateful 会话头
 - 高层操作：discover / systemInfo / search / readSource / writeSource / lock / unlock / updateSource / activate / check / runUnitTests（异步轮询）/ runAtc（异步轮询）/ listAtcRuns / getAtcResult / getVersions / transports / packageContent / createObject / deleteObject / ping
 - `xml.ts`：为 ADT XML 载荷优化的零依赖解析器（命名空间剥离、CDATA、实体）
+- 唯一运行时依赖 `undici ^7`（package.json 声明），仅在 `strictSSL:false` 目的地首次使用时动态 import（自签名/私有 CA 前端）；默认路径运行时零第三方依赖
 
 ### 2. `@nefevcore/abap-adt-mock` — 内存版 ADT 服务器
 - 实现协议子集：AtomPub discovery、通配符搜索、`_action=LOCK/UNLOCK`、`/source/main` 读写、激活（HTTP 200 内嵌 `chkl:messages` 错误）、checkruns、ABAP Unit 异步 run（JUnit 结果）、ATC 异步 run（checkstyle 结果）、传输请求、类型专用创建集合、nodestructure

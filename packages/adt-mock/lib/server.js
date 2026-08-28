@@ -13,12 +13,11 @@
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { ADT_BASE } from '@nefevcore/abap-adt-protocol';
-import { DUMPS, OBJECTS, PACKAGES } from './data.js';
+import { DUMPS, OBJECTS } from './data.js';
 const NS_ADT = 'http://www.sap.com/adt/core';
 const NS_ASX = 'http://www.sap.com/abapxml';
 const NS_EXC = 'http://www.sap.com/adt/xml/exception';
 const NS_CHKL = 'http://www.sap.com/adt/checkresult';
-const NS_CHKRUN = 'http://www.sap.com/adt/checkrun';
 const NS_AUNIT = 'http://www.sap.com/adt/api/aunit';
 const NS_AUNIT_LEGACY = 'http://www.sap.com/adt/aunit';
 const NS_ATC = 'http://www.sap.com/adt/atc';
@@ -44,11 +43,6 @@ function objectRefXml(obj, state) {
     const lockedBy = lock?.user ? ` adtcore:lockedBy="${lock.user}"` : '';
     const corrNr = obj.corrNr ? ` adtcore:corrNr="${obj.corrNr}"` : '';
     return `<adtcore:objectReference adtcore:uri="${obj.uri}" adtcore:type="${obj.type}" adtcore:name="${obj.name}" adtcore:description="${xmlEscape(obj.description)}" adtcore:packageName="${obj.packageName}"${corrNr}${lockedBy}/>`;
-}
-/** Lock attribute fragment for metadata responses (empty when unlocked). */
-function lockAttr(state, obj) {
-    const lock = state.locked.get(obj.uri);
-    return lock?.user ? ` adtcore:lockedBy="${lock.user}"` : '';
 }
 /** Sample where-used references keyed by object name (uppercased). */
 const WHERE_USED = {
@@ -151,7 +145,6 @@ export function createMockAdtServer(options = {}) {
     const server = createServer(async (req, res) => {
         try {
             await handle(req, res, state, {
-                state,
                 systemId,
                 release,
                 username: options.username,
@@ -230,9 +223,6 @@ function setSession(req, res, state) {
     const id = randomUUID().replace(/-/g, '').toUpperCase();
     state.sessions.add(id);
     res.setHeader('Set-Cookie', `SAP_SESSIONID_MOCK_000=${id}; Path=/; HttpOnly`);
-}
-function isStateChanging(method) {
-    return method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
 }
 function checkCsrf(req, res, state) {
     const header = req.headers['x-csrf-token'];
@@ -1135,7 +1125,6 @@ function structuredKindFor(obj, accept, method) {
     if (!(category in STRUCTURED_MEDIA))
         return undefined;
     const media = STRUCTURED_MEDIA[category];
-    const marker = media.split(',')[0].trim().split('.')[0]; // e.g. 'application/vnd'
     // Match when the Accept header carries the kind-specific media type (or a
     // wildcard that the generic object handler would not claim more strongly).
     const acceptsStructured = media
@@ -1145,7 +1134,6 @@ function structuredKindFor(obj, accept, method) {
     if (acceptsStructured)
         return category;
     // A bare `application/xml` GET is ambiguous — the generic handler serves it.
-    void marker;
     return undefined;
 }
 /** Minimal structured skeleton for objects created without metadata XML. */

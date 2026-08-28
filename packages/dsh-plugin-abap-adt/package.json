@@ -18,6 +18,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@deepseek-ai/cosmokit": "^1.8.2",
     "@nefevcore/abap-adt-mock": "workspace:*",
     "@nefevcore/abap-adt-protocol": "workspace:*",
     "@abaplint/core": "^2.120.23",

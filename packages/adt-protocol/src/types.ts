@@ -70,7 +70,7 @@ export interface AdtObjectSearchHit {
   typeLabel: string;
   /** Parent package name, when reported. */
   packageName?: string;
-  /** URI usable with `readObjectSource`. */
+  /** URI usable with `readSource`. */
   uri: string;
   /** Optional technical category. */
   category?: string;

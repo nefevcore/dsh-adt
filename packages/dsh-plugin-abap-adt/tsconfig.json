@@ -4,8 +4,6 @@
     "rootDir": "src",
     "outDir": "lib",
     "composite": false,
-    "declaration": false,
-    "declarationMap": false,
     "noEmit": false
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts"]

@@ -113,6 +113,7 @@ export async function saveSnapshot(ctx, destination, ref, source) {
         fetchedAt: new Date().toISOString(),
     };
     const fileTarget = await fs.resolve(file);
+    // (expected, signal) are intentionally omitted — unconditional write.
     await fs.writeText(fileTarget, source, undefined, undefined);
     const sidecarTarget = await fs.resolve(sidecar);
     await fs.writeText(sidecarTarget, JSON.stringify(meta, null, 2), undefined, undefined);

@@ -161,16 +161,13 @@ function parseErrorBody(body: string): AdtMessage[] {
 /**
  * Lazy singleton undici Agent with TLS verification disabled, used for
  * destinations with `strictSSL: false` (self-signed / private-CA SAP
- * front-ends). Uses Node's built-in undici via `process.getBuiltinModule`
- * (Node >= 22.3); returns `undefined` when unavailable.
+ * front-ends). Dynamically imports the npm `undici` dependency (declared in
+ * package.json) only when such a destination is first used; the default
+ * (strictSSL) path stays dependency-free at runtime. On import failure the
+ * promise resolves to `null` — equivalent to no dispatcher being attached.
  */
-let insecureTlsDispatcher: unknown;
 let insecureTlsPromise: Promise<unknown> | undefined;
 function getInsecureTlsDispatcher(): unknown {
-  // Lazily load undici only for destinations with `strictSSL: false`
-  // (self-signed / private-CA SAP front-ends). The default path stays
-  // dependency-free at runtime.
-  if (insecureTlsDispatcher !== undefined) return insecureTlsDispatcher;
   if (!insecureTlsPromise) {
     insecureTlsPromise = import('undici')
       .then(({ Agent }) => new Agent({ connect: { rejectUnauthorized: false } }))
@@ -477,7 +474,10 @@ export class AdtClient {
       }
       return { status: response.status, headers: response.headers, text };
     }
-    throw new AdtError(`ADT ${method} ${path} -> CSRF retry exhausted`);
+    // Unreachable: every attempt returns or throws, and the only `continue`
+    // (CSRF/session retry) is guarded by `attempt === 0` — kept purely so
+    // the function's control flow type-checks.
+    throw new Error('unreachable');
   }
 
   /** Fetch (and cache) the CSRF token via the standard discovery probe. */
@@ -3142,18 +3142,14 @@ function uriForCreated(type: string, name: string): string {
  * Depth-first collection of transport request elements (local name `request`
  * or `transport`) anywhere in a Transport Organizer Tree. Task elements
  * (`task`, or `request` elements with type `T`) are skipped — only actual
- * requests are reported.
+ * requests are reported. Node names are local names: xml.ts strips the
+ * namespace prefix when parsing, so no prefixed spellings are checked.
  */
 function collectTransportRequests(root: XmlNode): XmlNode[] {
   const found: XmlNode[] = [];
   const visit = (node: XmlNode): void => {
     for (const child of node.children) {
-      if (
-        (child.name === 'request' || child.name.endsWith(':request')) &&
-        attr(child, 'type') !== 'T' &&
-        child.name !== 'task' &&
-        !child.name.endsWith(':task')
-      ) {
+      if (child.name === 'request' && attr(child, 'type') !== 'T') {
         found.push(child);
       }
       visit(child);
@@ -3165,12 +3161,7 @@ function collectTransportRequests(root: XmlNode): XmlNode[] {
 
 /** `true` when the node itself is a transport request element. */
 function isRequestElement(node: XmlNode): boolean {
-  return (
-    node.name === 'request' ||
-    node.name.endsWith(':request') ||
-    node.name === 'transport' ||
-    node.name.endsWith(':transport')
-  );
+  return node.name === 'request' || node.name === 'transport';
 }
 
 /** Depth-first search for the first request/transport element anywhere. */
