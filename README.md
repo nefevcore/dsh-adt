@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-152-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-194-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
 > **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **35 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, conflict-checked local snapshots, local export, offline abaplint). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system.
@@ -38,6 +38,12 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更走 DSH settings，免重启热生效。连接真实系统的 `destinations` 与权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
 ### 从 0.1.0 升级
+
+#### 0.4.0（安全与保真度修复）
+
+全量缺陷审核关闭（详见 [`docs/audit-fix-plan.md`](docs/audit-fix-plan.md)）：策略绕过三类修复（包名 hint 不可再欺骗白名单、拼错名绝不模糊落到别的对象、`$batch` 头注入/编码路径封死）、SSRF 凭证转发封堵（绝对 URL 同源校验）、SQL/`$query` 插值白名单、响应 body 超时覆盖、锁账本原子写与 `adt_write_structure` 锁登记、导出路径消毒、fs 降级真实生效（精简 profile 上只读工具可用）、上下文炸弹全线上限（execute 20k / dumps 8k / datapreview 500 行 / read 200k / diff 20k）、mock 保真度约 30 项对齐真实后端。升级命令同 0.2.0 的两步（update + 重建预设）。
+
+#### 0.2.0（默认不加载 + 配置迁 settings）
 
 0.2.0 改为**默认不加载**（全局层自动退场）且配置迁入 settings，升级后需做两件一次性操作：
 
@@ -171,7 +177,7 @@ abap-adt:
 
 ## 测试
 
-共 **152 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退——源自 impc-dev/D01 实战反馈）。
+共 **194 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退——源自 impc-dev/D01 实战反馈）。
 
 ## 路线图（可扩展方向）
 

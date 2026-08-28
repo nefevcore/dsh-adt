@@ -1,5 +1,7 @@
 # adt 工具盘点 · 行为分析 · Agent 使用优化方案
 
+> **历史评审存档**：本文写作时工具数为 30，现状（35 个工具、全部落地状态）以 [`docs/tool-reference.md`](tool-reference.md) 为准，正文不随现状重写。
+>
 > 范围：`packages/dsh-plugin-abap-adt`（30 个 `adt_*` 工具）+ 底层 `adt-protocol` 客户端行为。
 > 视角：把「调用方是 LLM Agent」作为一等约束来审视工具契约——调用链成本、上下文经济、失败可读性、误操作安全、长任务语义。
 >
