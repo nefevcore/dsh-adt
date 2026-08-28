@@ -4,7 +4,7 @@
  * call and returns a single go/no-go verdict. Read-only (runs checks only).
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
+import { AdtError, type AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 import { DESTINATION_PARAM, NAME_TYPE_OBJECTS_PARAM, clampWithNote, destinationOf, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
 
@@ -14,11 +14,14 @@ export interface GateStageResult {
   stage: GateStage;
   pass: boolean;
   summary: string;
+  skipped?: boolean;
 }
 
-/** Pure aggregation: all enabled stages must pass for a "go". */
+/** Pure aggregation: all enabled stages must pass for a "go"; a stage the
+ * backend does not deploy (skipped, e.g. no ATC service) does not veto. */
 export function aggregateGate(stages: GateStageResult[]): { verdict: 'go' | 'no-go' } {
-  return { verdict: stages.length > 0 && stages.every((s) => s.pass) ? 'go' : 'no-go' };
+  const judged = stages.filter((s) => !s.skipped);
+  return { verdict: judged.length > 0 && judged.every((s) => s.pass) ? 'go' : 'no-go' };
 }
 
 export function gateTools(deps: ToolDeps) {
@@ -63,6 +66,7 @@ export function gateTools(deps: ToolDeps) {
                   stage: { type: 'string', required: true },
                   pass: { type: 'boolean', required: true },
                   summary: { type: 'string', required: true },
+                  skipped: { type: 'boolean', description: 'true when the backend does not deploy this stage service.' },
                 },
               },
             },
@@ -71,7 +75,9 @@ export function gateTools(deps: ToolDeps) {
         render: (_args, value) => {
           const lines = [
             `Release gate for ${value.objectCount} object(s): ${value.verdict.toUpperCase()}`,
-            ...value.stages.map((s) => `- ${s.stage}: ${s.pass ? 'PASS' : 'FAIL'} — ${s.summary}`),
+            ...value.stages.map((s) =>
+              `- ${s.stage}: ${s.skipped ? 'SKIPPED' : s.pass ? 'PASS' : 'FAIL'} — ${s.summary}`,
+            ),
           ];
           return text(lines.join('\n'));
         },
@@ -91,7 +97,7 @@ export function gateTools(deps: ToolDeps) {
         } else if (Array.isArray(args.objects) && args.objects.length > 0) {
           const all: AdtObjectRef[] = [];
           for (const o of args.objects as Array<{ name: string; type?: string }>) {
-            all.push(await resolveObject(entry.client, { name: o.name, type: o.type }, 10, exec.signal));
+            all.push(await resolveObject(entry.client, { name: o.name, type: o.type }, { maxResults: 10, signal: exec.signal }));
           }
           refs = all.slice(0, cap);
           if (all.length > refs.length) truncated = true;
@@ -111,33 +117,59 @@ export function gateTools(deps: ToolDeps) {
         const variant = typeof args.variant === 'string' && args.variant ? args.variant : undefined;
 
         const stages: GateStageResult[] = [];
+        // A backend that does not deploy one of the stage services (404/405)
+        // must not fail the WHOLE gate with a raw error (audit P3): the
+        // stage is reported as skipped and does not veto the verdict —
+        // every other tool degrades this way too.
+        const runStage = async (stage: GateStage, fn: () => Promise<GateStageResult>): Promise<void> => {
+          try {
+            stages.push(await fn());
+          } catch (error) {
+            if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+              stages.push({
+                stage,
+                pass: false,
+                skipped: true,
+                summary: `service not deployed on this backend (HTTP ${error.status}) — stage skipped, verdict based on the remaining stages`,
+              });
+              return;
+            }
+            throw error;
+          }
+        };
 
         if (wanted.has('syntax')) {
-          const check = await entry.client.check(refs, { signal: exec.signal });
-          const errors = check.messages.filter((m) => m.severity === 'E' || m.severity === 'A');
-          stages.push({
-            stage: 'syntax',
-            pass: errors.length === 0,
-            summary: `${refs.length} object(s), ${errors.length} syntax error(s)`,
+          await runStage('syntax', async () => {
+            const check = await entry.client.check(refs, { signal: exec.signal });
+            const errors = check.messages.filter((m) => m.severity === 'E' || m.severity === 'A');
+            return {
+              stage: 'syntax' as const,
+              pass: errors.length === 0,
+              summary: `${refs.length} object(s), ${errors.length} syntax error(s)`,
+            };
           });
         }
 
         if (wanted.has('unit')) {
-          const unit = await entry.client.runUnitTests(refs, { signal: exec.signal });
-          stages.push({
-            stage: 'unit',
-            pass: unit.success,
-            summary: `overall ${unit.overall}, ${unit.total} test(s), ${unit.failed} failed, ${unit.errors} errors`,
+          await runStage('unit', async () => {
+            const unit = await entry.client.runUnitTests(refs, { signal: exec.signal });
+            return {
+              stage: 'unit' as const,
+              pass: unit.success,
+              summary: `overall ${unit.overall}, ${unit.total} test(s), ${unit.failed} failed, ${unit.errors} errors`,
+            };
           });
         }
 
         if (wanted.has('atc')) {
-          const atc = await entry.client.runAtc(refs, { variant, signal: exec.signal });
-          stages.push({
-            stage: 'atc',
-            pass: atc.clean,
-            summary: `clean=${atc.clean}, ${atc.findings.length} finding(s)` +
-              ` (E ${atc.counts.ERROR}, C ${atc.counts.CRITICAL}, W ${atc.counts.WARNING})`,
+          await runStage('atc', async () => {
+            const atc = await entry.client.runAtc(refs, { variant, signal: exec.signal });
+            return {
+              stage: 'atc' as const,
+              pass: atc.clean,
+              summary: `clean=${atc.clean}, ${atc.findings.length} finding(s)` +
+                ` (E ${atc.counts.ERROR}, C ${atc.counts.CRITICAL}, W ${atc.counts.WARNING})`,
+            };
           });
         }
 

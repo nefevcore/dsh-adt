@@ -24,3 +24,26 @@ test('aggregateGate: any failure → no-go', () => {
 test('aggregateGate: empty stage list is not a go', () => {
   assert.equal(aggregateGate([]).verdict, 'no-go');
 });
+
+test('aggregateGate: a SKIPPED stage (service not deployed) does not veto (audit P3)', () => {
+  assert.equal(
+    aggregateGate([
+      { stage: 'syntax', pass: true, summary: '' },
+      { stage: 'atc', pass: false, skipped: true, summary: 'service not deployed (HTTP 404)' },
+    ]).verdict,
+    'go',
+  );
+  // But pass=false without skipped still vetoes.
+  assert.equal(
+    aggregateGate([
+      { stage: 'syntax', pass: true, summary: '' },
+      { stage: 'atc', pass: false, summary: 'findings' },
+    ]).verdict,
+    'no-go',
+  );
+  // Only-skipped is not an automatic pass either.
+  assert.equal(
+    aggregateGate([{ stage: 'atc', pass: false, skipped: true, summary: '' }]).verdict,
+    'no-go',
+  );
+});

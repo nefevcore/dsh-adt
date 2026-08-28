@@ -11,33 +11,35 @@ export function atcRunTools(deps: ToolDeps) {
   const listAtcRuns = defineTool({
     name: 'adt_list_atc_runs',
     description:
-      'List existing ATC (ABAP Test Cockpit) runs stored on the system. ' +
-      'The backend requires at least one filter; when none is given, runs created by the ' +
-      'logged-on user are listed. Each run shows its display id, creator, timestamp and state.',
+      'List existing ATC (ABAP Test Cockpit) runs stored on the system. Each run shows its display id, creator, ' +
+      'timestamp, state and P1–P4 finding aggregates. Backend support varies: many systems require a filter ' +
+      '(the logged-on user is sent by default), but subset implementations accept a PARAMETERLESS query only and ' +
+      'reject every filter with HTTP 400 — rejected filters are automatically retried without parameters. When ' +
+      'accurate P1–P4 counts matter, prefer this list over re-parsing a single result via adt_get_atc_result.',
     parameters: {
       createdBy: {
         type: 'string',
-        description: 'Filter by the user who created the run (default: logged-on user).',
+        description: 'Filter by the user who created the run (default: logged-on user). Ignored by subset backends.',
       },
       ageMin: {
         type: 'integer',
-        description: 'Minimum age in days (only runs older than this).',
+        description: 'Minimum age in days (only runs older than this). Ignored by subset backends.',
       },
       ageMax: {
         type: 'integer',
-        description: 'Maximum age in days (only runs younger than this).',
+        description: 'Maximum age in days (only runs younger than this). Ignored by subset backends.',
       },
       central: {
         type: 'boolean',
-        description: 'List central (system-wide) check results instead of local ones.',
+        description: 'List central (system-wide) check results instead of local ones. Ignored by subset backends.',
       },
       active: {
         type: 'boolean',
-        description: 'List active (local) check results.',
+        description: 'List active (local) check results. Ignored by subset backends.',
       },
       sysId: {
         type: 'string',
-        description: 'Filter by system id (with central results).',
+        description: 'Filter by system id (with central results). Ignored by subset backends.',
       },
       ...DESTINATION_PARAM,
     },
@@ -130,8 +132,12 @@ export function atcRunTools(deps: ToolDeps) {
   const getAtcResult = defineTool({
     name: 'adt_get_atc_result',
     description:
-      'Fetch one stored ATC (ABAP Test Cockpit) run result by its display id. ' +
-      'Returns findings with severity, check and source position. Use adt_list_atc_runs to discover ids.',
+      'Fetch one stored ATC (ABAP Test Cockpit) run result by its display id. Returns findings with severity, check ' +
+      'and source position. Use adt_list_atc_runs to discover ids. POSITION MAPPING: backends often nest ALL findings ' +
+      'of a program under the MAIN program name while `line` counts in the INCLUDE the finding really points at — ' +
+      'check each finding\'s `uri` (the object the line belongs to) before jumping to a line in the main program. ' +
+      'P1–P4 aggregates come from the result body when it carries them, otherwise they are derived from the finding ' +
+      'priorities; adt_list_atc_runs remains the authoritative source for aggregates.',
     parameters: {
       displayId: {
         type: 'string',
@@ -166,6 +172,11 @@ export function atcRunTools(deps: ToolDeps) {
                 severity: { type: 'string', required: true },
                 message: { type: 'string', required: true },
                 objectName: { type: 'string', required: true },
+                uri: {
+                  type: 'string',
+                  description:
+                    'URI of the object the `line` refers to (often an include while objectName is the main program).',
+                },
                 line: { type: 'integer' },
                 check: { type: 'string' },
               },
@@ -211,7 +222,11 @@ export function atcRunTools(deps: ToolDeps) {
             `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC}${agg}`,
         ];
         for (const f of value.findings) {
-          lines.push(`- [${f.severity}] ${f.objectName}${f.line ? `:${f.line}` : ''} — ${f.checkTitle}: ${f.message}`);
+          // Make the include↔line mapping visible when the finding's URI names
+          // a different object than the (main program) objectName.
+          const uriBase = f.uri ? f.uri.replace(/\/source\/main.*$/, '').split('/').pop()?.split('.')[0] : undefined;
+          const inInclude = uriBase && uriBase.toUpperCase() !== f.objectName.toUpperCase() ? ` (in ${uriBase})` : '';
+          lines.push(`- [${f.severity}] ${f.objectName}${inInclude}${f.line ? `:${f.line}` : ''} — ${f.checkTitle}: ${f.message}`);
         }
         if (value.rawXml && value.findings.length === 0) {
           lines.push('');
@@ -238,6 +253,7 @@ export function atcRunTools(deps: ToolDeps) {
           severity: f.severity,
           message: f.message,
           objectName: f.objectName,
+          uri: f.locationUri || f.uri || undefined,
           line: f.line,
           check: f.check,
         })),

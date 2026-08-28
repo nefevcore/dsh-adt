@@ -31,7 +31,8 @@ export const PACKAGE_HINT_PARAM = {
   packageName: {
     type: 'string',
     description:
-      'Package of the object; used for the permission check when the backend does not expose it.',
+      'Package of the object. Only consulted as a FALLBACK when the backend does not expose the package — ' +
+      'the backend-reported package always wins for the permission check.',
   },
 } as const;
 
@@ -40,14 +41,18 @@ export const PACKAGE_HINT_PARAM = {
  * (activate, check, unit tests, ATC). Each entry is `{objectUri}` or
  * `{name, type}` — `name` is optional so a bare `objectUri` validates too.
  * Entries may carry `packageName` as a permission-check hint.
+ * Bounded at MAX_OBJECT_LIST entries per call (audit P3).
  */
+export const MAX_OBJECT_LIST = 50;
+
 export const OBJECTS_PARAM = {
   objects: {
     type: 'array',
     required: true,
     description:
-      'Objects to process. Each entry: {objectUri} or {name, type}. Pass ALL related objects in ONE call — ' +
-      'e.g. a PROG main program AND its includes (activation does not cascade to includes on most backends).',
+      `Objects to process (1..${MAX_OBJECT_LIST} per call). Each entry: {objectUri} or {name, type}. ` +
+      'Pass ALL related objects in ONE call — e.g. a PROG main program AND its includes (activation does ' +
+      'not cascade to includes on most backends). Larger sets: split into consecutive calls.',
     items: {
       type: 'object',
       additionalProperties: false,
@@ -58,12 +63,35 @@ export const OBJECTS_PARAM = {
         type: { type: 'string', description: 'Object type, e.g. CLAS, PROG, DDLS.' },
         packageName: {
           type: 'string',
-          description: 'Optional package hint for the permission check (mutating tools only).',
+          description: 'Optional package hint for the permission check (fallback only; backend-reported package wins).',
         },
       },
     },
   },
 } as const;
+
+/**
+ * Validate a shared `objects` argument before fan-out (audit P3): an empty
+ * list used to pass `required` and silently do nothing, and the list length
+ * was unbounded — every entry fans out into backend requests.
+ */
+export function requireObjectList(
+  args: Record<string, unknown>,
+  toolName: string,
+  max = MAX_OBJECT_LIST,
+): Array<Record<string, unknown>> {
+  const raw = args.objects;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error(`${toolName}: \`objects\` must contain at least one entry ({objectUri} or {name, type})`);
+  }
+  if (raw.length > max) {
+    throw new Error(
+      `${toolName}: \`objects\` lists ${raw.length} entries — split into multiple calls of at most ${max} ` +
+        '(per-entry fan-out is unbounded otherwise)',
+    );
+  }
+  return raw as Array<Record<string, unknown>>;
+}
 
 /**
  * Shared `objects` array parameter for tools that accept an explicit object
@@ -111,21 +139,26 @@ export function objectRefArgs(args: Record<string, unknown>): {
 /**
  * Resolve the object a tool call refers to: `objectUri` wins, otherwise
  * `name` (+ optional `type`) via search with exact-match preference.
+ * Mutating tools pass `{ strict: true }` — a near-miss name with only fuzzy
+ * search hits is then an error (listing the candidates) instead of silently
+ * resolving to a different object (audit H2).
  */
 export async function resolveToolObject(
   client: AdtClient,
   args: Record<string, unknown>,
   signal?: AbortSignal,
+  options: { strict?: boolean; toolName?: string } = {},
 ): Promise<AdtObjectRef> {
-  return resolveObject(client, objectRefArgs(args), 10, signal);
+  return resolveObject(client, objectRefArgs(args), { signal, ...options });
 }
 
 /**
  * Fail-closed permission gate for tools that modify an existing object
- * (write / edit / delete / activate): resolve the object's package (explicit
- * hint first, then an exact-name search hit) and assert the edit policy of
- * the DESTINATION the call targets. An undeterminable package is DENIED with
- * an AdtPolicyError naming the rule. Returns the resolved package name.
+ * (write / edit / delete / activate): resolve the object's package (exact
+ * backend search hit first; the caller's hint is only a fallback when the
+ * backend exposes nothing) and assert the edit policy of the DESTINATION
+ * the call targets. An undeterminable package is DENIED with an
+ * AdtPolicyError naming the rule. Returns the resolved package name.
  */
 export async function assertObjectEditable(
   destination: RegistryDestination,

@@ -20,7 +20,9 @@ export function lockTools(deps: ToolDeps) {
     description:
       'Read an object\'s lock state: whether it is locked for editing and by whom. ' +
       'Check before adt_write_object to avoid edit conflicts. Read-only (never acquires a lock). ' +
-      'Some backends do not expose lock state in metadata — the tool reports locked=null with a note then.',
+      'Some backends do not expose lock state in metadata — the tool reports locked=null with a note then, meaning ' +
+      'concurrent editors CANNOT be detected there; rely on the post-write `persisted` verification of ' +
+      'adt_edit_object / adt_write_object / adt_push_object instead.',
     parameters: {
       ...OBJECT_REF_PARAMS,
       ...DESTINATION_PARAM,

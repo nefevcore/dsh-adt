@@ -23,7 +23,8 @@ import { join } from 'node:path';
 const config = { ...builtinDefaults(), demo: true, demoPort: 0 };
 const registry = await AdtRegistry.create(config);
 const deps = { registry, ledger: new LockLedger() };
-const fakeCtx = { fs: undefined };
+// ctx fake WITHOUT dsh-fs (audit D1: fs is optional, resolved via ctx.get).
+const fakeCtx = { get: (_name) => undefined };
 const exec = { signal: undefined };
 
 const all = [
@@ -103,12 +104,16 @@ console.log(`check: success=${c2.success} messages=${c2.messages.length} allTagg
 // 9. export explicit object list (packageName no longer accepted)
 const tmp = mkdtempSync(join(tmpdir(), 'adt-smoke-'));
 const fakeFs = {
-  resolve: async (p) => p,
+  resolve: async (p, o) => {
+    const displayPath = o?.cwd ? `${String(o.cwd).replace(/[\\/]+$/, '')}/${p}` : p;
+    return { targetKey: `key:${displayPath}`, displayPath };
+  },
   readText: async () => '',
   writeText: async () => undefined,
   listDir: async () => [],
 };
-const batchWithFs = batchTools(deps, { ...fakeCtx, fs: fakeFs });
+const fsCtx = { get: (name) => (name === 'fs' ? fakeFs : undefined) };
+const batchWithFs = batchTools(deps, fsCtx);
 const exportTool = batchWithFs.find((t) => t.name === 'adt_export_objects');
 const x = await exportTool.execute(
   { objects: [{ name: 'ZCL_DEMO', type: 'CLAS' }, { name: 'ZSMOKE_DOMA', type: 'DOMA' }], targetDir: tmp },
@@ -130,7 +135,7 @@ console.log(`unlock dryRun: attempted=${d.attempted} released=${d.released.lengt
 // 11. gate + protocol-level batch
 const g = await by.get('adt_release_gate').execute({ objects: [{ name: 'ZCL_DEMO', type: 'CLAS' }], stages: ['syntax'] }, exec);
 console.log(`gate: verdict=${g.verdict} truncated=${g.truncated ?? false}`);
-const batchWithFs2 = batchTools(deps, { ...fakeCtx, fs: undefined });
+const batchWithFs2 = batchTools(deps, fakeCtx);
 const batchTool = batchWithFs2.find((t) => t.name === 'adt_batch');
 const b = await batchTool.execute(
   {

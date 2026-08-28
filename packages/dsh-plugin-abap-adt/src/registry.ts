@@ -92,11 +92,17 @@ export class AdtRegistry {
   }
 
   private async startMock(port: number): Promise<void> {
+    // One credential pair drives BOTH sides of the demo destination (audit M5):
+    // the mock server validates it and the demo client sends it. Defaults to
+    // demo/demo; ADT_MOCK_USER / ADT_MOCK_PASSWORD override both together, so
+    // setting them can never desync the pair into a 401 loop.
+    const username = process.env.ADT_MOCK_USER || 'demo';
+    const password = process.env.ADT_MOCK_PASSWORD || 'demo';
     const mock = createMockAdtServer({
       port,
       host: '127.0.0.1',
-      username: process.env.ADT_MOCK_USER,
-      password: process.env.ADT_MOCK_PASSWORD,
+      username,
+      password,
     });
     let actualPort: number;
     try {
@@ -108,8 +114,8 @@ export class AdtRegistry {
         const retry = createMockAdtServer({
           port: 0,
           host: '127.0.0.1',
-          username: process.env.ADT_MOCK_USER,
-          password: process.env.ADT_MOCK_PASSWORD,
+          username,
+          password,
         });
         actualPort = await retry.listen();
         void mock.close().catch(() => undefined);
@@ -126,7 +132,7 @@ export class AdtRegistry {
         url: `http://127.0.0.1:${actualPort}`,
         client: '000',
         language: 'EN',
-        auth: { type: 'basic', username: 'demo', password: 'demo' },
+        auth: { type: 'basic', username, password },
       },
       mock: true,
       client: new AdtClient({
@@ -134,7 +140,7 @@ export class AdtRegistry {
         url: `http://127.0.0.1:${actualPort}`,
         client: '000',
         language: 'EN',
-        auth: { type: 'basic', username: 'demo', password: 'demo' },
+        auth: { type: 'basic', username, password },
       }),
       // refreshed at the end of reload() with the global policy
       policy: this.policy,

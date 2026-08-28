@@ -9,7 +9,8 @@ export function transportTools(deps: ToolDeps) {
     name: 'adt_object_versions',
     description:
       'Read the version history (Atom feed) of a source object. Each version carries the transport request ' +
-      '(or open task) it was saved into — a read-only way to map objects to transports without locking.',
+      '(or open task) it was saved into — a read-only way to map objects to transports without locking. ' +
+      'Gated by the enableTransports policy knob (the feed exposes transport request numbers — audit P3).',
     parameters: {
       ...OBJECT_REF_PARAMS,
       ...DESTINATION_PARAM,
@@ -54,6 +55,9 @@ export function transportTools(deps: ToolDeps) {
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
+      // The feed reveals transport request numbers (audit P3 information
+      // leak): same gate as the rest of the transport tool family.
+      entry.policy.assertTransportsEnabled('adt_object_versions');
       const ref = await resolveToolObject(entry.client, args, exec.signal);
       let versions;
       try {
@@ -145,7 +149,10 @@ export function transportTools(deps: ToolDeps) {
     description:
       'List transport requests (CTO) of the current user: number, status, category, owner and (optionally) contained objects. ' +
       'Use `status: "modifiable"` (or the backend code "D") to show only open (unreleased) requests — the ones still being worked on. ' +
-      'Useful before activation or release operations.',
+      'Useful before activation or release operations. Semantic status words are translated to the backend letter codes, and ' +
+      'the result is additionally filtered client-side; when a backend rejects the server-side status parameter the list is ' +
+      're-fetched unfiltered and filtered locally — but ALWAYS cross-check with adt_get_transport / adt_object_versions ' +
+      'before concluding a request does not exist.',
     parameters: {
       allUsers: { type: 'boolean', description: 'List transports of all users (default false).' },
       status: {
@@ -191,7 +198,10 @@ export function transportTools(deps: ToolDeps) {
 
   const getTransport = defineTool({
     name: 'adt_get_transport',
-    description: 'Get one transport request including its contained objects (items).',
+    description:
+      'Get one transport request including its contained objects (items). NOTE: version histories (adt_object_versions) ' +
+      'record TASK-level numbers; querying a task number here returns its PARENT request — compare `number` in the ' +
+      'output with what you asked for and use the returned parent number for follow-ups.',
     parameters: {
       number: { type: 'string', required: true, description: 'Transport request number, e.g. S4HK900001.' },
       ...DESTINATION_PARAM,
@@ -203,6 +213,10 @@ export function transportTools(deps: ToolDeps) {
 
         properties: {
           number: { type: 'string', required: true },
+          requestedNumber: {
+            type: 'string',
+            description: 'The number as asked for — differs from `number` when a task was resolved to its parent request.',
+          },
           description: { type: 'string', required: true },
           status: { type: 'string', required: true },
           category: { type: 'string', required: true },
@@ -210,6 +224,7 @@ export function transportTools(deps: ToolDeps) {
           system: { type: 'string', required: true },
           client: { type: 'string', required: true },
           modifiable: { type: 'boolean', required: true },
+          note: { type: 'string', description: 'Present when the requested number resolved to a different request (task → parent).' },
           items: {
             type: 'array',
             required: true,
@@ -230,7 +245,8 @@ export function transportTools(deps: ToolDeps) {
       render: (_args, value) =>
         text(
           [
-            `${value.number} [${value.status}] ${value.category} ${value.owner}: ${value.description} (${value.system}/${value.client})`,
+            `${value.number} [${value.status}] ${value.category} ${value.owner}: ${value.description} (${value.system}/${value.client})` +
+              (value.note ? `\n  ⚠ ${value.note}` : ''),
             ...value.items.map((i) => `  ${i.action} ${i.name} (${i.type}) — ${i.description ?? ''}`),
           ].join('\n'),
         ),
@@ -244,8 +260,18 @@ export function transportTools(deps: ToolDeps) {
       entry.policy.assertTransportsEnabled('adt_get_transport');
       const number = String(args.number);
       const t = await entry.client.getTransport(number, { signal: exec.signal });
+      // Real CTO backends resolve a TASK number to its parent REQUEST (version
+      // feeds record task-level numbers) — surface that mapping explicitly so
+      // agents do not wonder why the header shows another number.
+      const requestedNumber = number.toUpperCase();
+      const taskNote =
+        t.number && requestedNumber !== t.number.toUpperCase()
+          ? `requested ${requestedNumber} is a task (or unknown) number — the backend resolved it to request ${t.number}; ` +
+            `use ${t.number} for follow-ups`
+          : undefined;
       return {
         number: t.number,
+        requestedNumber: taskNote ? requestedNumber : undefined,
         description: t.description,
         status: t.status,
         category: t.category,
@@ -253,6 +279,7 @@ export function transportTools(deps: ToolDeps) {
         system: t.system,
         client: t.client,
         modifiable: t.modifiable,
+        note: taskNote,
         items: (t.items ?? []).map((i) => ({
           name: i.name,
           type: i.type,

@@ -4,7 +4,16 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { PLUGIN_ROW, renderPresetYml, defaultSourcePresetId, findDshPresetRoot, parseArgs, main } from '../lib/cli.js';
+import {
+  PLUGIN_ROW,
+  renderPresetYml,
+  defaultSourcePresetId,
+  stripPresetRows,
+  STRIPPED_PRESET_ROWS,
+  findDshPresetRoot,
+  parseArgs,
+  main,
+} from '../lib/cli.js';
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -36,42 +45,57 @@ test('parseArgs: defaults, flags, and id validation', () => {
   assert.equal(parseArgs(['--force', '--dry-run']).force, true);
   assert.throws(() => parseArgs(['--nope']), /unknown option/);
   assert.throws(() => parseArgs(['--id', 'Bad_Id']), /must match/);
+  // Audit P3: a missing --from value errors instead of silently falling
+  // back, and path-like values cannot escape the shipped preset directory.
+  assert.throws(() => parseArgs(['--from']), /--from needs a shipped preset id/);
+  assert.throws(() => parseArgs(['--from', '../..']), /--from needs a shipped preset id/);
+  assert.throws(() => parseArgs(['--from', 'C:/evil']), /--from needs a shipped preset id/);
 });
 
 // ---------------------------------------------------------------------------
 // Environment-dependent helpers (isolated DSH_HOME)
 // ---------------------------------------------------------------------------
 
-test('defaultSourcePresetId: a locally generated preset never becomes the source (self-copy guard)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'abap-adt-cli-'));
-  const previous = process.env.DSH_HOME;
-  process.env.DSH_HOME = dir;
-  try {
-    writeFileSync(join(dir, 'settings.yaml'), 'agent-presets:\n  default: abap-adt\n', 'utf8');
-    mkdirSync(join(dir, '.agent-presets', 'abap-adt'), { recursive: true });
-    assert.equal(defaultSourcePresetId(), 'cordis', 'a preset present in the user dir falls back to cordis');
-  } finally {
-    if (previous === undefined) delete process.env.DSH_HOME;
-    else process.env.DSH_HOME = previous;
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('defaultSourcePresetId: always standard — the deployment default is never copied (D2)', () => {
+  // Neither settings.yaml nor the user preset dir can change the source: a
+  // `cordis` copy would carry the tool-cordis row, which breaks standing
+  // mounts next to an active cordis session and hands every ABAP session the
+  // plugin-authoring toolset. `--from` remains the explicit override.
+  assert.equal(defaultSourcePresetId(), 'standard');
+  assert.deepEqual(STRIPPED_PRESET_ROWS, ['tool-cordis', 'skill-filesystem']);
 });
 
-test('defaultSourcePresetId: settings.yaml default wins, falls back to cordis', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'abap-adt-cli-'));
-  const previous = process.env.DSH_HOME;
-  process.env.DSH_HOME = dir;
-  try {
-    assert.equal(defaultSourcePresetId(), 'cordis'); // no settings.yaml
-    writeFileSync(join(dir, 'settings.yaml'), 'agent-presets:\n  default: standard\n', 'utf8');
-    assert.equal(defaultSourcePresetId(), 'standard');
-    writeFileSync(join(dir, 'settings.yaml'), '{{not yaml', 'utf8');
-    assert.equal(defaultSourcePresetId(), 'cordis'); // parse failure degrades
-  } finally {
-    if (previous === undefined) delete process.env.DSH_HOME;
-    else process.env.DSH_HOME = previous;
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('stripPresetRows: removes top-level rows with their continuation lines only', () => {
+  const composition = [
+    '# header comment',
+    '- id: persona',
+    '  name: p',
+    '- id: tool-cordis',
+    '  name: c',
+    '  config:',
+    '    deep: 1',
+    '# next section',
+    '- id: skill-filesystem',
+    '  name: s',
+    '- id: tool-skill',
+    '  name: t',
+    '  config:',
+    '    - id: nested',
+    '      name: n',
+  ].join('\n');
+  const { composition: stripped, removed } = stripPresetRows(composition, STRIPPED_PRESET_ROWS);
+  assert.deepEqual(removed, ['tool-cordis', 'skill-filesystem']);
+  const doc = parse(stripped) as Array<{ id: string; config?: Array<{ id: string }> }>;
+  assert.deepEqual(doc.map((r) => r.id), ['persona', 'tool-skill']);
+  // Nested (indented) rows are never touched.
+  assert.equal(doc[1]?.config?.[0]?.id, 'nested');
+  // Idempotent on an already-clean composition.
+  const again = stripPresetRows(stripped, STRIPPED_PRESET_ROWS);
+  assert.deepEqual(again.removed, []);
+  assert.equal(again.composition, stripped);
+  // A row that merely CONTAINS the id as a substring is kept.
+  const tricky = '- id: tool-cordis-extra\n  name: x\n';
+  assert.deepEqual(stripPresetRows(tricky, STRIPPED_PRESET_ROWS).removed, []);
 });
 
 test('findDshPresetRoot: DSH_PRESET_SOURCE override wins', () => {
@@ -96,34 +120,67 @@ test('findDshPresetRoot: DSH_PRESET_SOURCE override wins', () => {
 
 function fakeDshInstall(): string {
   const dir = mkdtempSync(join(tmpdir(), 'abap-adt-fake-dsh-'));
-  const preset = join(dir, 'config', 'agent-presets', 'cordis');
-  mkdirSync(preset, { recursive: true });
-  writeFileSync(join(preset, 'agent.cordis.yml'), '- id: persona\n  name: p\n', 'utf8');
-  writeFileSync(join(preset, 'preset.yml'), 'name: cordis\n', 'utf8');
-  mkdirSync(join(preset, 'skills', 'demo'), { recursive: true });
-  writeFileSync(join(preset, 'skills', 'demo', 'SKILL.md'), '# demo\n', 'utf8');
+  // The default source: standard carries skill-filesystem (stripped) but no
+  // tool-cordis; cordis (the explicit --from case) carries both.
+  const standard = join(dir, 'config', 'agent-presets', 'standard');
+  mkdirSync(standard, { recursive: true });
+  writeFileSync(
+    join(standard, 'agent.cordis.yml'),
+    '- id: persona\n  name: p\n- id: skill-filesystem\n  name: s\n- id: tool-skill\n  name: t\n',
+    'utf8',
+  );
+  writeFileSync(join(standard, 'preset.yml'), 'name: standard\n', 'utf8');
+  mkdirSync(join(standard, 'skills', 'demo'), { recursive: true });
+  writeFileSync(join(standard, 'skills', 'demo', 'SKILL.md'), '# demo\n', 'utf8');
+  const cordis = join(dir, 'config', 'agent-presets', 'cordis');
+  mkdirSync(cordis, { recursive: true });
+  writeFileSync(
+    join(cordis, 'agent.cordis.yml'),
+    '- id: persona\n  name: p\n- id: tool-cordis\n  name: c\n- id: skill-filesystem\n  name: s\n',
+    'utf8',
+  );
+  writeFileSync(join(cordis, 'preset.yml'), 'name: cordis\n', 'utf8');
   return dir;
 }
 
-test('main: generates the preset, refuses to clobber, --force replaces', () => {
+test('main: generates from standard by default, strips authoring rows, refuses to clobber, --force replaces', () => {
   const install = fakeDshInstall();
   const home = mkdtempSync(join(tmpdir(), 'abap-adt-home-'));
   const prevHome = process.env.DSH_HOME;
   const prevSrc = process.env.DSH_PRESET_SOURCE;
   process.env.DSH_HOME = home;
   process.env.DSH_PRESET_SOURCE = install;
+  let captured = '';
+  const origWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    captured += String(chunk);
+    return true;
+  }) as typeof process.stdout.write;
   try {
     assert.equal(main([]), 0);
     const presetDir = join(home, '.agent-presets', 'abap-adt');
     assert.equal(existsSync(join(presetDir, 'skills', 'demo', 'SKILL.md')), true, 'whole dir copied');
     const doc = parse(readFileSync(join(presetDir, 'agent.cordis.yml'), 'utf8')) as Array<{ id: string }>;
-    assert.deepEqual(doc.map((r) => r.id), ['persona', 'abap-adt']);
+    assert.deepEqual(doc.map((r) => r.id), ['persona', 'tool-skill', 'abap-adt'], 'skill-filesystem stripped');
     assert.equal(parse(readFileSync(join(presetDir, 'preset.yml'), 'utf8')).name, 'ABAP Development');
+    assert.match(captured, /from preset 'standard'/);
+    assert.match(captured, /stripped row\(s\).*skill-filesystem/);
 
     assert.equal(main([]), 1); // exists → refuse
     assert.equal(main(['--force']), 0); // replace
     assert.equal(main(['--dry-run']), 0); // dry-run after force is fine
+
+    // Explicit --from cordis: the tool-cordis row is stripped there too, so
+    // even a cordis-sourced preset passes the standing-mount gate.
+    captured = '';
+    assert.equal(main(['--from', 'cordis', '--id', 'abap-adt-cordis']), 0);
+    const cordisDoc = parse(
+      readFileSync(join(home, '.agent-presets', 'abap-adt-cordis', 'agent.cordis.yml'), 'utf8'),
+    ) as Array<{ id: string }>;
+    assert.deepEqual(cordisDoc.map((r) => r.id), ['persona', 'abap-adt'], 'tool-cordis + skill-filesystem stripped');
+    assert.match(captured, /stripped row\(s\).*tool-cordis, skill-filesystem/);
   } finally {
+    process.stdout.write = origWrite;
     process.env.DSH_HOME = prevHome;
     if (prevSrc === undefined) delete process.env.DSH_PRESET_SOURCE;
     else process.env.DSH_PRESET_SOURCE = prevSrc;

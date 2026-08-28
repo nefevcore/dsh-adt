@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-141-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-152-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
 > **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **35 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, conflict-checked local snapshots, local export, offline abaplint). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system.
@@ -104,7 +104,7 @@ abap-adt:
 - `destinations` 跨层按名字合并：高层的同名条目覆盖低层，新名字追加——随包发布的 `destinations: []` 永远不会挡住其他层
 - settings 段/共享文件写错键名会**明确报错**（含路径与未知键名）；显式指定的 `configFile` 不存在则告警并跳过该层
 - 密码在 schema 中标记为 secret（settings 展示时自动脱敏）；解析优先级 `config.password` > `passwordEnv` 指定变量 > `ADT_<NAME>_PASSWORD` > `ADT_PASSWORD`。**切勿把密码明文写进任何配置。**
-- 未挂载 settings 服务的精简 profile 自动降级：仅用插件行 config 解析，行为与组合时一致
+- 未挂载 settings 服务或 dsh-fs 的精简 profile 自动降级：仅用插件行 config 解析，行为与组合时一致；文件系统能力（源码快照 / export / push / `sourceFile` / 本地检查）缺失时明确报错，其余 `adt_*` 工具不受影响
 
 认证说明：
 - **on-prem 经典 ABAP**：Basic Auth（支持自签名证书时设 `strictSSL: false`）
@@ -171,7 +171,7 @@ abap-adt:
 
 ## 测试
 
-共 **141 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层。
+共 **152 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退——源自 impc-dev/D01 实战反馈）。
 
 ## 路线图（可扩展方向）
 

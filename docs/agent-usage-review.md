@@ -6,6 +6,8 @@
 > **落地状态（2025 整理批次 1）**：✅ 已落地 —— §2.6/P0-2（目的地 typo fail-fast，`registry.require` 对未知名直接抛错）、P0-3（`unlocked` 如实反映 + 失败时保留锁账本条目）、§2.7-1（batch 单测对本地测试类回退全量 refs）、§2.7-2（batch 输出 `truncated` 提示）。代码结构同步整理：`source.ts` 拆为 `read.ts`/`write.ts`/`objects.ts`，共享参数与解析助手收敛到 `tools/common.ts`（下文 `src/tools/source.ts` 路径按此对应）。
 >
 > **落地状态（2025 评审批次 2，17 条意见全部处理）**：✅ P0-1 部分（edit 匹配硬化：去注释 + 歧义报错）、P0-4 未做（hint 信任保留，见下方说明）；§2.8（version_diff 去双全文）；新增：package_content 瘦身、search 包过滤/offset、DOMA/DTEL/TTYP 支持、read 行窗口、**移除 adt_release_transport**（人工决策）、export 强制对象清单、check 消息归属、preview kind 对齐类型码、get_transport 脱离传输号管控、unlock_all dryRun、**策略四开关改为全局默认 + per-destination `policy:` 覆盖**（工具按目标目的地断言）。工具数 30 → 29。对照表见 `docs/tool-reference.md` 末节。
+>
+> **落地状态（2026 实战反馈批次 3，impc-dev/D01 真实系统）**：✅ 写后持久性验证（edit/write/push 输出 `persisted`/`warning`——同账号并发会话旧缓冲区覆盖写入的事故修复）；include 按 `name+type=PROG` 解析 404 修复（PROG/INCL 精确名搜索优先）；`list_transports` 状态语义词翻译为后端字母码 + 400 回退；`list_atc_runs` 过滤被拒不重试→自动无参回退；ATC 结果按 finding priority 推导 P1–P4、`run_atc` 客户端计时、每条 finding 暴露 `uri`（include 行号映射）；`get_transport` 任务号→父请求显式提示；`system_info` release 多键回退；`adt_batch` 404 / data-preview mandt 400 定向提示。详见 `docs/adt-protocol-notes.md` §8。测试 141 → 152。
 
 ---
 

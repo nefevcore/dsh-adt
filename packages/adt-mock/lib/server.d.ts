@@ -27,6 +27,16 @@ export interface MockAdtOptions {
      * endpoint, which returns `aunit:runResult` directly in the POST response.
      */
     legacyUnitOnly?: boolean;
+    /**
+     * Send permissive CORS headers (`Access-Control-Allow-Origin: *`) so a
+     * local page can drive the demo (default: true). SECURITY NOTE (audit
+     * P3): with CORS on and NO credentials configured, any website open in a
+     * local browser can read and drive the mock — acceptable only because
+     * the server binds 127.0.0.1 and carries disposable demo data. Turn this
+     * OFF (`cors: false`) when running the standalone CLI mock with anything
+     * sensitive nearby.
+     */
+    cors?: boolean;
 }
 interface MockState {
     objects: MockObject[];

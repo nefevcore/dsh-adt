@@ -58,17 +58,40 @@ export function refFromName(name: string, type?: string): AdtObjectRef {
 }
 
 /**
+ * Options controlling how a model-supplied reference is resolved.
+ */
+export interface ResolveOptions {
+  maxResults?: number;
+  signal?: AbortSignal;
+  /**
+   * Strict resolution for MUTATING tools (write/edit/delete/push/activate/
+   * write_structure): without an explicit `objectUri`, a name that has no
+   * EXACT search match is an error listing the top candidates — never a
+   * silent fuzzy fallback onto a DIFFERENT object (which would then be
+   * modified without a local snapshot, so the OCC conflict protection would
+   * not apply either). Read-only tools keep the lenient fallback.
+   */
+  strict?: boolean;
+  /** Tool name used to prefix strict-mode error messages. */
+  toolName?: string;
+}
+
+/**
  * Resolve a model-supplied object reference to a concrete ADT object:
  *   - `objectUri` wins when given (must start with `/sap/bc/adt`).
- *   - otherwise `name` (+ optional `type`) is resolved by search, preferring
- *     an exact name match; falls back to the by-convention URI.
+ *   - otherwise `name` (+ optional `type`) is resolved: PROG-family types
+ *     (PROG vs INCL) share one namespace but live under DIFFERENT URI
+ *     prefixes (/programs/programs vs /programs/includes) — a bare name is
+ *     resolved via an exact-name search so an include passed as type=PROG
+ *     lands on its real URI instead of a 404. All other known types use the
+ *     by-convention URI; unknown types fall back to search.
  */
 export async function resolveObject(
   client: AdtClient,
   input: { objectUri?: string; name?: string; type?: string },
-  maxResults = 10,
-  signal?: AbortSignal,
+  options: ResolveOptions = {},
 ): Promise<AdtObjectRef> {
+  const { maxResults = 10, signal, strict = false, toolName } = options;
   if (input.objectUri) {
     let uri = input.objectUri.startsWith('/sap/bc/adt')
       ? input.objectUri
@@ -83,11 +106,53 @@ export async function resolveObject(
   const t = normalizeType(input.type);
   const name = input.name.toUpperCase();
   if (t.uriPrefix) {
+    // Ambiguous program family: the caller cannot know from the name alone
+    // whether the object is the main program (PROG/P) or an include (PROG/I)
+    // — and agents routinely pass type=PROG for includes. Ask the search
+    // index for the exact object and use ITS uri/type; fall back to the
+    // by-convention URI when search is unavailable or finds nothing.
+    if (t.type === 'PROG/P' || t.type === 'PROG/I') {
+      try {
+        const hits = await client.searchObjects(name, { maxResults, signal });
+        const exact = hits.find((h) => h.objectName.toUpperCase() === name);
+        if (exact && (exact.type === 'PROG/P' || exact.type === 'PROG/I')) {
+          return {
+            uri: exact.uri,
+            type: exact.type,
+            name,
+            category: 'PROG',
+          };
+        }
+      } catch {
+        // search unavailable → conventional URI below
+      }
+    }
     return { uri: `${t.uriPrefix}${name.toLowerCase()}`, type: t.type, name, category: t.type.split('/')[0] };
   }
   const hits = await client.searchObjects(name, { maxResults, signal });
   const exact = hits.find((h) => h.objectName.toUpperCase() === name);
-  const hit: AdtObjectSearchHit | undefined = exact ?? hits[0];
+  if (exact) {
+    return {
+      uri: exact.uri,
+      type: exact.type || t.type,
+      name: exact.objectName,
+      category: exact.category,
+    };
+  }
+  if (strict) {
+    const candidates = hits
+      .slice(0, 5)
+      .map((h) => `  - ${h.objectName} (${h.type}${h.packageName ? `, package ${h.packageName}` : ''})`);
+    throw new Error(
+      `${toolName ? `${toolName}: ` : ''}object '${name}' has no exact match on the backend — mutating tools ` +
+        'refuse fuzzy resolution (a near-miss name must not silently act on a different object).' +
+        (candidates.length > 0
+          ? ` Closest candidates:\n${candidates.join('\n')}\n`
+          : ' No search hits at all. ') +
+        'Pass `objectUri` (from adt_search / adt_read_object output) or the exact name (+ type).',
+    );
+  }
+  const hit: AdtObjectSearchHit | undefined = hits[0];
   if (hit) {
     return {
       uri: hit.uri,
@@ -104,20 +169,26 @@ export async function resolveObjects(
   client: AdtClient,
   inputs: Array<{ objectUri?: string; name?: string; type?: string }>,
   signal?: AbortSignal,
+  options: { strict?: boolean; toolName?: string } = {},
 ): Promise<AdtObjectRef[]> {
   const refs: AdtObjectRef[] = [];
   for (const input of inputs) {
-    refs.push(await resolveObject(client, input, 10, signal));
+    refs.push(await resolveObject(client, input, { signal, ...options }));
   }
   return refs;
 }
 
 /**
  * Best-effort package lookup for an existing object, used by the permission
- * policy before write/delete/activate. Prefers an explicit `hint` (the caller
- * knows the package), then an exact-name search hit carrying `packageName`.
- * Returns `undefined` when the package cannot be determined — callers must
- * fail closed (deny) in that case.
+ * policy before write/delete/activate. Order matters for security:
+ *   1. an exact-name search hit carrying `packageName` (backend FACT) wins;
+ *   2. the caller's `hint` is only a fallback for when the backend exposes
+ *      nothing — never an override, or a policy-constrained agent could
+ *      whitelist any object by claiming a friendly package (audit H1);
+ *   3. `undefined` when neither is available — callers must fail closed
+ *      (deny) in that case.
+ * A FUZZY hit's package is deliberately not used: it describes a different
+ * object and would misattribute the policy check.
  */
 export async function resolvePackageName(
   client: AdtClient,
@@ -125,15 +196,17 @@ export async function resolvePackageName(
   hint?: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  if (hint && hint.trim().length > 0) return hint.trim().toUpperCase();
   try {
     const hits = await client.searchObjects(ref.name, { maxResults: 10, signal });
     const exact = hits.find((h) => h.objectName.toUpperCase() === ref.name.toUpperCase());
-    const pkg = exact?.packageName ?? hits[0]?.packageName;
-    return pkg ? pkg.toUpperCase() : undefined;
+    if (exact?.packageName && exact.packageName.trim().length > 0) {
+      return exact.packageName.toUpperCase();
+    }
   } catch {
-    return undefined;
+    // search unavailable → fall through to the hint below
   }
+  if (hint && hint.trim().length > 0) return hint.trim().toUpperCase();
+  return undefined;
 }
 
 /** Human-readable label for an object type code (best effort). */

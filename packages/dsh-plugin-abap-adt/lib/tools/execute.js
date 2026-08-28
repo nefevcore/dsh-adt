@@ -14,6 +14,9 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { DESTINATION_PARAM, destinationOf, optStr, text } from './common.js';
+/** Console output beyond this is truncated in the tool output (audit P3:
+ * an endless WRITE loop used to flood the whole context). */
+const MAX_OUTPUT_CHARS = 20_000;
 export function executeTools(deps) {
     const { registry } = deps;
     return [
@@ -23,7 +26,8 @@ export function executeTools(deps) {
                 'program (F8 equivalent); `kind=CLAS` runs a class implementing if_oo_adt_classrun (its main( ) ' +
                 'executes; out->write lines come back as text). The write→activate→execute→observe loop is how an ' +
                 'agent verifies behavior end-to-end. Execution can change system state — guarded by the ' +
-                '`allowExecution` policy knob (see adt_permissions).',
+                '`allowExecution` policy knob (see adt_permissions). Output beyond 20k chars is truncated — ' +
+                'filter inside the ABAP (write only what you need).',
             parameters: {
                 kind: {
                     type: 'string',
@@ -42,11 +46,17 @@ export function executeTools(deps) {
                         kind: { type: 'string', required: true },
                         name: { type: 'string', required: true },
                         status: { type: 'integer', required: true },
-                        output: { type: 'string', required: true, description: 'Console output of the run.' },
-                        outputLines: { type: 'integer', required: true },
+                        output: { type: 'string', required: true, description: 'Console output of the run (truncated beyond 20k chars).' },
+                        outputLines: { type: 'integer', required: true, description: 'NON-EMPTY lines of the FULL output (not of the truncated copy).' },
+                        outputTruncated: { type: 'boolean', description: 'true when the output was cut at the 20k-char cap.' },
                     },
                 },
-                render: (_args, value) => text([`${value.name} (${value.kind}) exited with HTTP ${value.status}:`, '', value.output || '(no output)'].join('\n')),
+                render: (_args, value) => text([
+                    `${value.name} (${value.kind}) exited with HTTP ${value.status}:`,
+                    '',
+                    value.output || '(no output)',
+                    ...(value.outputTruncated ? ['… (output truncated — filter inside the ABAP and re-run)'] : []),
+                ].join('\n')),
             },
             timeoutMs: 330_000,
             execute: async (args, exec) => {
@@ -61,12 +71,14 @@ export function executeTools(deps) {
                     ? await entry.client.runClass(name, { signal: exec.signal })
                     : await entry.client.runProgram(name, { signal: exec.signal });
                 const lines = result.output.length > 0 ? result.output.split('\n').filter((l) => l.length > 0) : [];
+                const truncated = result.output.length > MAX_OUTPUT_CHARS;
                 return {
                     kind: result.kind,
                     name: result.name,
                     status: result.status,
-                    output: result.output,
+                    output: truncated ? result.output.slice(0, MAX_OUTPUT_CHARS) : result.output,
                     outputLines: lines.length,
+                    outputTruncated: truncated || undefined,
                 };
             },
         }),

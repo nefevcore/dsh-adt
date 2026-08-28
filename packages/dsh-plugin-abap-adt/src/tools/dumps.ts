@@ -156,13 +156,15 @@ export function dumpTools(deps: ToolDeps) {
               },
             },
           },
-          raw: { type: 'string', description: 'Raw body (summary/formatted views).' },
+          raw: { type: 'string', description: 'Raw body (summary/formatted views; truncated beyond 8k chars).' },
+          rawTruncated: { type: 'boolean', description: 'true when the raw view was cut at the 8k-char cap.' },
         },
       },
       render: (_args, value) => {
         const lines = [`Dump ${value.id}${value.title ? ` — ${value.title}` : ''} (view: ${value.view})`];
         if (value.raw !== undefined) {
           lines.push('', value.raw);
+          if (value.rawTruncated) lines.push('… (raw view truncated)');
         } else {
           for (const s of value.sections) lines.push(`${s.name}: ${s.value}`);
         }
@@ -176,12 +178,17 @@ export function dumpTools(deps: ToolDeps) {
       if (!dumpId) throw new Error('adt_get_dump: `dumpId` is required (from adt_list_dumps)');
       const view = (optStr(args.view) ?? 'default') as 'default' | 'summary' | 'formatted';
       const detail = await entry.client.getDump(dumpId, { view, signal: exec.signal });
+      // ST22 raw views can be enormous — cap what enters the context (audit P3).
+      const MAX_RAW_CHARS = 8_000;
+      const raw = detail.raw;
+      const truncated = raw !== undefined && raw.length > MAX_RAW_CHARS;
       return {
         id: detail.id,
         view: detail.view,
         title: detail.title,
         sections: detail.sections.map((s) => ({ name: s.name, value: s.value })),
-        raw: detail.raw,
+        raw: raw === undefined ? undefined : truncated ? raw.slice(0, MAX_RAW_CHARS) : raw,
+        rawTruncated: truncated || undefined,
       };
     },
   });

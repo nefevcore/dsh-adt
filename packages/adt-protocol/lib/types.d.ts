@@ -302,9 +302,14 @@ export interface AdtAtcFinding {
     checkTitle: string;
     severity: AdtAtcSeverity;
     message: string;
-    /** Object the finding belongs to. */
+    /** Object the finding belongs to. Real backends often nest ALL findings of
+     * a program (incl. its includes) under the MAIN program name. */
     objectName: string;
     uri: string;
+    /** URI part of the finding's `location` attribute (before `#start=…`) —
+     * points at the exact object/include the line number refers to, which may
+     * differ from `objectName` (e.g. an include of the main program). */
+    locationUri?: string;
     line?: number;
     offset?: number;
     /** ATC check variant message id. */
@@ -394,8 +399,10 @@ export interface AdtSystemInfo {
     /** Logon language. */
     language?: string;
 }
-/** Object types understood by the create service. */
-export type AdtCreatableObjectType = 'CLAS' | 'INTF' | 'PROG' | 'FUNC' | 'DDLS' | 'TABL' | 'STRU' | 'MSAG' | 'PACK' | 'DEVC';
+/** Object types understood by the create service. (`PACK` was removed — it
+ * had no create endpoint and could only ever fail; packages are created as
+ * DEVC. Audit P3.) */
+export type AdtCreatableObjectType = 'CLAS' | 'INTF' | 'PROG' | 'FUNC' | 'DDLS' | 'TABL' | 'STRU' | 'MSAG' | 'DEVC';
 export interface AdtCreateObjectRequest {
     destination: string;
     type: AdtCreatableObjectType;
@@ -419,6 +426,12 @@ export interface AdtCreateObjectResult {
     object?: AdtObjectRef;
     /** URI of the newly created object. */
     uri?: string;
+    /**
+     * Transport the create was recorded into: the explicitly-passed one, or the
+     * CORRNR the backend reported in the response when it auto-assigned a task
+     * (audit M7 — callers should policy-check this).
+     */
+    transport?: string;
     /** Messages (e.g. warnings). */
     messages: AdtMessage[];
 }
@@ -546,5 +559,7 @@ export interface AdtStructureWriteResult {
     data: AdtStructureData;
     /** Transport the backend assigned (lock CORRNR), when any. */
     transport?: string;
+    /** `false` when the final unlock FAILED — the backend lock is still held. */
+    unlocked?: boolean;
 }
 //# sourceMappingURL=types.d.ts.map

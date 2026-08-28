@@ -88,7 +88,7 @@ function structureToOutput(data) {
     return out;
 }
 export function structureTools(deps) {
-    const { registry } = deps;
+    const { registry, ledger } = deps;
     const readStructure = defineTool({
         name: 'adt_read_structure',
         description: 'Read the STRUCTURED metadata of a DDIC object as typed JSON — use this (not adt_read_object) for ' +
@@ -233,7 +233,7 @@ export function structureTools(deps) {
         timeoutMs: 180_000,
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
-            const ref = await resolveToolObject(entry.client, args, exec.signal);
+            const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_write_structure' });
             const explicit = optStr(args.kind);
             const kind = explicit && KINDS.includes(explicit) ? explicit : ref.type.split('/')[0];
             if (!KINDS.includes(kind)) {
@@ -278,13 +278,33 @@ export function structureTools(deps) {
             }
             const result = await entry.client.writeStructure(ref.uri, kind, changes, {
                 transport,
-                onLocked: (assigned) => {
+                onLocked: (assigned, handle) => {
                     // Backend-assigned CORRNR must pass the transport policy too; a
                     // throw here rolls the lock back before anything is written.
                     entry.policy.assertTransportUsage(assigned ?? transport, 'adt_write_structure');
+                    // The lock must be visible to the persistent ledger for its whole
+                    // lifetime (audit M6): a crash between lock and unlock leaves an
+                    // EU510 residual that adt_unlock_all can then find and release —
+                    // exactly like adt_write_object registers its locks.
+                    if (handle) {
+                        ledger.register({
+                            destination: entry.config.name,
+                            uri: ref.uri,
+                            name: ref.name,
+                            handle,
+                            transport: assigned ?? transport,
+                            note: 'write_structure lock',
+                        });
+                    }
                 },
                 signal: exec.signal,
             });
+            // The protocol unlocks in its finally; drop the ledger entry again when
+            // that unlock is confirmed. On error paths (or a failed unlock) the
+            // entry stays — the safe direction for a later adt_unlock_all sweep.
+            if (result.unlocked !== false) {
+                ledger.deregister(entry.config.name, ref.uri);
+            }
             return {
                 name: ref.name,
                 kind,

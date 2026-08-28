@@ -14,6 +14,9 @@ import { writeTools } from '../lib/tools/write.js';
 import { objectTools } from '../lib/tools/objects.js';
 import { lifecycleTools } from '../lib/tools/lifecycle.js';
 import { versionTools } from '../lib/tools/versions.js';
+import { transportTools } from '../lib/tools/transports.js';
+import { testingTools } from '../lib/tools/testing.js';
+import { sourcesEquivalent } from '../lib/snapshots.js';
 import { replaceSourceBlock, replaceSourceText } from '../lib/tools/write.js';
 import type { Context } from '@deepseek-ai/cordis';
 import { readFileSync } from 'node:fs';
@@ -34,7 +37,9 @@ const REAL_SOURCE = readFileSync(
  */
 
 const exec = { signal: undefined } as never;
-const fakeCtx = { fs: undefined } as unknown as Context;
+// ctx fake WITHOUT dsh-fs (audit D1: fs is an optional service — every tool
+// must tolerate its absence; filesystem-backed features degrade).
+const fakeCtx = { get: (_name: string) => undefined } as unknown as Context;
 
 let registry: AdtRegistry;
 let strictRegistry: AdtRegistry;
@@ -62,11 +67,13 @@ function tools(deps = { registry, ledger: new LockLedger() }, ctx: Context = fak
     ...dumpTools(deps),
     ...executeTools(deps),
     ...structureTools(deps),
-    ...batchTools(deps, fakeCtx),
+    ...batchTools(deps, ctx),
     ...dataPreviewTools(deps),
     ...objectTools(deps),
     ...lifecycleTools(deps),
     ...versionTools(deps),
+    ...transportTools(deps),
+    ...testingTools(deps),
   ];
   return new Map(flat.map((t) => [t.name, t]));
 }
@@ -940,7 +947,8 @@ function memFs() {
     },
     listDir: async () => [] as string[],
   };
-  return { files, ctx: { fs } as unknown as Context };
+  const ctx = { get: (name: string) => (name === 'fs' ? fs : undefined) } as unknown as Context;
+  return { files, fs, ctx };
 }
 
 test('snapshot OCC: read creates snapshot; edit matches it; drift → [CONFLICT]', async () => {
@@ -1054,4 +1062,614 @@ test('snapshot OCC: write_object refuses stale view; push uploads a locally edit
   } finally {
     await client.updateSource(uri, original);
   }
+});
+
+// --- Real-world backend-quirk regressions (impc-dev / D01 feedback) ---------
+
+test('include resolution: name+type=PROG resolves an include via search (include-404 regression)', async () => {
+  const by = tools();
+
+  // The agent passes type=PROG for a TOP include — naive by-convention URIs
+  // pointed at /programs/programs/… and 404'd; resolution must consult the
+  // search index and land on the include's real URI.
+  const incl = await by.get('adt_read_object')!.execute({ name: 'ZPROG_DEMO_TOP', type: 'PROG' }, exec);
+  assert.ok(incl.uri.endsWith('/programs/includes/zprog_demo_top'), `got ${incl.uri}`);
+  assert.equal(incl.type, 'PROG/I');
+  assert.match(incl.source, /gv_title/);
+
+  // Explicit INCL type lands on the same URI.
+  const inclTyped = await by.get('adt_read_object')!.execute({ name: 'ZPROG_DEMO_TOP', type: 'INCL' }, exec);
+  assert.ok(inclTyped.uri.endsWith('/programs/includes/zprog_demo_top'));
+
+  // A real main program still resolves to /programs/programs/.
+  const main = await by.get('adt_read_object')!.execute({ name: 'ZPROG_DEMO', type: 'PROG' }, exec);
+  assert.ok(main.uri.endsWith('/programs/programs/zprog_demo'));
+});
+
+test('sourcesEquivalent: tolerant of backend normalization, strict on real divergence', () => {
+  // CRLF ↔ LF and trailing whitespace/blank lines at EOF are normalizations
+  // real backends apply to stored sources — they must NOT trip the verifier.
+  assert.ok(sourcesEquivalent('REPORT zfoo.\r\nWRITE / 1.\r\n', 'REPORT zfoo.\nWRITE / 1.'));
+  assert.ok(sourcesEquivalent('REPORT zfoo.\nWRITE / 1. \t\n\n\n', 'REPORT zfoo.\nWRITE / 1.\n'));
+  // Different content (the concurrent-overwrite case) is detected.
+  assert.ok(!sourcesEquivalent('REPORT zfoo.\nWRITE / 1.', 'REPORT zfoo.\nWRITE / 2.'));
+  assert.ok(!sourcesEquivalent('REPORT zfoo.', 'REPORT zfoo.\nWRITE / 1.'));
+});
+
+test('edit/write verify persistence after the write (concurrent-overwrite regression)', async () => {
+  const by = tools();
+  const client = registry.require().client;
+  const uri = '/sap/bc/adt/programs/includes/zprog_demo_top';
+  const original = (await client.readSource(uri)).source;
+
+  try {
+    // Happy path: read-back matches → persisted=true, no warning.
+    const edit = await by
+      .get('adt_edit_object')!
+      .execute({ name: 'ZPROG_DEMO_TOP', type: 'PROG', oldText: "VALUE 'demo'", newText: "VALUE 'demo2'" }, exec);
+    assert.equal(edit.replaced, true);
+    assert.equal(edit.persisted, true);
+    assert.equal(edit.warning, undefined);
+
+    // Same for a whole-source write.
+    const good = (await client.readSource(uri)).source;
+    const write = await by
+      .get('adt_write_object')!
+      .execute({ name: 'ZPROG_DEMO_TOP', type: 'PROG', source: good }, exec);
+    assert.equal(write.updated, true);
+    assert.equal(write.persisted, true);
+    // The mismatch branch of the checker is covered by the sourcesEquivalent
+    // unit test above — a well-behaved mock cannot simulate a post-write
+    // concurrent overwrite.
+  } finally {
+    await client.updateSource(uri, original);
+  }
+});
+
+test('adt_get_transport: a task number resolves to the parent request with a note', async () => {
+  const by = tools();
+
+  // S4HK900003 is a task of S4HK900001 (mock mirrors real CTO resolution).
+  const task = await by.get('adt_get_transport')!.execute({ number: 'S4HK900003' }, exec);
+  assert.equal(task.number, 'S4HK900001');
+  assert.equal(task.requestedNumber, 'S4HK900003');
+  assert.match(task.note ?? '', /task/i);
+  assert.match(task.note ?? '', /S4HK900001/);
+
+  // A direct request number → no note, numbers agree.
+  const direct = await by.get('adt_get_transport')!.execute({ number: 'S4HK900001' }, exec);
+  assert.equal(direct.number, 'S4HK900001');
+  assert.equal(direct.note, undefined);
+});
+
+test('adt_run_atc surfaces per-finding include URIs and measured duration', async () => {
+  const by = tools();
+
+  const res = await by.get('adt_run_atc')!.execute({ objects: [{ name: 'ZPROG_DEMO', type: 'PROG' }] }, exec);
+  assert.equal(res.clean, false);
+  assert.ok(typeof res.durationMs === 'number');
+
+  // ZPROG_DEMO carries a finding reported under the main program name whose
+  // location points INTO the include — the uri field makes that mapping
+  // explicit instead of forcing manual line-number guessing.
+  const includeFinding = res.findings.find((f: { uri?: string }) => (f.uri ?? '').includes('/programs/includes/'));
+  assert.ok(includeFinding, `expected an include-mapped finding, got ${JSON.stringify(res.findings)}`);
+  assert.equal(includeFinding.objectName, 'ZPROG_DEMO');
+  assert.equal(includeFinding.line, 3);
+});
+
+// ---------------------------------------------------------------------------
+// Audit P0 regressions (docs/audit-fix-plan.md): H1 hint spoofing, H2 fuzzy
+// resolution onto the wrong object, M2 $batch header injection / blacklist
+// bypass.
+// ---------------------------------------------------------------------------
+
+test('H1: a packageName hint cannot spoof the package policy — backend fact wins', async () => {
+  // ZCL_DEMO actually lives in ZPACK_DEMO (transportable). Two policies where
+  // CLAIMING `$TMP` (local, always editable) would make the write pass —
+  // the backend-reported package must decide instead.
+  const transportGate = await AdtRegistry.create({
+    ...builtinDefaults(),
+    demo: true,
+    demoPort: 0,
+    allowedPackages: 'Z*,$TMP',
+    allowTransportableEdits: false,
+  });
+  const whitelistGate = await AdtRegistry.create({
+    ...builtinDefaults(),
+    demo: true,
+    demoPort: 0,
+    allowedPackages: '$TMP',
+  });
+  try {
+    // 1. allowedPackages=Z*,$TMP + allowTransportableEdits=false: the true
+    //    package ZPACK_DEMO is transportable → [POLICY] deny.
+    const t = tools({ registry: transportGate, ledger: new LockLedger() });
+    await assert.rejects(
+      () =>
+        t.get('adt_write_object')!.execute(
+          { name: 'ZCL_DEMO', type: 'CLAS', packageName: '$TMP', source: 'CLASS zcl_demo DEFINITION.\nENDCLASS.' },
+          exec,
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof AdtPolicyError, `expected AdtPolicyError, got ${error}`);
+        assert.equal(error.rule, 'allowTransportableEdits');
+        assert.match(error.message, /^\[POLICY\]/);
+        return true;
+      },
+    );
+
+    // 2. allowedPackages=$TMP only: the true package ZPACK_DEMO is not on the
+    //    whitelist → [POLICY] deny (whitelist runs before transportability).
+    const w = tools({ registry: whitelistGate, ledger: new LockLedger() });
+    await assert.rejects(
+      () =>
+        w.get('adt_activate')!.execute(
+          { objects: [{ name: 'ZCL_DEMO', type: 'CLAS', packageName: '$TMP' }] },
+          exec,
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof AdtPolicyError, `expected AdtPolicyError, got ${error}`);
+        assert.equal(error.rule, 'allowedPackages');
+        assert.match(error.message, /ZPACK_DEMO/);
+        return true;
+      },
+    );
+  } finally {
+    await transportGate.dispose();
+    await whitelistGate.dispose();
+  }
+});
+
+test('H2: mutating tools refuse fuzzy name resolution and list candidates instead', async () => {
+  const by = tools();
+
+  // 'ZCL_DEM' (typo) fuzzy-matches ZCL_DEMO — a mutating tool must error
+  // listing the candidates instead of silently editing the wrong object
+  // (which has no local snapshot, so OCC protection would not apply).
+  await assert.rejects(
+    () => by.get('adt_write_object')!.execute({ name: 'ZCL_DEM', source: 'CLASS zcl_dem DEFINITION.\nENDCLASS.' }, exec),
+    (error: unknown) => {
+      const message = (error as Error).message;
+      assert.match(message, /ZCL_DEM/);
+      assert.match(message, /ZCL_DEMO \(CLAS\/OC, package ZPACK_DEMO\)/, 'candidates must be listed with type+package');
+      assert.match(message, /objectUri/);
+      return true;
+    },
+  );
+
+  // No search hits at all → still a hard error pointing at objectUri.
+  await assert.rejects(
+    () => by.get('adt_delete_object')!.execute({ name: 'ZCL_NO_SUCH_OBJECT' }, exec),
+    (error: unknown) => {
+      assert.match((error as Error).message, /no exact match/i);
+      assert.match((error as Error).message, /objectUri/);
+      return true;
+    },
+  );
+
+  // An explicit objectUri keeps working (authoritative, no search needed).
+  const byUri = await by
+    .get('adt_write_object')!
+    .execute(
+      { objectUri: '/sap/bc/adt/oo/classes/zcl_demo', source: 'CLASS zcl_demo DEFINITION.\nENDCLASS.' },
+      exec,
+    );
+  assert.equal(byUri.updated, true);
+
+  // Read-only tools keep the lenient fuzzy fallback — a near-miss still
+  // resolves (search itself is fuzzy on real backends).
+  const read = await by.get('adt_read_object')!.execute({ name: 'ZCL_DEM' }, exec);
+  assert.equal(read.name, 'ZCL_DEMO');
+
+  // Activation (a mutation) resolves strictly; checkOnly (read-only
+  // pre-audit) stays lenient — mirroring the policy gates.
+  await assert.rejects(
+    () => by.get('adt_activate')!.execute({ objects: [{ name: 'ZCL_DEM' }] }, exec),
+    /no exact match/i,
+  );
+  const audit = await by.get('adt_activate')!.execute({ objects: [{ name: 'ZCL_DEM' }], checkOnly: true }, exec);
+  assert.equal(audit.success, true);
+});
+
+test('M2: $batch rejects CRLF header injection and encoded forbidden paths', async () => {
+  const by = tools();
+
+  // Header injection via `accept` is rejected — note this needs NO write
+  // knobs at all: a plain GET part with a poisoned header value.
+  await assert.rejects(
+    () =>
+      by.get('adt_batch')!.execute(
+        { requests: [{ path: '/sap/bc/adt/oo/classes/zcl_demo', accept: 'application/xml\r\nX-Evil: injected' }] },
+        exec,
+      ),
+    /control characters/i,
+  );
+  await assert.rejects(
+    () =>
+      by.get('adt_batch')!.execute(
+        { requests: [{ path: '/sap/bc/adt/oo/classes/zcl_demo\r\nX-Evil: injected' }] },
+        exec,
+      ),
+    /control characters/i,
+  );
+
+  // contentType injection on a WRITE part (policy knob on, so the validation
+  // itself is what must reject).
+  const permissive = await AdtRegistry.create({
+    ...builtinDefaults(),
+    demo: true,
+    demoPort: 0,
+    allowBatchWrites: true,
+  });
+  try {
+    const p = tools({ registry: permissive, ledger: new LockLedger() });
+    await assert.rejects(
+      () =>
+        p.get('adt_batch')!.execute(
+          {
+            requests: [
+              {
+                method: 'PUT',
+                path: '/sap/bc/adt/oo/classes/zcl_demo/source/main',
+                body: 'x',
+                contentType: 'text/plain\r\nX-Evil: injected',
+              },
+            ],
+            allowWrites: true,
+          },
+          exec,
+        ),
+      /control characters/i,
+    );
+  } finally {
+    await permissive.dispose();
+  }
+
+  // Legacy deletion spelling via query is blocked, plain or percent-encoded.
+  await assert.rejects(
+    () =>
+      by.get('adt_batch')!.execute(
+        { requests: [{ path: '/sap/bc/adt/oo/classes/zcl_demo?_action=DELETE' }] },
+        exec,
+      ),
+    /blocked in \$batch.*adt_delete_object/,
+  );
+  await assert.rejects(
+    () =>
+      by.get('adt_batch')!.execute(
+        { requests: [{ path: '/sap/bc/adt/oo/classes/zcl_demo%3F_action%3DDELETE' }] },
+        exec,
+      ),
+    /blocked in \$batch/,
+  );
+
+  // Encoded transport release paths cannot slip past the blacklist either.
+  await assert.rejects(
+    () =>
+      by.get('adt_batch')!.execute(
+        { requests: [{ path: '/sap/bc/adt/cts/transportrequests/S4HK900001%2Frelease' }] },
+        exec,
+      ),
+    /blocked in \$batch.*human decision/,
+  );
+  await assert.rejects(
+    () =>
+      by.get('adt_batch')!.execute(
+        { requests: [{ path: '/sap/bc/adt/cts/transportrequests/S4HK900001%252Frelease' }] },
+        exec,
+      ),
+    /blocked in \$batch.*human decision/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Audit P1 regressions (docs/audit-fix-plan.md): M3 SELECT-only lint,
+// M6 write_structure lock ledger visibility, M7 create transport policing.
+// ---------------------------------------------------------------------------
+
+test('M3: adt_data_preview freestyle SQL accepts SELECT statements only', async () => {
+  const by = tools();
+  // Non-SELECT statements are rejected before anything reaches the backend.
+  await assert.rejects(
+    () => by.get('adt_data_preview')!.execute({ sql: 'DELETE FROM t001' }, exec),
+    /SELECT statement only/,
+  );
+  await assert.rejects(
+    () => by.get('adt_data_preview')!.execute({ sql: '  update t001 set X = 1' }, exec),
+    /SELECT statement only/,
+  );
+  await assert.rejects(
+    () => by.get('adt_data_preview')!.execute({ sql: 'GRANT SELECT ON t001 TO PUBLIC' }, exec),
+    /SELECT statement only/,
+  );
+  // A real SELECT still runs (mock executes it).
+  const ok = await by.get('adt_data_preview')!.execute({ sql: 'SELECT * FROM t001', length: 2 }, exec);
+  assert.equal(ok.source, 'sql');
+  assert.ok(ok.rows.length > 0);
+});
+
+test('M6: adt_write_structure registers its lock in the persistent ledger', async () => {
+  // Spy ledger: records the exact register/deregister sequence with handles.
+  const calls: string[] = [];
+  const spyLedger = {
+    register: (e: { uri: string; handle?: string; note?: string }) =>
+      calls.push(`register:${e.uri}:${e.handle ? 'handle' : 'no-handle'}`),
+    deregister: (_d: string, uri: string) => calls.push(`deregister:${uri}`),
+    forDestination: () => [],
+  } as unknown as LockLedger;
+  const by = tools({ registry, ledger: spyLedger });
+
+  const written = await by.get('adt_write_structure')!.execute(
+    { name: 'ZMSG_DEMO', type: 'MSAG', description: 'ledger probe' },
+    exec,
+  );
+  assert.deepEqual(written.changed, ['description']);
+  // The lock was registered WITH its handle while held, and removed again
+  // after the protocol confirmed the unlock.
+  assert.deepEqual(calls, [
+    `register:/sap/bc/adt/msgclass/zmsg_demo:handle`,
+    `deregister:/sap/bc/adt/msgclass/zmsg_demo`,
+  ]);
+
+  // A real ledger gains no entry from a clean write (snapshot comparison —
+  // the shared backing file may legitimately carry older unrelated entries).
+  const real = new LockLedger();
+  const before = real.forDestination('demo').length;
+  const byReal = tools({ registry, ledger: real });
+  await byReal.get('adt_write_structure')!.execute(
+    { name: 'ZMSG_DEMO', type: 'MSAG', description: 'ledger probe 2' },
+    exec,
+  );
+  assert.equal(real.forDestination('demo').length, before, 'no stale entry after a clean write');
+
+  // Policy violation inside the lock: the assert throws BEFORE any
+  // registration (nothing to clean up), the protocol rolls the lock back.
+  const strict = await AdtRegistry.create({
+    ...builtinDefaults(),
+    demo: true,
+    demoPort: 0,
+    allowedTransports: 'S4HK*', // the mock's auto MOCKK task is NOT allowed
+  });
+  try {
+    const calls2: string[] = [];
+    const spy2 = {
+      register: (e: { uri: string }) => calls2.push(`register:${e.uri}`),
+      deregister: (_d: string, uri: string) => calls2.push(`deregister:${uri}`),
+      forDestination: () => [],
+    } as unknown as LockLedger;
+    const byStrict = tools({ registry: strict, ledger: spy2 });
+    await assert.rejects(
+      () => byStrict.get('adt_write_structure')!.execute(
+        { name: 'ZMSG_DEMO', type: 'MSAG', description: 'nope' },
+        exec,
+      ),
+      (error: unknown) => error instanceof AdtPolicyError && error.rule === 'allowedTransports',
+    );
+    assert.deepEqual(calls2, [], 'no ledger entry for a rolled-back lock');
+  } finally {
+    await strict.dispose();
+  }
+});
+
+test('M7: adt_create_object polices the backend auto-assigned transport', async () => {
+  // The mock auto-creates a MOCKK task for transportable packages when no
+  // transport is passed — a policy that does not allow MOCKK* must reject
+  // AND roll the create back.
+  const picky = await AdtRegistry.create({
+    ...builtinDefaults(),
+    demo: true,
+    demoPort: 0,
+    allowedTransports: 'S4HK*',
+  });
+  try {
+    // No-op ledger: the rollback register must never reach the shared
+    // backing file (it would pollute unrelated later assertions).
+    const ledger = {
+      register: () => undefined,
+      deregister: () => undefined,
+      forDestination: () => [],
+    } as unknown as LockLedger;
+    const by = tools({ registry: picky, ledger });
+    await assert.rejects(
+      () =>
+        by.get('adt_create_object')!.execute(
+          { type: 'CLAS', name: 'ZCL_TRANSIT', description: 'x', packageName: 'ZPACK_DEMO' },
+          exec,
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof AdtPolicyError, `expected AdtPolicyError, got ${error}`);
+        assert.equal(error.rule, 'allowedTransports');
+        assert.match(error.message, /^\[POLICY\]/);
+        assert.match(error.message, /deleted again/);
+        return true;
+      },
+    );
+    // The rollback really removed the object again.
+    await assert.rejects(
+      () => picky.require().client.readSource('/sap/bc/adt/oo/classes/zcl_transit'),
+      /404/,
+    );
+
+    // An explicitly-passed ALLOWED transport is used as-is and passes.
+    const ok = await by.get('adt_create_object')!.execute(
+      { type: 'CLAS', name: 'ZCL_TRANSIT2', description: 'x', packageName: 'ZPACK_DEMO', transport: 'S4HK900009' },
+      exec,
+    );
+    assert.equal(ok.success, true);
+    assert.equal(ok.name, 'ZCL_TRANSIT2');
+
+    // $TMP creates get no transport at all — nothing to police, clean pass.
+    const local = await by.get('adt_create_object')!.execute(
+      { type: 'PROG', name: 'ZPROG_LOCAL', description: 'x', packageName: '$TMP' },
+      exec,
+    );
+    assert.equal(local.success, true);
+  } finally {
+    await picky.dispose();
+  }
+
+  // Default policy: the auto-assigned MOCKK task is allowed ('*') and the
+  // create reports it.
+  const by = tools();
+  const auto = await by.get('adt_create_object')!.execute(
+    { type: 'CLAS', name: 'ZCL_AUTOTRANS', description: 'x', packageName: 'ZPACK_DEMO' },
+    exec,
+  );
+  assert.equal(auto.success, true);
+});
+
+// ---------------------------------------------------------------------------
+// Audit P2 regressions (docs/audit-fix-plan.md): M9 export path sanitization,
+// D1 optional fs degradation.
+// ---------------------------------------------------------------------------
+
+/** Path-aware fake of the dsh-fs surface the export tool uses. */
+function exportFsFake() {
+  const written = new Map<string, string>();
+  const fs = {
+    resolve: async (p: string, o?: { cwd?: string }) => {
+      const absolute = p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p);
+      const displayPath = o?.cwd && !absolute ? `${o.cwd.replace(/[\\/]+$/, '')}/${p}` : p;
+      return { targetKey: `key:${displayPath}`, displayPath };
+    },
+    writeText: async (t: { displayPath: string }, c: string) => {
+      written.set(t.displayPath, c);
+    },
+  };
+  const ctx = { get: (name: string) => (name === 'fs' ? fs : undefined) } as unknown as Context;
+  return { written, ctx };
+}
+
+test('M9: export sanitizes namespaced object names and reports the resolved path', async () => {
+  // A namespaced object (/NS/ZCL_DEMO) — its name contains slashes that
+  // must never reach the file target (they would resolve as absolute
+  // paths OUTSIDE targetDir).
+  await registry.require().client.createObject({
+    destination: 'demo',
+    type: 'CLAS/OC',
+    name: '/NS/ZCL_DEMO',
+    description: 'namespaced demo',
+    packageName: 'ZPACK_DEMO',
+  });
+  const { written, ctx } = exportFsFake();
+  const by = tools({ registry, ledger: new LockLedger() }, ctx);
+  const targetDir = 'C:/tmp/export-target';
+  const result = await by.get('adt_export_objects')!.execute(
+    { objects: [{ name: '/NS/ZCL_DEMO', type: 'CLAS' }], targetDir },
+    exec,
+  );
+  assert.equal(result.exported, 1);
+  assert.equal(result.failed, 0);
+  const file = result.files[0]!;
+  assert.equal(file.name, '_NS_ZCL_DEMO.clas.abap', 'path separators sanitized out of the name');
+  assert.equal(file.path, `${targetDir}/_NS_ZCL_DEMO.clas.abap`, 'resolved path inside targetDir');
+  assert.ok(written.has(file.path), 'written exactly at the resolved path');
+  assert.match(written.get(file.path)!, /zcl_demo/i, 'the object source landed there');
+
+  // Normal names keep their shape and also report the resolved path.
+  const plain = await by.get('adt_export_objects')!.execute(
+    { objects: [{ name: 'ZCL_DEMO', type: 'CLAS' }], targetDir },
+    exec,
+  );
+  assert.equal(plain.files[0]!.name, 'ZCL_DEMO.clas.abap');
+  assert.equal(plain.files[0]!.path, `${targetDir}/ZCL_DEMO.clas.abap`);
+});
+
+test('D1: without the optional dsh-fs service the plugin still works and fs tools degrade clearly', async () => {
+  // fakeCtx exposes NO fs service (and none is injected anywhere): every
+  // tool still registered and runs; only fs-backed features degrade.
+  const by = tools();
+  const read = await by.get('adt_read_object')!.execute({ name: 'ZCL_DEMO', type: 'CLAS' }, exec);
+  assert.ok(read.source.length > 0);
+  assert.equal(read.localCopy, undefined, 'no snapshot without fs — the read itself is unaffected');
+
+  await assert.rejects(
+    () => by.get('adt_export_objects')!.execute(
+      { objects: [{ name: 'ZCL_DEMO', type: 'CLAS' }], targetDir: 'C:/tmp/x' },
+      exec,
+    ),
+    /requires the dsh filesystem service/,
+  );
+  await assert.rejects(
+    () => by.get('adt_push_object')!.execute({ name: 'ZCL_DEMO', type: 'CLAS' }, exec),
+    /requires the dsh filesystem service/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Audit P3 regressions: object-list bounds, transports gate on version feed,
+// datapreview row cap, per-item export degradation.
+// ---------------------------------------------------------------------------
+
+test('P3: shared `objects` lists must be non-empty and bounded', async () => {
+  const by = tools();
+  await assert.rejects(
+    () => by.get('adt_check')!.execute({ objects: [] }, exec),
+    /at least one entry/,
+  );
+  await assert.rejects(
+    () => by.get('adt_activate')!.execute({ objects: [] }, exec),
+    /at least one entry/,
+  );
+  const many = Array.from({ length: 51 }, (_, i) => ({ name: `ZCL_FOO${i}`, type: 'CLAS' }));
+  await assert.rejects(
+    () => by.get('adt_check')!.execute({ objects: many }, exec),
+    /split into multiple calls of at most 50/,
+  );
+  await assert.rejects(
+    () => by.get('adt_run_unit_tests')!.execute({ objects: many }, exec),
+    /split into multiple calls/,
+  );
+  await assert.rejects(
+    () => by.get('adt_run_atc')!.execute({ objects: many }, exec),
+    /split into multiple calls/,
+  );
+});
+
+test('P3: adt_object_versions is gated by enableTransports (transport numbers leak via the feed)', async () => {
+  const locked = await AdtRegistry.create({
+    ...builtinDefaults(),
+    demo: true,
+    demoPort: 0,
+    enableTransports: false,
+  });
+  try {
+    const by = tools({ registry: locked, ledger: new LockLedger() });
+    await assert.rejects(
+      () => by.get('adt_object_versions')!.execute({ name: 'ZCL_DEMO', type: 'CLAS' }, exec),
+      (error: unknown) => error instanceof AdtPolicyError && error.rule === 'enableTransports',
+    );
+  } finally {
+    await locked.dispose();
+  }
+});
+
+test('P3: data preview rows are capped at 500 (context hygiene)', async () => {
+  const by = tools();
+  const result = await by.get('adt_data_preview')!.execute(
+    { name: 'ZCDS_DEMO', kind: 'DDLS', length: 5000 },
+    exec,
+  );
+  assert.equal(result.rows.length, 500);
+  assert.match(result.note ?? '', /length clamped from 5000 to 500/);
+});
+
+test('P3: export degrades per item — one bad entry no longer fails the whole batch', async () => {
+  const { written, ctx } = exportFsFake();
+  const by = tools({ registry, ledger: new LockLedger() }, ctx);
+  const result = await by.get('adt_export_objects')!.execute(
+    {
+      objects: [
+        { name: 'ZCL_DEMO', type: 'CLAS' },
+        { name: 'ZCL_NO_SUCH_OBJECT', type: 'CLAS' },
+      ],
+      targetDir: 'C:/tmp/export-p3',
+    },
+    exec,
+  );
+  assert.equal(result.exported, 1);
+  assert.equal(result.failed, 1);
+  assert.match(result.files[1]!.path, /^FAILED:/);
+  assert.ok(written.has(result.files[0]!.path!), 'the good object was still written');
 });

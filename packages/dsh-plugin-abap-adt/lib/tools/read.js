@@ -87,6 +87,7 @@ export function readTools(deps, ctx) {
                         type: 'string',
                         description: 'Content hash of the server source at read time — the conflict-check base.',
                     },
+                    note: { type: 'string', description: 'Present when the returned source was truncated at the char cap.' },
                 },
             },
             render: (_args, value) => {
@@ -100,6 +101,7 @@ export function readTools(deps, ctx) {
                     '```abap',
                     value.source,
                     '```',
+                    value.note ? `⚠ ${value.note}` : '',
                 ]
                     .filter((l) => l !== '')
                     .join('\n'));
@@ -140,12 +142,29 @@ export function readTools(deps, ctx) {
             const startLine = Math.min(Math.max(Number.isFinite(requestedStart) ? requestedStart : 1, 1), Math.max(totalLines, 1));
             const endLine = Math.min(Math.max(Number.isFinite(requestedEnd) ? requestedEnd : totalLines, startLine), Math.max(totalLines, 1));
             const source = rawLines.slice(startLine - 1, endLine).join('\n');
+            // Context cap (audit P3): a full read of a very large object used to
+            // enter the context unchecked. The snapshot still holds the FULL
+            // source — only the returned `source` is capped; read in
+            // startLine/endLine windows for the rest.
+            const MAX_SOURCE_CHARS = 200_000;
+            let returned = source;
+            let note;
+            if (source.length > MAX_SOURCE_CHARS) {
+                const kept = source.slice(0, MAX_SOURCE_CHARS);
+                const keptLines = kept.split('\n').length - 1;
+                returned = kept;
+                note =
+                    `source truncated at ${MAX_SOURCE_CHARS} chars (lines ${startLine}..${startLine + keptLines - 1} of ` +
+                        `${totalLines}) — continue reading with startLine=${startLine + keptLines}`;
+            }
             // Local snapshot (default on): the full source + its server-side hash.
             // This is what adt_edit_object matches against and what
             // adt_push_object verifies/uploads — the base of the OCC edit flow.
+            // dsh-fs is OPTIONAL (audit D1): without it the read still succeeds
+            // (edit later falls back to server-side matching).
             let localCopy;
             let snapshotHash;
-            if (ctx?.fs && args.snapshot !== false) {
+            if (ctx?.get('fs') && args.snapshot !== false) {
                 try {
                     localCopy = await saveSnapshot(ctx, entry.config.name, ref, parsed.source);
                     snapshotHash = hashSource(parsed.source);
@@ -159,7 +178,7 @@ export function readTools(deps, ctx) {
                 uri: ref.uri,
                 name: ref.name,
                 type: ref.type,
-                source,
+                source: returned,
                 description: description || undefined,
                 properties,
                 startLine,
@@ -167,6 +186,7 @@ export function readTools(deps, ctx) {
                 totalLines,
                 localCopy,
                 snapshotHash,
+                note,
             };
         },
     });

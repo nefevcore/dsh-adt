@@ -30,8 +30,11 @@ export function dataPreviewTools(deps: ToolDeps) {
       description:
         'Read rows from a table / CDS view (or run a freestyle SELECT) via the ADT Data Preview API. ' +
         'Provide `name` + `kind` (same type codes as everywhere: TABL, VIEW, STRU for DDIC entities, ' +
-        'DDLS for CDS views; default TABL) or `sql` (freestyle). `top`/`offset` page the rows. Read-only. ' +
-        'Note: ABAP Cloud (BTP) blocks direct database-table preview; CDS views and freestyle SQL work there.',
+        'DDLS for CDS views; default TABL) or `sql` (freestyle — SELECT statements only; anything else is rejected). ' +
+        '`top`/`offset` page the rows. Read-only. ' +
+        'Note: ABAP Cloud (BTP) blocks direct database-table preview; CDS views and freestyle SQL work there. ' +
+        'Freestyle SQL restriction: the SELECT list must NOT include the client column (mandt) — the backend ' +
+        'SQL parser rejects cross-client field access with HTTP 400; select the business columns only.',
       parameters: {
         name: { type: 'string', description: 'Table or CDS view name (uppercase), e.g. ZCDS_DEMO, T001.' },
         kind: {
@@ -43,10 +46,10 @@ export function dataPreviewTools(deps: ToolDeps) {
         length: {
           type: 'integer',
           description: 'Number of rows to return — the row-range window is offset..offset+length ' +
-            '(default 100, clamped to 1–5000; alias of the deprecated `top`).',
+            '(default 100, clamped to 1–500; alias of the deprecated `top`).',
         },
         top: { type: 'integer', description: 'Deprecated alias of `length`.' },
-        offset: { type: 'integer', description: 'Skip the first N rows (client-side, within the 5000-row cap; default 0).' },
+        offset: { type: 'integer', description: 'Skip the first N rows (client-side, within the 500-row cap; default 0).' },
         ...DESTINATION_PARAM,
       },
       output: {
@@ -114,18 +117,42 @@ export function dataPreviewTools(deps: ToolDeps) {
                   'or query the table through a program/function module that reads it.',
               );
             }
+            if (error instanceof AdtError && error.status === 400) {
+              // The most common freestyle-SQL 400 on on-prem backends: the
+              // client column (mandt) in the SELECT list — the parser rejects
+              // cross-client field access outright. Only reword when the
+              // backend actually says so (audit P3: ANY sql 400 used to be
+              // misattributed to mandt).
+              const msg = error.message ?? '';
+              if (/mandt|cross.?client/i.test(msg)) {
+                throw new Error(
+                  `SQL rejected by the backend (HTTP 400): ${msg}. Common cause: the client column ` +
+                    '(mandt) in the SELECT list — remove it (and any cross-client constructs) and select the ' +
+                    'business columns only.',
+                );
+              }
+            }
             throw error;
           }
         };
 
         const sql = optStr(args.sql);
         if (sql) {
+          // Light SELECT-only lint (audit M3): the freestyle endpoint is a
+          // read-only data-preview API — refuse anything that does not lead
+          // with SELECT instead of relying on the backend parser alone.
+          if (!/^\s*select[\s(]/i.test(sql)) {
+            throw new Error(
+              'adt_data_preview: `sql` accepts a SELECT statement only (the data-preview API is read-only). ' +
+                `Got: ${sql.trim().slice(0, 60)}${sql.trim().length > 60 ? '…' : ''}`,
+            );
+          }
           const length = typeof args.length === 'number' ? args.length : typeof args.top === 'number' ? args.top : 100;
-          const clamp = clampWithNote(length, 1, 5000, 'length');
+          const clamp = clampWithNote(length, 1, 500, 'length');
           const offset = Math.max(Number(args.offset ?? 0) || 0, 0);
           // Fetch offset+length rows (within the cap) and slice, so the SQL
           // path honors the same offset/length row-range as entity previews.
-          const fetchTop = Math.min(offset + clamp.value, 5000);
+          const fetchTop = Math.min(offset + clamp.value, 500);
           if (clamp.note) notes.push(clamp.note);
           if (offset > 0) notes.push(`offset ${offset} applied (client-side paging within the ${fetchTop}-row cap)`);
           const result = await run(() => entry.client.runSqlQuery(sql, { top: fetchTop, signal: exec.signal }));
@@ -154,14 +181,14 @@ export function dataPreviewTools(deps: ToolDeps) {
           throw new Error(`adt_data_preview: unsupported kind '${kindCode}' (expected TABL, VIEW, STRU or DDLS)`);
         }
         const requestedLength = typeof args.length === 'number' ? args.length : typeof args.top === 'number' ? args.top : 100;
-        const clamp = clampWithNote(requestedLength, 1, 5000, 'length');
+        const clamp = clampWithNote(requestedLength, 1, 500, 'length');
         const offset = Math.max(Number(args.offset ?? 0) || 0, 0);
         if (typeof args.length === 'number' && typeof args.top === 'number' && args.length !== args.top) {
           notes.push('both `length` and `top` given; `length` wins (`top` is a deprecated alias)');
         }
         // offset is client-side paging: fetch offset+top rows (within the cap)
         // and slice, mirroring adt_search.
-        const fetchTop = Math.min(offset + clamp.value, 5000);
+        const fetchTop = Math.min(offset + clamp.value, 500);
         if (clamp.note) notes.push(clamp.note);
         if (offset > 0) notes.push(`offset ${offset} applied (client-side paging within the ${fetchTop}-row cap)`);
 

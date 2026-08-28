@@ -209,7 +209,35 @@ Accept: text/plain
 
 TABL/STRU 不在结构化编辑器范围：现代系统上它们有 DDL 源（`/ddic/tables/{name}/source/main`，PUT DDL 文本），走普通源码读写路径。
 
-## 8. 待验证项（勿在生产依赖）
+## 8. 真实后端实战记录（impc-dev / D01 / client 110）
+
+一次完整的真实系统实战反馈及其在工具链中的处理方式。**原则：合理的后端报错保持原样透传（只加提示），行为缺陷在客户端修复。**
+
+### 后端不支持（合理报错，工具层给出定向提示）
+| 现象 | 处理 |
+|---|---|
+| `POST /sap/bc/adt/$batch` → 404（未部署 $batch 服务） | `adt_batch` 捕获 404/405，明确提示"该后端未部署 $batch 服务，请逐个调用工具" |
+| 对象元数据不含锁状态 → `adt_lock_info` 返回 `locked=null` | 保留 null + 强化提示：此类后端**无法探测并发编辑者**，应依赖写后持久性验证（见下） |
+| 自由 SQL 的 SELECT 列表带 `mandt` → 400（解析器拒绝跨 client 字段） | `adt_data_preview` 描述明示禁止选 mandt 列；400 时给出定向提示 |
+
+### 行为缺陷（客户端修复）
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| **include 用 `name+type=PROG` 读取 404** | 按约定拼 URI 到 `/programs/programs/`，而 include 在 `/programs/includes/` | `resolveObject` 对 PROG/P 与 PROG/I 先做精确名搜索，用命中对象的真实 URI/type；搜索不可用回落约定 URI |
+| **`adt_list_transports(status=modifiable)` 漏报未释放请求**（D01K966363 状态 D 却返回 0 条） | 语义词 `modifiable` 被原样发给后端，后端按 CTO 字母码精确匹配 → 匹配 0 行 | 客户端把 `modifiable`→`D`、`released`→`R` 再发；后端 400 拒绝 `status` 参数时自动去参重试，客户端侧过滤兜底 |
+| **`adt_list_atc_runs` 带任何过滤参数 400** | 子集实现的 ATC results 服务只接受**无参数**查询 | 400 时自动回退无参数查询重试 |
+| **ATC 结果 P1–P4/耗时全 0** | 单结果体不带 `<aggregates>` 节点、无运行时 | 无 aggregates 时按 finding 的 `priority` 属性推导 P1–P4；`adt_run_atc` 的 `durationMs` 改为客户端计时 |
+| **ATC finding 全挂主程序名、行号却是 include 的** | 后端把程序所有 finding 嵌在主程序 `object` 下，位置在 finding 自己的 `location` URI 里 | 解析出 `locationUri`（`#start=` 前的 URI 部分），工具输出为每条 finding 的 `uri` 字段，渲染时标注 `(in <include>)` |
+| **`adt_get_transport` 传任务号返回父请求** | 真实 CTO 行为：任务号解析到父请求（版本历史记录的是任务级号） | 保留该行为，输出 `requestedNumber` + `note` 显式标出任务→父请求映射 |
+| **`adt_system_info` release 为空** | release 藏在备用 feature 键里 | 依次探测 JSON `release`、`release`、`SAP_SYSTEM_RELEASE`、`SAP_BASIS_RELEASE`、`SAP_SYSTEM_RELEASE_ID`（注意用 `||`，空串不能短路） |
+| **编辑报成功但源码被静默打回原样**（本次最大事故） | 同一开发账号的另一个会话持有旧缓冲区，在写入解锁**之后**整缓冲保存覆盖；写前 OCC 哈希校验只保护写前窗口，感知不到写后覆盖；版本库还留下 99999 临时版本号加剧误判 | 三个写工具（edit/write/push）在解锁后**回读验证**：与所写内容做容错比对（CRLF/行尾空白），不一致 → `persisted:false` + 醒目告警（重读重做、勿激活）；读失败 → `persisted:undefined` + 提示回读确认。回读结果同时刷新本地快照（OCC 基准 = 真实服务端状态） |
+
+### 标准操作顺序（沉淀）
+`adt_permissions` → `adt_search`（拿全对象 URI）→ `adt_read_object`（建快照）→ `adt_edit_object` → **立即回读确认**（`persisted` 标志 / `adt_read_object`）→ `adt_activate`（主程序 + include 一次传齐）→ `adt_version_diff`(saved vs active) 验证无遗留 → `adt_run_atc` + 无参数 `adt_list_atc_runs`。
+
+> 多人/多会话共用同一开发账号时，"编辑成功"之后的那次回读，比激活成功更值得信赖。
+
+## 9. 待验证项（勿在生产依赖）
 
 - `?includeSupportPackageCompatibility` 参数
 - `x-sap-login-with` 头

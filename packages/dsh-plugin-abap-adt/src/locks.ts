@@ -108,7 +108,13 @@ export class LockLedger {
   private persist(): void {
     try {
       mkdirSync(dirname(this.file), { recursive: true });
-      writeFileSync(this.file, JSON.stringify({ version: 1, entries: this.entries }, null, 2), 'utf8');
+      // Atomic replace (tmp + rename, audit D5): a crash mid-write used to
+      // leave a torn file whose failed JSON.parse silently reset the WHOLE
+      // ledger on the next load. Rename-over-existing is atomic on POSIX
+      // and replaces on Windows (libuv passes MOVEFILE_REPLACE_EXISTING).
+      const tmp = `${this.file}.${process.pid}.${randomUUID()}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ version: 1, entries: this.entries }, null, 2), 'utf8');
+      renameSync(tmp, this.file);
     } catch {
       // Fire-and-forget: an unwritable ledger must not break tool calls.
     }

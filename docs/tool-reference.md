@@ -54,16 +54,18 @@
 读取对象源码 + 元数据。支持行窗口分页读取大对象。**默认同时在本地留全量快照**（`.adt-snapshots/<目的地>/…`，沙箱感知）+ sidecar 记录读取时刻的服务端内容哈希——这是冲突安全编辑的基础（edit 对快照匹配、push 校验后上传）。
 - **入参**：对象三元组；`startLine`（1 起含，默认 1）；`endLine`（含，默认末行）；`snapshot`（默认 true；false 关闭本地快照）。
 - **返回**：`uri, name, type, source（窗口内）, description?, properties{}, startLine, endLine, totalLines, localCopy?（快照路径）, snapshotHash?（冲突校验基准哈希）`。全量读取（≤2000 行）仍重放为行号化 read 卡片。
+- **include 解析**（impc-dev 实战）：`name+type=PROG` 传 include 名不再 404——PROG/INCL 族的按约定 URI 是二义的（`/programs/programs/` vs `/programs/includes/`），解析先做精确名搜索取真实 URI/type，搜索不可用才回落约定 URI。
 
 ### adt_push_object 🛡（pull→edit→push 的 push 半）
-把本地编辑后的快照上传服务器，**上传前在持锁状态下做哈希校验**：服务端仍是快照基准状态 → 上传；被他人改过 → `[CONFLICT]` 拒绝且服务端不动，本地文件保留——重读、合并、再推。
+把本地编辑后的快照上传服务器，**上传前在持锁状态下做哈希校验**：服务端仍是快照基准状态 → 上传；被他人改过 → `[CONFLICT]` 拒绝且服务端不动，本地文件保留——重读、合并、再推。上传后**回读验证持久性**（见 adt_write_object 的 `persisted`）。
 - **入参**：对象三元组；`packageName`；`path`（默认 = adt_read_object 建立的跟踪快照；自定义路径=无基准不校验）；`activate`；`transport`。
-- **返回**：`uri, name, pushed, verified, localCopy, unlocked?, activated?, transport?, transportSource?, activation?`。
+- **返回**：`uri, name, pushed, verified, localCopy, unlocked?, activated?, persisted?, warning?, transport?, transportSource?, activation?`。
 
 ### adt_write_object 🛡
-整体替换对象源码，lock → write → unlock 自动完成，支持写后即激活。**存在快照时写前校验**（服务端与快照基准不符 → `[CONFLICT]` 拒绝）；写后从回读刷新快照。
+整体替换对象源码，lock → write → unlock 自动完成，支持写后即激活。**存在快照时写前校验**（服务端与快照基准不符 → `[CONFLICT]` 拒绝）；写后从回读刷新快照并**验证持久性**。
 - **入参**：对象三元组；`packageName`（策略提示）；`source` 或 `sourceFile`（二选一）；`unlock`（默认 true）；`activate`（默认 false，写后同调用内激活并返回 activation 结果）；`transport`（**指定修改计入的传输请求号**；省略时由后端在 lock 时决定——已在 open 请求中的对象留在原请求，否则自动新建 task）。
-- **返回**：`uri, name, updated, unlocked?, activated?, transport?, transportSource? ('user'|'auto'), activation? { success, message }`——`transport` 告诉你修改实际计入了哪个请求，`transportSource='auto'` 提醒这是后端自动分配（可能是新请求，下次可显式传 `transport` 控制）。
+- **返回**：`uri, name, updated, unlocked?, activated?, persisted?, warning?, transport?, transportSource? ('user'|'auto'), activation? { success, message }`——`transport` 告诉你修改实际计入了哪个请求，`transportSource='auto'` 提醒这是后端自动分配（可能是新请求，下次可显式传 `transport` 控制）。
+- **持久性验证**（impc-dev 实战新增）：写前 OCC 哈希只保护写前窗口；同账号另一会话在写后解锁时用旧缓冲区整存覆盖时，写会"成功"但被静默打回。写后回读与所写内容做容错比对（CRLF/行尾空白不算差异），不一致 → `persisted:false` + 醒目告警（重读重做、勿激活）；读失败 → `persisted:undefined` + 提示回读确认。
 - **策略**：allowedPackages + allowTransportableEdits + CORRNR 的 allowedTransports 校验（显式传入与自动分配都校验），不匹配即回滚锁；unlock 失败时如实返回 `unlocked: false` 并保留锁账本条目。
 - **传输语义**：显式 `transport` 经 PUT `?corrNr=` 精确生效（用户值优先于 lock 分配值，对齐官方编辑器行为）。
 
@@ -74,7 +76,8 @@
 - 也可**自己编辑本地快照文件**（路径见 read 输出 `localCopy`），再 `adt_push_object` 校验上传。
 - start 匹配层级：①注释剥离子串 → ②去空白（引号内空格容差 `'BUKRS  '` vs `'BUKRS'`）→ ③原始行（可编辑注释掉的代码）。
 - **入参**：对象三元组；`packageName`；模式 1（`oldText`/`newText`）或 模式 2（`start`/`end`/`source`/`sourceFile`/`startLine`/`endLine`）；共用 `occurrence`/`activate`/`transport`。
-- **返回**：`uri, name, start, end, replaced, startLineNumber, endLineNumber, oldLines, newLines, matchMode ('structured'|'text'|'text-loose'|'text-raw'|'line-number'), occurrence?, unlocked?, activated?, transport?, transportSource?, activation?`。
+- **返回**：`uri, name, start, end, replaced, startLineNumber, endLineNumber, oldLines, newLines, matchMode ('structured'|'text'|'text-loose'|'text-raw'|'line-number'), occurrence?, unlocked?, activated?, persisted?, warning?, transport?, transportSource?, activation?`。
+- **持久性验证**（impc-dev 实战新增）：写后回读验证（同 adt_write_object 的 `persisted`）。`persisted:false` = 并发编辑者（同账号另一会话的旧缓冲区）在写后覆盖了改动——**重读重做，勿激活**；多会话/共享账号环境下编辑后立即 `adt_read_object` 复核仍是最可靠的确认。
 - **回退链**：无快照 → 对拉取的服务端源码匹配（旧行为）；结构化失败（起始行非块开头/深度失衡）→ 自动回退文本匹配，不会静默错编。
 - **实测语料**：2063 行生产 include 回归（`test/fixtures/zfir_gxyh040_frm.abap`：中文注释、Mod 标记、宏、重复行、嵌套块）。
 
@@ -112,19 +115,21 @@
 - **返回**：`success, overall, total, passed, failed, skipped, errors, durationMs, classes[] { className, status, tests[] { methodName, status, durationMs, message? } }`。
 
 ### adt_run_atc ⏱660s
-对给定对象启动新 ATC run。
+对给定对象启动新 ATC run。run 会**落库**（在 adt_list_atc_runs 可见，工具触发的通常叫 "External Request + 时间戳"）；`durationMs` 为客户端实测整个 start→轮询→取结果的墙钟时间。
 - **入参**：`objects`*；`variant`（string）。
-- **返回**：`clean, findings[] { checkTitle, severity, message, objectName, line?, check? }, counts { INFO, WARNING, ERROR, CRITICAL, CATASTROPHIC }, durationMs, variant?, displayId?, title?, checkVariant?, aggregates?`。
+- **返回**：`clean, findings[] { checkTitle, severity, message, objectName, uri?（该行所属对象的 URI——常为 include 而 objectName 是主程序）, line?, check? }, counts { INFO, WARNING, ERROR, CRITICAL, CATASTROPHIC }, durationMs, variant?, displayId?, title?, checkVariant?, aggregates?`。
+- **位置映射**（impc-dev 实战）：后端把程序全部 finding 挂在**主程序名**下而 `line` 是 include 内行号——先看每条 finding 的 `uri` 再跳行；权威 P1–P4 汇总以 `adt_list_atc_runs` 为准。
 
 ### adt_list_atc_runs 🔒
-列出系统上已存的 ATC run（后端要求至少一个过滤条件，缺省 = 当前用户）。
-- **入参**：`createdBy`、`ageMin`、`ageMax`（天）、`central`、`active`、`sysId`。
+列出系统上已存的 ATC run。后端差异大：多数要求至少一个过滤条件（缺省发当前用户），**子集实现只接受无参数查询**（任何过滤参数 400）——被拒的过滤自动回退无参数重试。
+- **入参**：`createdBy`、`ageMin`、`ageMax`（天）、`central`、`active`、`sysId`（子集后端忽略）。
 - **返回**：`count, runs[] { displayId, title?, checkVariant?, createdAt?, createdBy?, status?, kind?, aggregates?, attributes{} }`。
+- **P1–P4 汇总以本工具为准**（impc-dev 实战：单结果体不带 aggregates，明细里 P1–P4 恒 0）。
 
 ### adt_get_atc_result 🔒
 按 displayId 复取一条已存 ATC 结果。
 - **入参**：`displayId`*；`includeExemptedFindings`（默认 false）。
-- **返回**：`displayId, title?, checkVariant?, clean, findings[], counts{}, aggregates?, durationMs, rawXml?`。
+- **返回**：`displayId, title?, checkVariant?, clean, findings[]（含 uri?）, counts{}, aggregates?（结果体缺失时按 finding priority 推导）, durationMs, rawXml?`。
 
 ## 6. 传输与版本（3 + 1 移除）
 
@@ -139,12 +144,14 @@
 列当前用户的传输请求。
 - **入参**：`allUsers`（默认 false）；`status`（默认 all；`modifiable`=未释放（别名 D）/ `released`（别名 R/L）/ 其他值透传后端）。
 - **返回**：`transports[] { number, description, status, category, owner, system, client, modifiable, target?, items?[] }`。
+- **状态过滤**（impc-dev 实战）：语义词**先翻译成后端字母码**（`modifiable`→`D`、`released`→`R`）再发（原样透传会匹配 0 行）；后端 400 拒绝 `status` 参数时自动去参重试 + 客户端侧过滤兜底。结论前仍建议与 `adt_get_transport` / `adt_object_versions` 交叉验证。
 - **策略**：仅受 enableTransports（传输族开关）约束。
 
 ### adt_get_transport 🔒
 单个传输请求详情（含条目）。**只读，不再受 allowedTransports 约束**（传输号管控只针对编辑类操作）。
 - **入参**：`number`*。
-- **返回**：`number, description, status, category, owner, system, client, modifiable, items[] { name, type, action, description? }`。
+- **返回**：`number, requestedNumber?（请求的是任务号且被解析到父请求时）, note?（任务→父请求映射提示）, description, status, category, owner, system, client, modifiable, items[] { name, type, action, description? }`。
+- **任务号语义**（impc-dev 实战）：版本历史（adt_object_versions）记录的是**任务级**号码；传任务号查询时真实 CTO 后端返回**父请求**——比对返回的 `number` 与所传号码，后续操作用父号。
 
 ### adt_version_diff 🔒
 两版本对比。**默认 = saved vs active**——saved 是当前源码（存在 inactive 版时即 inactive），active 是最后一次激活的版本（`?version=active`）：**恰好是「已保存但尚未激活」的改动**，写后/激活后复核残余非激活对象（含 PROG 的 include）就用它。**只返回 unified diff + 标签 + 版本列表，不携带两侧全文**（上下文经济）。

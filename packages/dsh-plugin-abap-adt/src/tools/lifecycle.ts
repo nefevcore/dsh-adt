@@ -4,6 +4,7 @@ import {
   OBJECTS_PARAM,
   assertObjectEditable,
   destinationOf,
+  requireObjectList,
   text,
   type ToolDeps,
 } from './common.js';
@@ -107,8 +108,19 @@ export function lifecycleTools(deps: ToolDeps) {
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
       const checkOnly = args.checkOnly === true;
-      const inputs = args.objects as Array<{ objectUri?: string; name: string; type?: string; packageName?: string }>;
-      const refs = await resolveObjects(entry.client, inputs, exec.signal);
+      const inputs = requireObjectList(args, 'adt_activate') as Array<{
+        objectUri?: string;
+        name: string;
+        type?: string;
+        packageName?: string;
+      }>;
+      // A real activation is a mutation → strict resolution (a near-miss name
+      // must error, not silently act on a fuzzy-matched different object).
+      // checkOnly is a read-only pre-audit and stays lenient.
+      const refs = await resolveObjects(entry.client, inputs, exec.signal, {
+        strict: !checkOnly,
+        toolName: 'adt_activate',
+      });
 
       // Permission checks. checkOnly (syntax pre-audit) changes nothing and is
       // always allowed; a real activation is an edit and must satisfy the
@@ -229,7 +241,7 @@ export function lifecycleTools(deps: ToolDeps) {
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
-      const inputs = args.objects as Array<{ objectUri?: string; name?: string; type?: string }>;
+      const inputs = requireObjectList(args, 'adt_check') as Array<{ objectUri?: string; name?: string; type?: string }>;
       const refs = await resolveObjects(entry.client, inputs, exec.signal);
 
       // The checkrun response carries no per-object attribution, so multi-

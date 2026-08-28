@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, OBJECTS_PARAM, assertObjectEditable, destinationOf, text, } from './common.js';
+import { DESTINATION_PARAM, OBJECTS_PARAM, assertObjectEditable, destinationOf, requireObjectList, text, } from './common.js';
 import { resolveObjects, typeLabel } from '../resolve.js';
 export function lifecycleTools(deps) {
     const { registry } = deps;
@@ -78,8 +78,14 @@ export function lifecycleTools(deps) {
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
             const checkOnly = args.checkOnly === true;
-            const inputs = args.objects;
-            const refs = await resolveObjects(entry.client, inputs, exec.signal);
+            const inputs = requireObjectList(args, 'adt_activate');
+            // A real activation is a mutation → strict resolution (a near-miss name
+            // must error, not silently act on a fuzzy-matched different object).
+            // checkOnly is a read-only pre-audit and stays lenient.
+            const refs = await resolveObjects(entry.client, inputs, exec.signal, {
+                strict: !checkOnly,
+                toolName: 'adt_activate',
+            });
             // Permission checks. checkOnly (syntax pre-audit) changes nothing and is
             // always allowed; a real activation is an edit and must satisfy the
             // policy for every object.
@@ -185,7 +191,7 @@ export function lifecycleTools(deps) {
         isConcurrencySafe: () => true,
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
-            const inputs = args.objects;
+            const inputs = requireObjectList(args, 'adt_check');
             const refs = await resolveObjects(entry.client, inputs, exec.signal);
             // The checkrun response carries no per-object attribution, so multi-
             // object checks run one checkrun per object and tag every message.

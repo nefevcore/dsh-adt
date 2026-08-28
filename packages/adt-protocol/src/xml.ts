@@ -33,7 +33,11 @@ const ENTITIES: Record<string, string> = {
 };
 
 class XmlParser {
+  /** Max element nesting depth — hostile deeply-nested input must fail with
+   * a clear error instead of blowing the stack (audit P3). */
+  private static readonly MAX_DEPTH = 500;
   private pos = 0;
+  private depth = 0;
 
   constructor(private readonly input: string) {}
 
@@ -53,23 +57,29 @@ class XmlParser {
       } else if (this.input.startsWith('<!--', this.pos)) {
         this.skipUntil('-->');
       } else if (this.input.startsWith('<!DOCTYPE', this.pos)) {
-        // Consume until the matching '>' honoring internal subset brackets.
-        const start = this.pos;
+        // Consume until the matching '>' honoring internal subset brackets
+        // AND quoted strings — a quoted '>' must not end the DOCTYPE
+        // (audit P3: `SYSTEM "a>b"` used to terminate the scan early).
         this.pos += 9;
         let depth = 0;
+        let quote = '';
         while (this.pos < this.input.length) {
           const c = this.input[this.pos]!;
-          if (c === '[') depth++;
-          else if (c === ']') depth--;
-          else if (c === '>' && depth <= 0) {
+          if (quote) {
+            if (c === quote) quote = '';
+          } else if (c === '"' || c === "'") {
+            quote = c;
+          } else if (c === '[') {
+            depth++;
+          } else if (c === ']') {
+            depth--;
+          } else if (c === '>' && depth <= 0) {
             this.pos++;
             break;
           }
           this.pos++;
         }
-        if (this.pos === this.input.length && !this.input.startsWith('>', start)) {
-          throw new Error('XML: unterminated DOCTYPE');
-        }
+        if (this.pos > this.input.length) throw new Error('XML: unterminated DOCTYPE');
       } else {
         break;
       }
@@ -84,6 +94,17 @@ class XmlParser {
     if (this.input[this.pos] === '/') {
       throw new Error(`XML: unexpected closing tag at ${this.pos}`);
     }
+    if (++this.depth > XmlParser.MAX_DEPTH) {
+      throw new Error(`XML: element nesting exceeds ${XmlParser.MAX_DEPTH} — refusing to parse`);
+    }
+    try {
+      return this.parseElementInner();
+    } finally {
+      this.depth--;
+    }
+  }
+
+  private parseElementInner(): XmlNode {
     const rawName = this.readName();
     if (!rawName) throw new Error(`XML: empty tag name at ${this.pos}`);
     // Local name: strip the namespace prefix (`adt:object` → `object`).
@@ -187,11 +208,23 @@ class XmlParser {
 
   private decode(value: string): string {
     return value.replace(/&(#x?[0-9A-Fa-f]+|[A-Za-z]+);/g, (full, entity: string) => {
+      // Out-of-range / invalid code points must not throw a raw RangeError
+      // out of the parser (audit P3) — degrade to the replacement char.
+      const codePoint = (digits: string, radix: number): string => {
+        try {
+          const n = Number.parseInt(digits, radix);
+          return Number.isInteger(n) && (n === 0x9 || n === 0xa || n === 0xd || (n >= 0x20 && n <= 0xd7ff) || (n >= 0xe000 && n <= 0xfffd) || (n <= 0x10ffff && n >= 0x10000))
+            ? String.fromCodePoint(n)
+            : '\u{FFFD}';
+        } catch {
+          return '\u{FFFD}';
+        }
+      };
       if (entity.startsWith('#x') || entity.startsWith('#X')) {
-        return String.fromCodePoint(Number.parseInt(entity.slice(2), 16));
+        return codePoint(entity.slice(2), 16);
       }
       if (entity.startsWith('#')) {
-        return String.fromCodePoint(Number.parseInt(entity.slice(1), 10));
+        return codePoint(entity.slice(1), 10);
       }
       return ENTITIES[entity] ?? full;
     });

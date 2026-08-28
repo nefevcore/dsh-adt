@@ -31,6 +31,16 @@ export interface MockAdtOptions {
    * endpoint, which returns `aunit:runResult` directly in the POST response.
    */
   legacyUnitOnly?: boolean;
+  /**
+   * Send permissive CORS headers (`Access-Control-Allow-Origin: *`) so a
+   * local page can drive the demo (default: true). SECURITY NOTE (audit
+   * P3): with CORS on and NO credentials configured, any website open in a
+   * local browser can read and drive the mock — acceptable only because
+   * the server binds 127.0.0.1 and carries disposable demo data. Turn this
+   * OFF (`cors: false`) when running the standalone CLI mock with anything
+   * sensitive nearby.
+   */
+  cors?: boolean;
 }
 
 const NS_ADT = 'http://www.sap.com/adt/core';
@@ -70,7 +80,8 @@ function sourceXml(obj: MockObject): string {
 function objectRefXml(obj: MockObject, state?: MockState): string {
   const lock = state?.locked.get(obj.uri);
   const lockedBy = lock?.user ? ` adtcore:lockedBy="${lock.user}"` : '';
-  return `<adtcore:objectReference adtcore:uri="${obj.uri}" adtcore:type="${obj.type}" adtcore:name="${obj.name}" adtcore:description="${xmlEscape(obj.description)}" adtcore:packageName="${obj.packageName}"${lockedBy}/>`;
+  const corrNr = obj.corrNr ? ` adtcore:corrNr="${obj.corrNr}"` : '';
+  return `<adtcore:objectReference adtcore:uri="${obj.uri}" adtcore:type="${obj.type}" adtcore:name="${obj.name}" adtcore:description="${xmlEscape(obj.description)}" adtcore:packageName="${obj.packageName}"${corrNr}${lockedBy}/>`;
 }
 
 /** Lock attribute fragment for metadata responses (empty when unlocked). */
@@ -206,11 +217,12 @@ export function createMockAdtServer(options: MockAdtOptions = {}) {
         username: options.username,
         password: options.password,
         legacyUnitOnly: options.legacyUnitOnly ?? false,
+        cors: options.cors ?? true,
       });
     } catch (error) {
-      res.statusCode = 500;
+      res.statusCode = error instanceof MockHttpError ? error.status : 500;
       res.setHeader('Content-Type', 'application/xml');
-      res.end(errorXml(`Internal mock error: ${(error as Error).message}`));
+      res.end(errorXml(`${error instanceof MockHttpError ? '' : 'Internal mock error: '}${(error as Error).message}`));
     }
   });
 
@@ -226,7 +238,12 @@ export function createMockAdtServer(options: MockAdtOptions = {}) {
       return typeof address === 'object' && address ? address.port : port;
     },
     close(): Promise<void> {
-      return new Promise((resolve) => server.close(() => resolve()));
+      // Destroy keep-alive sockets too (audit P3): a bare close() waits for
+      // open connections and swallows the close error.
+      return new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      });
     },
     /** Access the in-memory object store (tests). */
     get objects() {
@@ -235,10 +252,27 @@ export function createMockAdtServer(options: MockAdtOptions = {}) {
   };
 }
 
+/** Cap on request bodies (audit P3: unbounded reads could balloon memory). */
+const MAX_BODY_BYTES = 1_024 * 1_024;
+
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_BODY_BYTES) {
+      throw new MockHttpError(413, `request body exceeds ${MAX_BODY_BYTES} bytes`);
+    }
+    chunks.push(Buffer.from(chunk));
+  }
   return Buffer.concat(chunks).toString('utf8');
+}
+
+/** Thrown by handlers to answer with a specific HTTP status. */
+class MockHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
 }
 
 function parseBasicAuth(req: IncomingMessage): { username: string; password: string } | undefined {
@@ -298,12 +332,16 @@ interface Ctx {
   username?: string;
   password?: string;
   legacyUnitOnly: boolean;
+  /** See MockAdtOptions.cors. */
+  cors: boolean;
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, state: MockState, opts: Ctx): Promise<void> {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, X-CSRF-Token, sap-adt-connection-id, x-sap-adt-sessiontype');
+  if (opts.cors !== false) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, X-CSRF-Token, sap-adt-connection-id, x-sap-adt-sessiontype');
+  }
   if (req.method === 'OPTIONS') {
     res.statusCode = 204;
     res.end();
@@ -332,7 +370,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
 
   // ---- Discovery (AtomPub service doc) ----
-  if (path === '/core/discovery' || path === '/discovery') {
+  if ((path === '/core/discovery' || path === '/discovery') && req.method === 'GET') {
     res.setHeader('Content-Type', 'application/atomsvc+xml');
     const collections = [
       ['/sap/bc/adt/repository/informationsystem', 'application/xml', 'Repository Information System'],
@@ -373,10 +411,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
 
   // ---- Search ----
-  if (path === '/repository/informationsystem/search') {
+  if (path === '/repository/informationsystem/search' && req.method === 'GET') {
     const query = (url.searchParams.get('query') ?? '').toLowerCase();
     const operation = url.searchParams.get('operation') ?? 'quickSearch';
-    const maxResults = Number(url.searchParams.get('maxResults') ?? 25);
+    // NaN/0/negative guards (audit P3): a malformed maxResults used to make
+    // slice(0, NaN) return an EMPTY hit list.
+    const requestedMax = Number(url.searchParams.get('maxResults') ?? 25);
+    const maxResults = Number.isFinite(requestedMax) && requestedMax > 0 ? Math.floor(requestedMax) : 25;
     res.setHeader('Content-Type', 'application/xml');
     // Wildcard-aware matching: `Z*` / `*DEMO*` behave like the real ADT search.
     const matcher = wildcardMatcher(query);
@@ -410,7 +451,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
 
   // ---- Where-used (usage references) ----
-  if (path === '/repository/informationsystem/usageReferences') {
+  if (path === '/repository/informationsystem/usageReferences' && req.method === 'GET') {
     const uri = url.searchParams.get('uri') ?? '';
     const obj = findObject(state, uri);
     const refs = obj ? (WHERE_USED[obj.name.toUpperCase()] ?? []) : [];
@@ -436,14 +477,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   // ---- Data preview (ddic / cds / freestyle SQL) ----
   const dpDdic = /^\/datapreview\/ddic\/([^/]+)$/.exec(path);
   const dpCds = /^\/datapreview\/cds\/([^/]+)$/.exec(path);
-  if (dpDdic || dpCds) {
+  if ((dpDdic || dpCds) && req.method === 'GET') {
     const name = (dpDdic?.[1] ?? dpCds?.[1] ?? '').toUpperCase();
     const rowNumber = Number(url.searchParams.get('rowNumber') ?? 2) || 2;
     res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
     res.end(adtXml(dataPreviewXml(name, '', rowNumber)));
     return;
   }
-  if (path === '/datapreview/freestyle') {
+  if (path === '/datapreview/freestyle' && req.method === 'GET') {
     const sql = url.searchParams.get('sqlQuery') ?? url.searchParams.get('sql') ?? 'SELECT';
     const rowNumber = Number(url.searchParams.get('rowNumber') ?? 2) || 2;
     res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
@@ -455,8 +496,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   if (path === '/runtime/dumps' && req.method === 'GET') {
     let dumps: MockDump[] = [...DUMPS];
     const query = url.searchParams.get('$query') ?? '';
-    const userMatch = /equals\(\s*user\s*,\s*([^)\s]+)\s*\)/.exec(query);
-    if (userMatch) dumps = dumps.filter((d) => d.user.toUpperCase() === userMatch[1]!.toUpperCase());
+    const userMatch = /equals\(\s*user\s*,\s*([^)]+?)\s*\)/.exec(query);
+    if (userMatch) {
+      // Quoted values (`user, 'DEMO'`) are legal $query syntax — strip the
+      // quotes instead of comparing against the quoted literal (audit P3).
+      const user = userMatch[1]!.replace(/^['"]|['"]$/g, '');
+      dumps = dumps.filter((d) => d.user.toUpperCase() === user.toUpperCase());
+    }
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
     if (from) dumps = dumps.filter((d) => d.id.slice(0, from.length) >= from);
@@ -649,7 +695,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
 
   // ---- Node structure (package content) ----
-  if (path === '/repository/nodestructure') {
+  if (path === '/repository/nodestructure' && req.method === 'GET') {
     const parentName = (url.searchParams.get('parent_name') ?? '').toUpperCase();
     const parentType = url.searchParams.get('parent_type') ?? '';
     res.setHeader('Content-Type', 'application/vnd.sap.adt.repository.nodestructure.v1+xml');
@@ -675,7 +721,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
 
   // ---- Transports ----
-  if (path === '/cts/transportrequests') {
+  if (path === '/cts/transportrequests' && req.method === 'GET') {
     res.setHeader('Content-Type', 'application/vnd.sap.adt.transportorganizertree.v1+xml');
     res.end(
       adtXml(
@@ -689,9 +735,22 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
   const transportMatch = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/.exec(path);
   if (transportMatch) {
-    const number = decodeURIComponent(transportMatch[1]!);
+    const requested = decodeURIComponent(transportMatch[1]!);
     const action = transportMatch[2];
+    // Mirrors real CTO backends: a TASK number resolves to its PARENT request
+    // (version feeds record task-level numbers). S4HK900003 is a task of
+    // S4HK900001 for testing purposes.
+    const number = requested.toUpperCase() === 'S4HK900003' ? 'S4HK900001' : requested;
     if (action === 'release') {
+      // Release is a state-changing action: GET must not perform it (audit
+      // P3 fidelity — every other mutating endpoint already guards).
+      if (req.method !== 'POST') {
+        res.statusCode = 405;
+        res.setHeader('Allow', 'POST');
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(errorXml(`transport release requires POST (got ${req.method})`));
+        return;
+      }
       if (!checkCsrf(req, res, state)) return;
       res.setHeader('Content-Type', 'application/vnd.sap.adt.transportorganizer.v1+xml');
       res.end(
@@ -754,6 +813,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
       changedBy: 'DEMO',
       source: initialSourceFor(type, name),
     };
+    // Transport assignment mirrors the real backend: an explicitly-passed
+    // corrNr records the object into exactly that request; a transportable
+    // package without one gets a NEW auto-created task; $TMP stays local
+    // (no transport ever). Exposed in the response so clients can police it.
+    const explicitCorrNr = url.searchParams.get('corrNr')?.toUpperCase();
+    if (explicitCorrNr) obj.corrNr = explicitCorrNr;
+    else if (obj.packageName !== '$TMP') {
+      obj.corrNr = `MOCKK${String(900000 + Math.floor(Math.random() * 99999))}`;
+    }
     state.objects.push(obj);
     res.statusCode = 201;
     res.setHeader('Location', obj.uri);
@@ -768,12 +836,31 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   const objByUri = findObject(state, path);
   if (objByUri && action === 'LOCK' && req.method === 'POST') {
     if (!checkCsrf(req, res, state)) return;
-    // Like the real backend: an object already belonging to an open request
-    // keeps it (its corrNr is returned); only a fresh transportable object
-    // gets a NEW auto-created task.
-    const corrnr = objByUri.corrNr ?? `MOCKK${String(900000 + Math.floor(Math.random() * 99999))}`;
-    const handle = randomUUID();
     const user = parseBasicAuth(req)?.username?.toUpperCase() ?? 'DEMO';
+    // Lock contention is visible (audit P3 fidelity): like the real backend,
+    // a lock held by ANOTHER user answers 403 (EU510) instead of being
+    // silently overwritten. Re-locking one's own lock refreshes it.
+    const existing = state.locked.get(objByUri.uri);
+    if (existing && existing.user && existing.user !== user) {
+      res.statusCode = 403;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(
+        errorXml(
+          `user ${existing.user} is already editing ${objByUri.name} (lock contention) — ` +
+            'wait or coordinate with them (SM12 for force-removal by admins)',
+        ),
+      );
+      return;
+    }
+    // Like the real backend: an object already belonging to an open request
+    // keeps it (its corrNr is returned); only a fresh TRANSPORTABLE object
+    // gets a NEW auto-created task — and that assignment persists, so the
+    // next lock reports the same request. $TMP objects never get a corrNr.
+    if (!objByUri.corrNr && objByUri.packageName !== '$TMP') {
+      objByUri.corrNr = `MOCKK${String(900000 + Math.floor(Math.random() * 99999))}`;
+    }
+    const corrnr = objByUri.corrNr ?? '';
+    const handle = randomUUID();
     state.locked.set(objByUri.uri, { handle, corrnr, user });
     res.setHeader('X-ADT-Lock-Handle', handle);
     res.setHeader('Content-Type', 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result');
@@ -782,8 +869,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
   if (objByUri && action === 'UNLOCK' && req.method === 'POST') {
     if (!checkCsrf(req, res, state)) return;
+    // The handle is validated (audit P3 fidelity): unlocking with a WRONG
+    // handle answers 403 like the real backend. A handle-less unlock (same
+    // user, used for residual-lock cleanup) stays permissive.
+    const existingUnlock = state.locked.get(objByUri.uri);
+    if (existingUnlock && lockHandleParam && lockHandleParam !== existingUnlock.handle) {
+      res.statusCode = 403;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`invalid lock handle for ${objByUri.name} — the lock is held with another handle`));
+      return;
+    }
     state.locked.delete(objByUri.uri);
-    void lockHandleParam;
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result');
     res.end(lockResultXml('', ''));
@@ -945,6 +1041,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   }
   const unitStatusMatch = /^\/abapunit\/runs\/([^/]+)$/.exec(path);
   if (unitStatusMatch && req.method === 'GET') {
+    // Unknown run ids answer 404 (audit P3 fidelity): a made-up id used to
+    // fabricate a completed green run.
+    if (!state.unitRuns.has(unitStatusMatch[1]!)) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`ABAP Unit run ${unitStatusMatch[1]} does not exist`));
+      return;
+    }
     res.setHeader('Content-Type', 'application/vnd.sap.adt.api.abapunit.run-status.v1+xml');
     res.end(
       adtXml(
@@ -959,6 +1063,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   const unitResultMatch = /^\/abapunit\/results\/([^/]+)$/.exec(path);
   if (unitResultMatch && req.method === 'GET') {
     const runId = unitResultMatch[1]!;
+    if (!state.unitRuns.has(runId)) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`ABAP Unit result ${runId} does not exist`));
+      return;
+    }
     const requested = state.unitRuns.get(runId);
     res.setHeader('Content-Type', 'application/vnd.sap.adt.api.junit.run-result.v1+xml');
     const testCases: string[] = [];
@@ -1123,6 +1233,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
     const targets = scope
       ? state.objects.filter((o) => scope.includes(o.name.toUpperCase()))
       : state.objects.filter((o) => o.atcFindings && o.atcFindings.length > 0);
+    // Object URIs follow the object's TYPE (audit P3 fidelity): the old code
+    // hardcoded /oo/classes/ for every object, so PROG findings carried a
+    // class URI.
+    const atcSourceUri = (o: MockObject): string => {
+      const base = uriFor(o.type, o.name.toLowerCase());
+      return `${base}/source/main`;
+    };
     // Real-backend shape: resultList → result → objects → object → findings.
     res.setHeader('Content-Type', 'application/xml');
     const objectsXml = targets
@@ -1130,10 +1247,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
         const findings = (o.atcFindings ?? [])
           .map((f, i) => {
             const priority = f.severity === 'CRITICAL' ? 1 : f.severity === 'ERROR' ? 2 : f.severity === 'WARNING' ? 3 : 4;
-            return `<atcfinding:finding adtcore:uri="/sap/bc/adt/atc/findings/itemid/${displayId}/index/${i + 1}" atcfinding:location="/sap/bc/adt/oo/classes/${o.name.toLowerCase()}/source/main#start=${f.line ?? 1},0" atcfinding:priority="${priority}" atcfinding:checkId="${f.check}" atcfinding:checkTitle="${xmlEscape(f.checkTitle)}" atcfinding:messageId="${f.check}" atcfinding:messageTitle="${xmlEscape(f.message)}" xmlns:atcfinding="http://www.sap.com/adt/atc/finding" xmlns:adtcore="http://www.sap.com/adt/core"/>`;
+            // A finding's location may point at ANOTHER object (e.g. an
+            // include) while the finding itself hangs on this object's name.
+            const locationUri = f.uri ?? atcSourceUri(o);
+            return `<atcfinding:finding adtcore:uri="/sap/bc/adt/atc/findings/itemid/${displayId}/index/${i + 1}" atcfinding:location="${locationUri}#start=${f.line ?? 1},0" atcfinding:priority="${priority}" atcfinding:checkId="${f.check}" atcfinding:checkTitle="${xmlEscape(f.checkTitle)}" atcfinding:messageId="${f.check}" atcfinding:messageTitle="${xmlEscape(f.message)}" xmlns:atcfinding="http://www.sap.com/adt/atc/finding" xmlns:adtcore="http://www.sap.com/adt/core"/>`;
           })
           .join('\n      ');
-        return `<atcobject:object adtcore:uri="/sap/bc/adt/oo/classes/${o.name.toLowerCase()}/source/main" adtcore:type="${o.category}" adtcore:name="${o.name}" adtcore:packageName="${o.packageName}" atcobject:author="DEMO" xmlns:atcobject="http://www.sap.com/adt/atc/object" xmlns:adtcore="http://www.sap.com/adt/core">
+        return `<atcobject:object adtcore:uri="${atcSourceUri(o)}" adtcore:type="${o.category}" adtcore:name="${o.name}" adtcore:packageName="${o.packageName}" atcobject:author="DEMO" xmlns:atcobject="http://www.sap.com/adt/atc/object" xmlns:adtcore="http://www.sap.com/adt/core">
       <atcobject:findings>${findings}</atcobject:findings>
     </atcobject:object>`;
       })
@@ -1360,7 +1480,10 @@ function uriFor(type: string, name: string): string {
     case 'INTF':
       return `/sap/bc/adt/oo/interfaces/${name.toLowerCase()}`;
     case 'PROG':
-      return `/sap/bc/adt/programs/programs/${name.toLowerCase()}`;
+      // Includes (PROG/I) live in their own namespace — /programs/includes/.
+      return type === 'PROG/I'
+        ? `/sap/bc/adt/programs/includes/${name.toLowerCase()}`
+        : `/sap/bc/adt/programs/programs/${name.toLowerCase()}`;
     case 'DDLS':
       return `/sap/bc/adt/ddls/sources/${name.toLowerCase()}`;
     case 'TABL':

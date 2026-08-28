@@ -195,6 +195,16 @@ function escape(text) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
 }
+/**
+ * Escape a literal for safe interpolation into a RegExp SOURCE (audit M4).
+ * `escape()` above is an XML escaper — using it (or nothing) inside
+ * `new RegExp(...)` let metacharacter-carrying property/label keys act as
+ * patterns: a key like `sho.rtText` silently patched the WRONG element and
+ * an unbalanced `(` threw a SyntaxError.
+ */
+function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 /** Patch an attribute on the root element (matched by local name, any prefix). */
 function patchRootAttribute(xml, localName, value) {
     const rootOpen = /<[A-Za-z][\w.:-]*[^>]*>/g;
@@ -202,7 +212,7 @@ function patchRootAttribute(xml, localName, value) {
     if (!match)
         return xml;
     const tag = match[0];
-    const attrRe = new RegExp(`((?:[\\w.-]+:)?${localName})\\s*=\\s*"[^"]*"`);
+    const attrRe = new RegExp(`((?:[\\w.-]+:)?${escapeRegExp(localName)})\\s*=\\s*"[^"]*"`);
     const escaped = escape(value);
     const patched = attrRe.test(tag)
         ? tag.replace(attrRe, `$1="${escaped}"`)
@@ -214,14 +224,15 @@ function patchRootAttribute(xml, localName, value) {
  * end), or `undefined` when absent. Handles paired and self-closing forms.
  */
 function elementRange(xml, localName) {
-    const openRe = new RegExp(`<(?:[\\w.-]+:)?${localName}\\b[^>]*?>`, 'g');
+    const needle = escapeRegExp(localName);
+    const openRe = new RegExp(`<(?:[\\w.-]+:)?${needle}\\b[^>]*?>`, 'g');
     const open = openRe.exec(xml);
     if (!open)
         return undefined;
     if (open[0].endsWith('/>')) {
         return { start: open.index, end: open.index + open[0].length, openTag: open[0] };
     }
-    const closeRe = new RegExp(`</(?:[\\w.-]+:)?${localName}\\s*>`);
+    const closeRe = new RegExp(`</(?:[\\w.-]+:)?${needle}\\s*>`);
     closeRe.lastIndex = open.index + open[0].length;
     const rest = xml.slice(open.index + open[0].length);
     const close = closeRe.exec(rest);
@@ -249,10 +260,14 @@ function patchElementText(xml, parentLocal, localName, value) {
         scope = { start: open.index + open[0].length, end: xml.lastIndexOf('</') };
     }
     const inner = xml.slice(scope.start, scope.end);
-    const elRe = new RegExp(`<((?:[\\w.-]+):)?${localName}\\b[^>]*>([\\s\\S]*?)</(?:[\\w.-]+:)?${localName}\\s*>`);
+    const needle = escapeRegExp(localName);
+    const elRe = new RegExp(`<((?:[\\w.-]+):)?${needle}\\b[^>]*>([\\s\\S]*?)</(?:[\\w.-]+:)?${needle}\\s*>`);
     const existing = elRe.exec(inner);
     if (existing) {
-        const prefix = existing[1] ? `${existing[1]}:` : '';
+        // Group 1 captures the prefix INCLUDING its colon ("dtel:") — do not
+        // append another (that produced <doma::length>, silently corrupting the
+        // XML sent to the backend; found while fixing audit M4).
+        const prefix = existing[1] || '';
         const patched = inner.slice(0, existing.index) + `<${prefix}${localName}>${escape(value)}</${prefix}${localName}>` +
             inner.slice(existing.index + existing[0].length);
         return xml.slice(0, scope.start) + patched + xml.slice(scope.end);
@@ -279,7 +294,8 @@ function replaceElementBlock(xml, localName, block) {
 }
 /** Remove EVERY occurrence of an element, returning the cleaned document. */
 function removeAllElements(xml, localName) {
-    const openRe = new RegExp(`<(?:[\\w.-]+:)?${localName}\\b[^>]*?/>|<(?:[\\w.-]+:)?${localName}\\b[^>]*?>[\\s\\S]*?</(?:[\\w.-]+:)?${localName}\\s*>`, 'g');
+    const needle = escapeRegExp(localName);
+    const openRe = new RegExp(`<(?:[\\w.-]+:)?${needle}\\b[^>]*?/>|<(?:[\\w.-]+:)?${needle}\\b[^>]*?>[\\s\\S]*?</(?:[\\w.-]+:)?${needle}\\s*>`, 'g');
     return xml.replace(openRe, '');
 }
 /** Insert a fragment just before the root element's closing tag. */
@@ -317,7 +333,12 @@ export function patchStructureXml(xml, kind, changes) {
                 lines.push(`<mc:deletedmessages mc:msgno="${escape(message.number)}" mc:msgtext="${escape(message.text)}"/>`);
             }
         }
+        // Remove BOTH block kinds before inserting the new set (audit P3): a
+        // `deletedmessages` block left over from a previous patch round was
+        // never matched by the `messages` removal, so merging produced
+        // duplicate blocks on the next write.
         out = removeAllElements(out, 'messages');
+        out = removeAllElements(out, 'deletedmessages');
         out = insertBeforeRootClose(out, lines.join('\n'));
         return out;
     }
@@ -377,10 +398,12 @@ export function patchStructureXml(xml, kind, changes) {
 /** Patch one `<dtel:label type="…">` text (inserting the labels block if absent). */
 function patchLabel(xml, type, value) {
     // 1) The label exists → replace its text, preserving prefix and attributes.
-    const labelRe = new RegExp(`(<((?:[\\w.-]+):)?label\\b[^>]*?(?:[\\w.-]+:)?type\\s*=\\s*"${escape(type)}"[^>]*>)([\\s\\S]*?)</(?:[\\w.-]+:)?label\\s*>`);
+    //    The type is regex-escaped before entering the RegExp source (audit M4).
+    const labelRe = new RegExp(`(<((?:[\\w.-]+):)?label\\b[^>]*?(?:[\\w.-]+:)?type\\s*=\\s*"${escapeRegExp(type)}"[^>]*>)([\\s\\S]*?)</(?:[\\w.-]+:)?label\\s*>`);
     const existing = labelRe.exec(xml);
     if (existing) {
-        const prefix = existing[2] ? `${existing[2]}:` : '';
+        // Group 2 captures the prefix INCLUDING its colon (see patchElementText).
+        const prefix = existing[2] || '';
         return (xml.slice(0, existing.index) +
             `${existing[1]}${escape(value)}</${prefix}label>` +
             xml.slice(existing.index + existing[0].length));

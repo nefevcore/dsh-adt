@@ -39,7 +39,13 @@ import { executeTools } from './tools/execute.js';
 import { structureTools } from './tools/structure.js';
 
 const name = 'abap-adt';
-const inject = ['tools', 'fs'];
+// Only `tools` is a hard dependency (audit D1): without it the plugin has no
+// reason to load at all. `fs` is deliberately OPTIONAL — resolved per call
+// via `ctx.get('fs')` — so lean profiles without dsh-fs still get every
+// tool, with the filesystem-backed capabilities (read snapshots, export,
+// push, sourceFile, local check) degrading with clear errors instead of the
+// whole plugin sitting in `waiting` forever.
+const inject = ['tools'];
 
 /**
  * Apply the plugin: build the destination registry and register every tool.
@@ -70,9 +76,15 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
   let source: () => PluginConfig = () => config;
   let rebuildChain: Promise<void> = Promise.resolve();
   let lastSnapshot = '';
+  // Set by the disposer BEFORE teardown (audit D4): a settings change queued
+  // behind the current rebuild must never run registry.reload() on a disposed
+  // registry — that would restart the demo mock outside any disposer's reach
+  // (leaked listeners until process exit).
+  let disposed = false;
   const registry = await AdtRegistry.create(composeLayers([config]));
   async function rebuild(): Promise<void> {
     rebuildChain = rebuildChain.then(async () => {
+      if (disposed) return; // plugin already unloaded — do not revive the registry
       try {
         const resolved = source();
         const settingsAttached = resolved !== config;
@@ -147,8 +159,14 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
 
   info(`plugin active: ${tools.length} tools registered`);
 
-  // Fiber disposer: close the mock server and drop clients on unload.
-  return () => registry.dispose();
+  // Fiber disposer: flag the plugin as disposed FIRST (kills every queued
+  // rebuild), let the in-flight one settle, then close the mock server and
+  // drop the clients.
+  return async () => {
+    disposed = true;
+    await rebuildChain.catch(() => undefined);
+    await registry.dispose();
+  };
 }
 
 export { Config, apply, inject, name };

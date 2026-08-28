@@ -275,7 +275,8 @@ export function localTools(_deps, ctx) {
             },
             timeoutMs: 300_000,
             execute: async (args, exec) => {
-                const fs = ctx.fs;
+                // Optional service (audit D1): resolved at call time, not injected.
+                const fs = ctx.get('fs');
                 if (!fs)
                     throw new Error('adt_local_check requires the dsh filesystem service');
                 return runLocalCheck(String(args.dir), {

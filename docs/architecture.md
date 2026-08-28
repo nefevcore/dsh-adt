@@ -10,7 +10,7 @@
 │  │  ├─ AdtRegistry ── 多目的地注册表                     │  │
 │  │  │   ├─ demo → 进程内 Mock ADT 服务器 (node:http)    │  │
 │  │  │   └─ dev/prod → AdtClient ×N                      │  │
-│  │  └─ ctx.tools.register(30 × adt_* 工具)              │  │
+│  │  └─ ctx.tools.register(35 × adt_* 工具)              │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                           │                                │
 │                    adt_* 工具调用                           │
@@ -35,9 +35,9 @@
 - 带示例对象库（类/接口/程序/CDS + 单测与 ATC 数据），支持 Basic auth 校验与 CSRF 强制
 
 ### 3. `@nefevcore/abap-adt-dsh-plugin` — DSH (Cordis) 插件
-- `cordis.patch.yml` 声明 `dsh.bundle.patch`；安装后自动成为 profile bundle 层
-- `apply(ctx, config)`：构建 registry（含 `AdtPolicy` 权限策略）→ 注册全部工具 → 返回 fiber disposer（卸载时关闭 mock）
-- **权限管控（`policy.ts`）**：所有修改类工具在执行前断言策略规则（传输开关 / 允许的传输号 glob / 可传输编辑开关 / 允许的包 glob / 代码执行开关 / batch 写开关），生效值来自 config > `SAP_*` 环境变量 > 默认值；拒绝时抛 `[POLICY]` 错误并自动回滚（如写操作解锁）。包名解析优先显式 `packageName`，其次搜索精确命中，无法确定时失败关闭
+- 包**不声明** `dsh.bundle`：安装只是放进 profile 依赖；启用走**预设行**——`abap-adt-preset` CLI 从 `standard` 预设拷贝生成 `~/.dsh/.agent-presets/<id>/`(剔除 `tool-cordis`/`skill-filesystem` 行)并追加本插件的行,只有该预设的会话加载 `adt_*` 工具
+- `apply(ctx, config)`：构建 registry（含 `AdtPolicy` 权限策略）→ 注册全部工具 → 返回 fiber disposer（卸载时关闭 mock）;仅硬依赖 `tools` 服务,`fs` 为可选服务(逐调用 `ctx.get('fs')`,缺失时文件系统能力优雅降级)
+- **权限管控（`policy.ts`）**：所有修改类工具在执行前断言策略规则（传输开关 / 允许的传输号 glob / 可传输编辑开关 / 允许的包 glob / 代码执行开关 / batch 写开关），生效值来自 config > `SAP_*` 环境变量 > 默认值；拒绝时抛 `[POLICY]` 错误并自动回滚（如写操作解锁、create 删除回建对象）。包名解析以**后端搜索精确命中**为准，调用方 `packageName` hint 仅在后端查不到时兜底，无法确定时失败关闭；write/edit/push/delete/activate/write_structure 解析对象时强制精确命中（拼错名报错列候选，绝不模糊落到别的对象）
 - 工具按职责分文件（system/search/read/write/objects/lifecycle/testing/atc_runs/transport/packages/batch/local/whereused/datapreview/lock/versions/gate/policy/dumps/execute/structure），统一通过 `defineTool` 声明参数/输出 schema 与 render；共享参数规格与对象解析/权限门助手收敛在 `tools/common.ts`
 
 ## 关键设计决策
@@ -46,7 +46,7 @@
 2. **零配置 demo**：插件内置 mock 服务器，开箱即用；真实系统通过 `destinations` 配置接入（走 DSH settings：schema 注册为 `abap-adt` 命名空间，插件行 config 为 composition base，`~/.dsh/settings.yaml` 的 `abap-adt:` 段为用户层且**热生效**；显式 `configFile` 为团队共享的最权威层；分层就近覆盖：settings 用户段 > 内联 config > 旧版独立文件（已废弃）> schema 默认值，权限四开关另有 `SAP_*` 环境变量兜底；`destinations` 跨层按名字合并）
 3. **异步 run 流程**：ABAP Unit / ATC 都是"提交 → 轮询 → 取结果"，客户端完整实现轮询循环与超时
 4. **协议正确性优先**：错误处理覆盖 ADT 特有语义（激活错误在 200 body、exc:exception 错误体、403 CSRF/锁冲突区分、412 ETag）
-5. **沙箱感知**：导出工具走 `ctx.fs` 服务，遵守 DSH 文件沙箱策略
+5. **沙箱感知**：导出工具走可选的 `ctx.get('fs')` 服务，遵守 DSH 文件沙箱策略（无该服务的精简 profile 上优雅降级，不影响其余工具）
 6. **权限管控（fail-closed）**：修改类工具先过策略再动 SAP；后端在 lock 时自动分配的传输号（CORRNR）同样受 `allowedTransports` 约束，不匹配即回滚；包名无法确定时拒绝而不是放行
 
 ## 批量与门禁功能（代理尺度）

@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, OBJECTS_PARAM, destinationOf, text } from './common.js';
+import { DESTINATION_PARAM, OBJECTS_PARAM, destinationOf, requireObjectList, text } from './common.js';
 import { resolveObjects } from '../resolve.js';
 export function testingTools(deps) {
     const { registry } = deps;
@@ -68,7 +68,7 @@ export function testingTools(deps) {
         timeoutMs: 330_000,
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
-            const refs = await resolveObjects(entry.client, args.objects, exec.signal);
+            const refs = await resolveObjects(entry.client, requireObjectList(args, 'adt_run_unit_tests'), exec.signal);
             const result = await entry.client.runUnitTests(refs, { signal: exec.signal });
             return {
                 success: result.success,
@@ -94,8 +94,12 @@ export function testingTools(deps) {
     });
     const runAtc = defineTool({
         name: 'adt_run_atc',
-        description: 'Run ABAP Test Cockpit (ATC) checks on the given objects. Returns findings with severity, check and source position. ' +
-            'Pass `variant` to use a named ATC check variant.',
+        description: 'Run ABAP Test Cockpit (ATC) checks on the given objects. Returns findings with severity, check and source ' +
+            'position, plus the result displayId (the run is STORED on the backend — it shows up in adt_list_atc_runs, ' +
+            'usually titled "External Request + timestamp" for tool-triggered runs). `durationMs` is the wall-clock time ' +
+            'of the whole run. POSITION MAPPING: findings can be reported under the MAIN program name while `line` counts ' +
+            'in an INCLUDE — check each finding\'s `uri` before jumping to a line number. For authoritative P1–P4 ' +
+            'aggregates cross-check with adt_list_atc_runs. Pass `variant` to use a named ATC check variant.',
         parameters: {
             ...OBJECTS_PARAM,
             variant: { type: 'string', description: 'ATC check variant name (backend-defined).' },
@@ -118,6 +122,10 @@ export function testingTools(deps) {
                                 severity: { type: 'string', required: true },
                                 message: { type: 'string', required: true },
                                 objectName: { type: 'string', required: true },
+                                uri: {
+                                    type: 'string',
+                                    description: 'URI of the object the `line` refers to (often an include while objectName is the main program).',
+                                },
                                 line: { type: 'integer' },
                                 check: { type: 'string' },
                             },
@@ -164,7 +172,9 @@ export function testingTools(deps) {
                         `${value.displayId ? `\nResult displayId: ${value.displayId} (use adt_get_atc_result to re-fetch)` : ''}`,
                 ];
                 for (const f of value.findings) {
-                    lines.push(`- [${f.severity}] ${f.objectName}${f.line ? `:${f.line}` : ''} — ${f.checkTitle}: ${f.message}`);
+                    const uriBase = f.uri ? f.uri.replace(/\/source\/main.*$/, '').split('/').pop()?.split('.')[0] : undefined;
+                    const inInclude = uriBase && uriBase.toUpperCase() !== f.objectName.toUpperCase() ? ` (in ${uriBase})` : '';
+                    lines.push(`- [${f.severity}] ${f.objectName}${inInclude}${f.line ? `:${f.line}` : ''} — ${f.checkTitle}: ${f.message}`);
                 }
                 return text(lines.join('\n'));
             },
@@ -172,7 +182,7 @@ export function testingTools(deps) {
         timeoutMs: 660_000,
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
-            const refs = await resolveObjects(entry.client, args.objects, exec.signal);
+            const refs = await resolveObjects(entry.client, requireObjectList(args, 'adt_run_atc'), exec.signal);
             const result = await entry.client.runAtc(refs, {
                 variant: typeof args.variant === 'string' ? args.variant : undefined,
                 signal: exec.signal,
@@ -184,6 +194,7 @@ export function testingTools(deps) {
                     severity: f.severity,
                     message: f.message,
                     objectName: f.objectName,
+                    uri: f.locationUri || f.uri || undefined,
                     line: f.line,
                     check: f.check,
                 })),

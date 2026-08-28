@@ -48,6 +48,12 @@ export interface MockObject {
     severity: 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
     message: string;
     line?: number;
+    /**
+     * Optional override for the finding's location URI. Real backends report
+     * findings of a program's INCLUDES under the MAIN program name while the
+     * location points at the include — set this to reproduce that mapping.
+     */
+    uri?: string;
   }>;
 }
 
@@ -155,7 +161,32 @@ WRITE / lo_demo->greet( iv_name = p_name ).`,
         message: 'REPORT ZPROG_DEMO: avoid SELECT statements in loops (line 5)',
         line: 5,
       },
+      // Mirrors real backends: the finding hangs on the MAIN program name but
+      // the location (line 3) points into the program's INCLUDE.
+      {
+        check: 'SLIN_VERS',
+        checkTitle: 'Statement is not in the current ABAP language mode',
+        severity: 'WARNING',
+        message: 'INCLUDE ZPROG_DEMO_TOP: obsolete statement in include (line 3)',
+        line: 3,
+        uri: '/sap/bc/adt/programs/includes/zprog_demo_top/source/main',
+      },
     ],
+  },
+  {
+    // Include of ZPROG_DEMO — lives under /programs/includes/, NOT
+    // /programs/programs/: resolving it by name+type=PROG must go through
+    // search (this is the real-world include-404 reproduction).
+    uri: '/sap/bc/adt/programs/includes/zprog_demo_top',
+    type: 'PROG/I',
+    category: 'PROG',
+    name: 'ZPROG_DEMO_TOP',
+    description: 'TOP include of ZPROG_DEMO',
+    packageName: 'ZPACK_DEMO',
+    masterLanguage: 'EN',
+    changedAt: NOW,
+    changedBy: 'DEMO',
+    source: `PROGRAM zprog_demo_top.\n\nDATA: gv_title TYPE string VALUE 'demo'.\n\nDATA: gv_count TYPE i.`,
   },
   {
     uri: '/sap/bc/adt/ddls/sources/zcds_demo',

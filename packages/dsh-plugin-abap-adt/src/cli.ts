@@ -7,9 +7,18 @@
  * `dsh plugin`'s reconcile only promotes packages that declare a bundle into
  * the global layer stack, and per-session tools are exactly what this plugin
  * wants. Activation happens through an agent preset row — this command
- * creates that preset from an existing one (default: the deployment default,
- * usually `cordis`) by copying its whole directory and appending the plugin
- * row, so ONLY sessions created on the preset get the `adt_*` tools.
+ * creates that preset from an existing one (default: `standard`, the full
+ * coding agent WITHOUT the plugin-authoring toolset) by copying its whole
+ * directory, appending the plugin row, and stripping the plugin-authoring
+ * rows (`tool-cordis`, `skill-filesystem`) when the source carries them, so
+ * ONLY sessions created on the preset get the `adt_*` tools.
+ *
+ * Why `standard` and not the deployment default (audit D2): on deployments
+ * whose default is `cordis`, the copy would drag in `tool-cordis` — whose
+ * Host Cordis inspect provider collides with an active cordis session at
+ * standing mount — besides handing every ABAP session the plugin-creation
+ * tools and skills. Pass `--from cordis` to override; the stripping keeps
+ * even that source mountable.
  *
  * Usage (after `dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin`):
  *
@@ -17,9 +26,7 @@
  *
  * Options:
  *   --id <name>     preset id / directory name          (default: abap-adt)
- *   --from <id>     source preset to copy               (default: deployment
- *                   default preset, read from settings.yaml; falls back to
- *                   `cordis`)
+ *   --from <id>     source preset to copy               (default: standard)
  *   --name <text>   display name written to preset.yml  (default: ABAP
  *                   Development)
  *   --force         overwrite an existing preset directory
@@ -35,7 +42,6 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse } from 'yaml';
 
 /** The plugin row appended to the copied composition. */
 export const PLUGIN_ROW = `
@@ -61,25 +67,53 @@ export function dshHome(): string {
 }
 
 /**
- * The deployment default preset id: `agent-presets.default` from
- * settings.yaml, falling back to `cordis`. A settings.yaml that fails to
- * parse must not break generation.
+ * The default source preset: always `standard` (audit D2). Deliberately NOT
+ * the deployment default from settings.yaml — on deployments where that is
+ * `cordis`, the copy would drag in the `tool-cordis` row, whose Host Cordis
+ * inspect provider collides with an active cordis session at standing mount,
+ * and hand every ABAP session the plugin-authoring toolset. `standard` is
+ * the same full coding agent without that toolset; `--from` overrides.
  */
 export function defaultSourcePresetId(): string {
-  try {
-    const path = join(dshHome(), 'settings.yaml');
-    if (!existsSync(path)) return 'cordis';
-    const parsed = parse(readFileSync(path, 'utf8')) as { 'agent-presets'?: { default?: string } } | null;
-    const id = parsed?.['agent-presets']?.default || 'cordis';
-    // The source must be a SHIPPED preset: a user whose deployment default is
-    // a locally generated preset (e.g. this plugin's own `abap-adt`) would
-    // otherwise make the generator try to copy itself, so ids present in the
-    // user preset dir (~/.dsh/.agent-presets/) fall back to `cordis`.
-    if (id && existsSync(join(dshHome(), '.agent-presets', id))) return 'cordis';
-    return id;
-  } catch {
-    return 'cordis';
+  return 'standard';
+}
+
+/**
+ * Rows stripped from every generated composition (audit D2): plugin-authoring
+ * machinery an ABAP session has no use for, which additionally breaks the
+ * standing-mount acceptance gate when copied from `cordis`.
+ */
+export const STRIPPED_PRESET_ROWS = ['tool-cordis', 'skill-filesystem'];
+
+/**
+ * Remove top-level `- id: <id>` rows (and their indented continuation lines)
+ * from a composition. Comment lines above a stripped row are kept (they are
+ * documentation of the source preset); nested (indented) rows are never
+ * touched. Returns the cleaned composition plus the ids actually removed.
+ */
+export function stripPresetRows(composition: string, ids: string[]): { composition: string; removed: string[] } {
+  const targets = new Set(ids);
+  const kept: string[] = [];
+  const removed: string[] = [];
+  let skipping = false;
+  for (const line of composition.split('\n')) {
+    const topRow = /^- id:\s*(\S+)\s*$/.exec(line);
+    if (topRow) {
+      skipping = targets.has(topRow[1]!);
+      if (skipping) {
+        removed.push(topRow[1]!);
+        continue;
+      }
+    }
+    if (skipping) {
+      // Indented lines and blanks belong to the stripped row; anything else
+      // (a comment, a new top-level element) ends the skip and is kept.
+      if (line.trim() === '' || /^[ \t]/.test(line)) continue;
+      skipping = false;
+    }
+    kept.push(line);
   }
+  return { composition: kept.join('\n'), removed };
 }
 
 /**
@@ -148,6 +182,15 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case '--from':
         out.from = argv[++i];
+        if (out.from === undefined || !/^[a-z0-9][a-z0-9-]*$/.test(out.from)) {
+          // Fail loudly instead of silently falling back to the default
+          // source (audit P3): a missing or malformed value must not be
+          // papered over, and a path-like value (`../..`) could otherwise
+          // escape the shipped preset directory.
+          throw new Error(
+            `--from needs a shipped preset id matching [a-z0-9][a-z0-9-]* (got '${out.from ?? 'nothing'}')`,
+          );
+        }
         break;
       case '--name':
         out.name = argv[++i] ?? '';
@@ -176,12 +219,13 @@ function help(): string {
   return [
     'abap-adt-preset — generate the per-session ABAP agent preset',
     '',
-    '  dsh plugin --profile web exec abap-adt-preset [--id abap-adt] [--from cordis] [--name "ABAP Development"] [--force] [--dry-run]',
+    '  dsh plugin --profile web exec abap-adt-preset [--id abap-adt] [--from standard] [--name "ABAP Development"] [--force] [--dry-run]',
     '',
-    'Copies the source preset (default: the deployment default, usually cordis)',
-    'into ~/.dsh/.agent-presets/<id>/ and appends the abap-adt plugin row, so',
-    'only sessions created on this preset load the adt_* tools.',
-    'Config: ~/.dsh/settings.yaml `abap-adt:` section (hot-applies).',
+    'Copies the source preset (default: standard — the full coding agent)',
+    'into ~/.dsh/.agent-presets/<id>/, appends the abap-adt plugin row, and',
+    'strips the plugin-authoring rows (tool-cordis, skill-filesystem) the',
+    'source may carry, so only sessions created on this preset load the',
+    'adt_* tools. Config: ~/.dsh/settings.yaml `abap-adt:` section (hot-applies).',
   ].join('\n');
 }
 
@@ -221,7 +265,10 @@ export function main(argv: string[]): number {
 
   const presetDir = join(dshHome(), '.agent-presets', args.id);
   const composition = readFileSync(join(sourceDir, 'agent.cordis.yml'), 'utf8');
-  const nextComposition = composition.trimEnd() + '\n' + PLUGIN_ROW;
+  // Strip the plugin-authoring rows (audit D2): an ABAP session has no use
+  // for them, and `tool-cordis` breaks the standing-mount acceptance gate.
+  const { composition: stripped, removed } = stripPresetRows(composition, STRIPPED_PRESET_ROWS);
+  const nextComposition = stripped.trimEnd() + '\n' + PLUGIN_ROW;
   const presetYml = renderPresetYml(args.name, 'Standard agent plus adt_* ABAP tools; sessions on this preset can develop against SAP via ADT.');
 
   // --dry-run previews without touching anything, so it ignores an existing
@@ -229,6 +276,7 @@ export function main(argv: string[]): number {
   if (args.dryRun) {
     process.stdout.write(
       `would copy  ${sourceDir} -> ${presetDir}\n` +
+        (removed.length ? `would strip row(s): ${removed.join(', ')}\n` : '') +
         `would write ${join(presetDir, 'agent.cordis.yml')} (source + appended abap-adt row)\n` +
         `would write ${join(presetDir, 'preset.yml')} (name: ${JSON.stringify(args.name)})\n`,
     );
@@ -271,6 +319,7 @@ export function main(argv: string[]): number {
   process.stdout.write(
     [
       `created ${presetDir} (from preset '${from}')`,
+      ...(removed.length ? [`stripped row(s) not needed on ABAP sessions: ${removed.join(', ')}`] : []),
       ...notices,
       'next steps:',
       '  1. restart DSH (only needed once — this preset is new)',

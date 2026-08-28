@@ -185,6 +185,12 @@ test('runs ATC checks', async () => {
   assert.equal(result.clean, false);
   assert.ok(result.findings.length >= 2);
   assert.ok(result.counts.ERROR >= 1);
+  // A finding nested under the main program whose location points at the
+  // include carries that URI (real-backend mapping).
+  const includeFinding = result.findings.find((f) => (f.locationUri ?? '').includes('/programs/includes/'));
+  assert.ok(includeFinding, 'expected a finding mapped into the include');
+  assert.equal(includeFinding.objectName, 'ZPROG_DEMO');
+  assert.equal(includeFinding.line, 3);
 });
 
 test('lists transports and reads one with items', async () => {
@@ -457,4 +463,118 @@ test('data preview offset/length window slices the generated rows', async () => 
   const offsetRows = full.rows.slice(3, 3 + 4);
   assert.equal(offsetRows[0]?.ID, '4');
   assert.equal(offsetRows.at(-1)?.ID, '7');
+});
+
+// ---------------------------------------------------------------------------
+// Audit P3 fidelity regressions: lock contention, handle validation, unknown
+// run ids, malformed search paging, quoted $query values, release method.
+// ---------------------------------------------------------------------------
+
+test('P3: lock contention is visible — another user gets 403, not silent overwrite', async () => {
+  // A credential-less mock: both clients authenticate with their own
+  // usernames, which is what the lock's user attribution reads.
+  const open = createMockAdtServer({ port: 0 });
+  const openPort = await open.listen();
+  try {
+    const mk = (user: string): AdtClient =>
+      new AdtClient({
+        name: 't',
+        url: `http://127.0.0.1:${openPort}`,
+        client: '000',
+        language: 'EN',
+        auth: { type: 'basic', username: user, password: 'x' },
+      });
+    const owner = mk('alice');
+    const rival = mk('bob');
+    const uri = '/sap/bc/adt/oo/classes/zcl_demo';
+    const { handle } = await owner.lock(uri);
+    try {
+      await assert.rejects(() => rival.lock(uri), (error: unknown) => {
+        assert.ok(error instanceof AdtError);
+        assert.equal(error.status, 403, `expected lock-contention 403, got ${(error as Error).message}`);
+        return true;
+      });
+      // The ORIGINAL owner still holds the very same lock.
+      const still = await owner.getObjectLock(uri);
+      assert.equal(still.locked, true);
+      assert.equal(still.lockedBy, 'ALICE');
+    } finally {
+      await owner.unlock(uri, handle);
+    }
+  } finally {
+    await open.close();
+  }
+});
+
+test('P3: unlock with a WRONG handle answers 403; handle-less unlock still works', async () => {
+  const c = client();
+  const uri = '/sap/bc/adt/oo/classes/zcl_flaky';
+  const { handle } = await c.lock(uri);
+  await assert.rejects(() => c.unlock(uri, `wrong-${handle}`), (error: unknown) => {
+    assert.ok(error instanceof AdtError);
+    assert.equal(error.status, 403, `expected invalid-handle 403, got ${(error as Error).message}`);
+    return true;
+  });
+  // Handle-less unlock (residual-lock cleanup path) releases it.
+  const released = await c.unlockBestEffort(uri);
+  assert.equal(released.released, true);
+});
+
+test('P3: unknown ABAP Unit run ids answer 404 instead of fabricating a green run', async () => {
+  const c = client();
+  await assert.rejects(() => c.request({ path: '/sap/bc/adt/abapunit/runs/deadbeef-not-a-run' }), (error: unknown) => {
+    assert.ok(error instanceof AdtError);
+    assert.equal(error.status, 404, `expected unknown-run 404, got ${(error as Error).message}`);
+    return true;
+  });
+});
+
+test('P3: malformed maxResults degrades to the default instead of an empty hit list', async () => {
+  const c = client();
+  const result = await c.search('ZCL_DEMO', { maxResults: Number('abc') });
+  assert.ok(result.objects.length > 0, 'NaN maxResults must not zero the results');
+});
+
+test('P3: dumps $query accepts quoted user values', async () => {
+  const c = client();
+  // QUOTED $query values (real-backend syntax) go straight to the endpoint —
+  // the client-side API rejects quote characters by whitelist, so exercise
+  // the mock's quote-stripping fidelity with a raw request.
+  const expression = encodeURIComponent("and( equals( user, 'DEMO' ) )");
+  const res = await c.request({ path: `/sap/bc/adt/runtime/dumps?%24query=${expression}` });
+  assert.match(res.text, /UNCAUGHT_EXCEPTION/);
+  assert.equal((res.text.match(/<entry>/g) ?? []).length, 1, 'exactly the DEMO dump matches');
+  // And the client API rejects quote-carrying users fail-closed.
+  await assert.rejects(() => c.listDumps({ user: "'DEMO'" }), /refusing to build a dumps \$query filter/);
+});
+
+test('P3: transport release rejects GET (state change must be POST)', async () => {
+  const c = client();
+  await assert.rejects(
+    () => c.request({ path: '/sap/bc/adt/cts/transportrequests/S4HK900001/release', noCsrf: true }),
+    (error: unknown) => {
+      assert.ok(error instanceof AdtError);
+      assert.equal(error.status, 405);
+      return true;
+    },
+  );
+});
+
+test('P3: read endpoints reject non-GET methods', async () => {
+  const c = client();
+  for (const path of [
+    '/sap/bc/adt/core/discovery',
+    '/sap/bc/adt/repository/informationsystem/search',
+    '/sap/bc/adt/datapreview/freestyle',
+    '/sap/bc/adt/cts/transportrequests',
+  ]) {
+    await assert.rejects(
+      () => c.request({ method: 'POST', path, noCsrf: true, body: 'x' }),
+      (error: unknown) => {
+        assert.ok(error instanceof AdtError, `${path}: expected AdtError`);
+        assert.equal(error.status, 404, `${path}: no handler for POST`);
+        return true;
+      },
+    );
+  }
 });

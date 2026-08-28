@@ -119,10 +119,14 @@ export function objectTools(deps) {
                     throw error;
                 }
             })();
-            // Post-create lock hygiene (see file header): 1. try to LOCK ourselves —
-            // if it succeeds the object was free and we immediately release OUR
-            // handle (clean state); 2. if the backend already holds the lock, try a
-            // handle-less UNLOCK; 3. if that is also rejected, remember the object
+            // Post-create hygiene (see file header) + transport policing (audit
+            // M7): 1. the transport the create was RECORDED into (explicit,
+            // create-response CORRNR, or the lock's assignment) must pass the
+            // policy — on violation the fresh object is deleted again so no
+            // out-of-policy request keeps content; 2. try to LOCK ourselves — if it
+            // succeeds the object was free and we immediately release OUR handle
+            // (clean state); 3. if the backend already holds the lock, try a
+            // handle-less UNLOCK; 4. if that is also rejected, remember the object
             // in the lock ledger so `adt_unlock_all` can retry later.
             if (result.success && result.uri) {
                 const destination = entry.config.name;
@@ -132,6 +136,36 @@ export function objectTools(deps) {
                 }
                 catch {
                     // already locked (403) or lock unsupported → handle-less attempt below
+                }
+                const recordedTransport = lockResult?.transport ?? result.transport ?? transport;
+                if (recordedTransport) {
+                    try {
+                        entry.policy.assertTransportUsage(recordedTransport, `adt_create_object (${result.object?.name ?? String(args.name)})`);
+                    }
+                    catch (error) {
+                        // Roll the create back; keep the ledger entry so a surviving
+                        // backend lock can still be released by adt_unlock_all.
+                        if (lockResult) {
+                            ledger.register({
+                                destination,
+                                uri: result.uri,
+                                name: result.object?.name ?? String(args.name),
+                                handle: lockResult.handle,
+                                transport: recordedTransport,
+                                note: 'create policy rollback',
+                            });
+                        }
+                        let cleanup;
+                        try {
+                            await entry.client.deleteObject(result.uri, { signal: exec.signal });
+                            cleanup = 'the created object was deleted again';
+                        }
+                        catch {
+                            cleanup = 'automatic deletion FAILED — remove the object manually if appropriate';
+                        }
+                        error.message += `; ${cleanup}`;
+                        throw error;
+                    }
                 }
                 if (lockResult) {
                     try {
@@ -191,7 +225,7 @@ export function objectTools(deps) {
         },
         execute: async (args, exec) => {
             const entry = registry.require(destinationOf(args));
-            const ref = await resolveToolObject(entry.client, args, exec.signal);
+            const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_delete_object' });
             await assertObjectEditable(entry, ref, {
                 toolName: 'adt_delete_object',
                 packageHint: optStr(args.packageName),

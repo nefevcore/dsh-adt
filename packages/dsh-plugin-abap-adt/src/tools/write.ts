@@ -13,10 +13,12 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { Context } from '@deepseek-ai/cordis';
+import type { AdtClient, AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 import {
   hashSource,
   loadSnapshot,
   saveSnapshot,
+  sourcesEquivalent,
   SnapshotConflictError,
 } from '../snapshots.js';
 import {
@@ -31,10 +33,54 @@ import {
   type ToolDeps,
 } from './common.js';
 
+/**
+ * Post-write persistence verification — the answer to a real-world incident:
+ * on a shared development account, ANOTHER session (second DSH session, ADT
+ * front-end) had the same include open with a STALE buffer and saved it right
+ * after our unlocked write. The write itself succeeded, the version DB even
+ * recorded temp versions — but the server content was silently reverted, and
+ * the pre-write OCC hash check cannot see it (it guards the window BEFORE the
+ * write, not after).
+ *
+ * This closes that gap as far as one round-trip can: after the unlock the
+ * source is re-read and compared (tolerantly) against what we SENT.
+ * Divergence → `persisted: false` + a loud warning: re-read, redo, do NOT
+ * activate. A failed read-back → `persisted` unknown + a hint to verify with
+ * adt_read_object. Returns the read-back source so callers can refresh their
+ * snapshot without a second GET.
+ */
+async function verifyPersisted(
+  client: AdtClient,
+  ref: AdtObjectRef,
+  expected: string,
+  signal?: AbortSignal,
+): Promise<{ persisted?: boolean; warning?: string; readBackSource?: string }> {
+  const readBack = await client.readSource(ref.uri, { signal }).catch(() => undefined);
+  if (!readBack) {
+    return {
+      warning:
+        'could not verify persistence (post-write read-back failed) — re-read with adt_read_object and confirm ' +
+        'the change is still there before activating',
+    };
+  }
+  if (!sourcesEquivalent(expected, readBack.source)) {
+    return {
+      persisted: false,
+      warning:
+        'NOT PERSISTED: the server no longer holds what was written — a concurrent editor (another session of ' +
+        'the same user with a stale buffer) most likely overwrote the change right after the write. Re-read the ' +
+        'object and redo the edit on the fresh content; do NOT activate this state.',
+      readBackSource: readBack.source,
+    };
+  }
+  return { persisted: true, readBackSource: readBack.source };
+}
+
 /** Read a UTF-8 text file through the sandbox-aware DSH filesystem service. */
 async function readSourceFile(ctx: Context, filePath: string): Promise<string> {
-  const fs = ctx.fs;
-  if (!fs) throw new Error('adt: the dsh filesystem service (ctx.fs) is required to read `sourceFile`');
+  // Optional service (audit D1): resolved at call time, not injected.
+  const fs = ctx.get('fs');
+  if (!fs) throw new Error('adt: the dsh filesystem service is required to read `sourceFile`');
   const target = await fs.resolve(filePath);
   return fs.readText(target);
 }
@@ -522,7 +568,10 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
     description:
       'Replace the source code of an existing ABAP development object. Locks, updates and unlocks automatically; ' +
       'set `activate: true` to activate in the same call. Subject to the permission policy ' +
-      '(allowedPackages / allowTransportableEdits / allowedTransports).',
+      '(allowedPackages / allowTransportableEdits / allowedTransports). ' +
+      'PERSISTENCE: after the write the source is read back and verified — the output `persisted` flag tells you ' +
+      'whether the server still holds what was written (a concurrent editor of the SAME account can overwrite the ' +
+      'change right after the write; treat persisted=false as a hard failure and redo the edit after re-reading).',
     parameters: {
       ...OBJECT_REF_PARAMS,
       ...PACKAGE_HINT_PARAM,
@@ -561,6 +610,13 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           updated: { type: 'boolean', required: true },
           unlocked: { type: 'boolean' },
           activated: { type: 'boolean' },
+          persisted: {
+            type: 'boolean',
+            description:
+              'Whether a post-write read-back still matched what was written. false = a concurrent editor ' +
+              'overwrote the change — redo the edit after re-reading; undefined = could not verify.',
+          },
+          warning: { type: 'string', description: 'Present when persistence is false or could not be verified.' },
           transport: {
             type: 'string',
             description: 'Transport request the change was recorded into (when transportable).',
@@ -588,12 +644,17 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
             (value.transport
               ? ` · change recorded in transport ${value.transport}${value.transportSource === 'auto' ? ' (backend-assigned — pass transport to choose)' : ''}`
               : '') +
-            `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}`,
+            `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}` +
+            (value.persisted === false
+              ? `\n⚠ ${value.warning ?? 'change was NOT persisted — re-read and redo'}`
+              : value.warning
+                ? `\n⚠ ${value.warning}`
+                : ''),
         ),
     },
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
-      const ref = await resolveToolObject(entry.client, args, exec.signal);
+      const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_write_object' });
       // Permission check: package whitelist + transportable-edit rule.
       await assertObjectEditable(entry, ref, {
         toolName: 'adt_write_object',
@@ -613,6 +674,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       let unlocked = false;
       let activated = false;
       let activationResult: { success: boolean; message?: string } | undefined;
+      let src = '';
       const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri, { signal: exec.signal });
       // User-specified transport wins; otherwise the backend's lock-assigned
       // CORRNR applies (an object already in an open request stays there, a
@@ -623,7 +685,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         // Whatever transport is finally used — user's or auto-assigned — must
         // be within allowedTransports, or the edit is rolled back.
         entry.policy.assertTransportUsage(effectiveTransport, `adt_write_object (${ref.name})`);
-        const src = await resolveSourceInput(ctx, args);
+        src = await resolveSourceInput(ctx, args);
         // Optimistic-concurrency guard: when a local snapshot exists (the
         // agent READ this object before), refuse to overwrite a server copy
         // that changed in between — verify under the lock (exclusive writers).
@@ -662,16 +724,14 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           () => ledger.deregister(entry.config.name, ref.uri),
           () => undefined,
         );
-        unlocked = true;
         throw error;
       }
-      // Refresh the local snapshot from a read-back so the OCC base reflects
-      // the real server state (not what we SENT — backends may normalize).
-      if (ctx.fs) {
-        const readBack = await entry.client.readSource(ref.uri, { signal: exec.signal }).catch(() => undefined);
-        if (readBack) {
-          await saveSnapshot(ctx, entry.config.name, ref, readBack.source).catch(() => undefined);
-        }
+      // Post-write persistence verification + snapshot refresh from the same
+      // read-back (OCC base = real server state, not what we SENT — backends
+      // may normalize). See verifyPersisted for why the extra GET is worth it.
+      const persistCheck = await verifyPersisted(entry.client, ref, src, exec.signal);
+      if (ctx.get('fs') && persistCheck.readBackSource !== undefined) {
+        await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
       }
       const transportSource: 'user' | 'auto' | undefined = effectiveTransport
         ? transport
@@ -684,6 +744,8 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         updated: true,
         unlocked,
         activated: activated || undefined,
+        persisted: persistCheck.persisted,
+        warning: persistCheck.warning,
         transport: effectiveTransport,
         transportSource,
         activation: activationResult,
@@ -709,6 +771,11 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       'by position use startLine/endLine. ' +
       'Tip: edit the local snapshot file yourself (path from adt_read_object) and upload via adt_push_object. ' +
       'Provide the replacement via `newText` (mode 1) or `source`/`sourceFile` (mode 2). ' +
+      'PERSISTENCE: the OCC hash check guards the window BEFORE the write only. When another session of the SAME ' +
+      'development account saves a stale buffer AFTER your write, the edit "succeeds" yet is silently reverted. ' +
+      'This tool therefore reads the source back after writing and reports `persisted` — treat persisted=false as ' +
+      'a hard failure (re-read, redo; do NOT activate); in multi-session/shared-account environments an ' +
+      'immediate follow-up adt_read_object is still the most trustworthy confirmation. ' +
       'Subject to the permission policy.',
     parameters: {
       ...OBJECT_REF_PARAMS,
@@ -798,6 +865,13 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           occurrence: { type: 'integer', description: 'Which duplicate match was edited (when occurrence was used).' },
           unlocked: { type: 'boolean' },
           activated: { type: 'boolean' },
+          persisted: {
+            type: 'boolean',
+            description:
+              'Whether a post-write read-back still matched what was written. false = a concurrent editor ' +
+              'overwrote the change — redo the edit after re-reading; undefined = could not verify.',
+          },
+          warning: { type: 'string', description: 'Present when persistence is false or could not be verified.' },
           transport: {
             type: 'string',
             description: 'Transport request the change was recorded into (when transportable).',
@@ -826,12 +900,17 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
             (value.transport
               ? ` · change recorded in transport ${value.transport}${value.transportSource === 'auto' ? ' (backend-assigned — pass transport to choose)' : ''}`
               : '') +
-            `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}`,
+            `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}` +
+            (value.persisted === false
+              ? `\n⚠ ${value.warning ?? 'change was NOT persisted — re-read and redo'}`
+              : value.warning
+                ? `\n⚠ ${value.warning}`
+                : ''),
         ),
     },
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
-      const ref = await resolveToolObject(entry.client, args, exec.signal);
+      const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_edit_object' });
       await assertObjectEditable(entry, ref, {
         toolName: 'adt_edit_object',
         packageHint: optStr(args.packageName),
@@ -930,11 +1009,14 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         if (released) ledger.deregister(entry.config.name, ref.uri);
         unlocked = released;
       }
-      // Refresh the snapshot from a read-back (OCC base = real server state).
-      if (replaced && ctx.fs) {
-        const readBack = await entry.client.readSource(ref.uri, { signal: exec.signal }).catch(() => undefined);
-        if (readBack) {
-          await saveSnapshot(ctx, entry.config.name, ref, readBack.source).catch(() => undefined);
+      // Post-write persistence verification + snapshot refresh from the same
+      // read-back (OCC base = real server state). See verifyPersisted for why
+      // the extra GET is worth it.
+      let persistCheck: { persisted?: boolean; warning?: string; readBackSource?: string } = {};
+      if (replaced) {
+        persistCheck = await verifyPersisted(entry.client, ref, replaced.full, exec.signal);
+        if (ctx.get('fs') && persistCheck.readBackSource !== undefined) {
+          await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
         }
       }
       const transportSource: 'user' | 'auto' | undefined = effectiveTransport
@@ -960,6 +1042,8 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         occurrence: replaced?.occurrence,
         unlocked,
         activated: activated || undefined,
+        persisted: persistCheck.persisted,
+        warning: persistCheck.warning,
         transport: effectiveTransport,
         transportSource,
         activation: activationResult,
@@ -981,6 +1065,9 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       'edit that file with your LOCAL file tools → adt_push_object. Before writing, the server source is ' +
       'hash-verified against the snapshot\'s fetch-time state (under the lock): changed in between → ' +
       '[CONFLICT], nothing applied, your local file is kept — re-read, merge, push again. ' +
+      'PERSISTENCE: after the push the source is read back and verified (`persisted` in the output) — a concurrent ' +
+      'editor of the SAME account can overwrite the change right after the write; treat persisted=false as a hard ' +
+      'failure (re-read, re-apply, do NOT activate). ' +
       'Subject to the permission policy; `transport` selects the request the change is recorded into.',
     parameters: {
       ...OBJECT_REF_PARAMS,
@@ -1017,6 +1104,13 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           localCopy: { type: 'string', required: true },
           unlocked: { type: 'boolean' },
           activated: { type: 'boolean' },
+          persisted: {
+            type: 'boolean',
+            description:
+              'Whether a post-write read-back still matched what was uploaded. false = a concurrent editor ' +
+              'overwrote the change — redo after re-reading; undefined = could not verify.',
+          },
+          warning: { type: 'string', description: 'Present when persistence is false or could not be verified.' },
           transport: { type: 'string' },
           transportSource: { type: 'string', enum: ['user', 'auto'] },
           activation: {
@@ -1038,19 +1132,24 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
             (value.transport
               ? ` · change recorded in transport ${value.transport}${value.transportSource === 'auto' ? ' (backend-assigned — pass transport to choose)' : ''}`
               : '') +
-            `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}`,
+            `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}` +
+            (value.persisted === false
+              ? `\n⚠ ${value.warning ?? 'change was NOT persisted — re-read and redo'}`
+              : value.warning
+                ? `\n⚠ ${value.warning}`
+                : ''),
         ),
     },
     timeoutMs: 180_000,
     execute: async (args, exec) => {
       const entry = registry.require(destinationOf(args));
-      const ref = await resolveToolObject(entry.client, args, exec.signal);
+      const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_push_object' });
       await assertObjectEditable(entry, ref, {
         toolName: 'adt_push_object',
         packageHint: optStr(args.packageName),
         signal: exec.signal,
       });
-      if (!ctx.fs) throw new Error('adt_push_object requires the dsh filesystem service');
+      if (!ctx.get('fs')) throw new Error('adt_push_object requires the dsh filesystem service');
 
       const customPath = optStr(args.path);
       const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
@@ -1116,10 +1215,11 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         if (released) ledger.deregister(entry.config.name, ref.uri);
         unlocked = released;
       }
-      // Refresh the snapshot from a read-back (new OCC base).
-      const readBack = await entry.client.readSource(ref.uri, { signal: exec.signal }).catch(() => undefined);
-      if (readBack) {
-        await saveSnapshot(ctx, entry.config.name, ref, readBack.source).catch(() => undefined);
+      // Post-write persistence verification + snapshot refresh from the same
+      // read-back (new OCC base = real server state).
+      const persistCheck = await verifyPersisted(entry.client, ref, localSource, exec.signal);
+      if (persistCheck.readBackSource !== undefined) {
+        await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
       }
       const transportSource: 'user' | 'auto' | undefined = effectiveTransport
         ? transport
@@ -1134,6 +1234,8 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         localCopy,
         unlocked,
         activated: activated || undefined,
+        persisted: persistCheck.persisted,
+        warning: persistCheck.warning,
         transport: effectiveTransport,
         transportSource,
         activation: activationResult,

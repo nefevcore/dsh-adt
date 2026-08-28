@@ -47,6 +47,12 @@ export interface MockObject {
         severity: 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
         message: string;
         line?: number;
+        /**
+         * Optional override for the finding's location URI. Real backends report
+         * findings of a program's INCLUDES under the MAIN program name while the
+         * location points at the include — set this to reproduce that mapping.
+         */
+        uri?: string;
     }>;
 }
 export declare const OBJECTS: MockObject[];

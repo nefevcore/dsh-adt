@@ -109,7 +109,12 @@ function getInsecureTlsDispatcher() {
     return insecureTlsPromise;
 }
 function normalizeUri(uri) {
-    return uri.startsWith('/sap/bc/adt') ? uri : `/sap/bc/adt${uri.startsWith('/') ? '' : '/'}${uri}`;
+    // The ADT base is `/sap/bc/adt` followed by a SEGMENT boundary — a bare
+    // startsWith accepted foreign paths like `/sap/bc/adtillery` (audit P3).
+    const base = '/sap/bc/adt';
+    if (uri === base || uri.startsWith(`${base}/`))
+        return uri;
+    return `${base}${uri.startsWith('/') ? '' : '/'}${uri}`;
 }
 /**
  * An object's BASE URI: the content-subresource suffix `/source/main` is
@@ -132,6 +137,19 @@ export class AdtClient {
     /** Connection identifier sent as `sap-adt-connection-id` on every request. */
     connectionId = randomUUID();
     constructor(destination, fetchImpl = globalThis.fetch.bind(globalThis)) {
+        // Fail fast on destinations that could never work (audit P3): a
+        // non-http(s) URL used to surface much later as an obscure fetch error
+        // (or, for absolute request paths, as an origin-check failure).
+        try {
+            const parsed = new URL(destination.url);
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                throw new Error(`protocol ${parsed.protocol}`);
+            }
+        }
+        catch (error) {
+            throw new AdtError(`ADT destination '${destination.name}': url '${destination.url}' is not a valid http(s) URL ` +
+                `(${error.message})`);
+        }
         this.destination = {
             ...destination,
             // Tolerate destinations without explicit auth (treat as unauthenticated).
@@ -142,18 +160,55 @@ export class AdtClient {
         this.base = destination.url.replace(/\/+$/, '');
         this.fetchImpl = fetchImpl;
     }
+    /**
+     * Absolute request URLs are tolerated ONLY when they are same-origin with
+     * the destination: every request carries `Authorization` and the session
+     * cookie, and backend-influenced URLs (version content URIs, search hits)
+     * must never forward those credentials to a third-party host (audit M1).
+     * fetch already strips credentials on cross-origin redirects; this closes
+     * the initial-URL gap.
+     */
     buildUrl(path) {
-        if (/^https?:\/\//.test(path))
+        if (/^https?:\/\//i.test(path)) {
+            let target;
+            let base;
+            try {
+                target = new URL(path);
+            }
+            catch {
+                throw new AdtError(`ADT: invalid absolute request URL '${path}'`);
+            }
+            try {
+                base = new URL(this.base);
+            }
+            catch {
+                throw new AdtError(`ADT: cannot verify absolute URL '${path}' — destination url '${this.base}' is not a valid http(s) URL`);
+            }
+            if (target.origin !== base.origin) {
+                throw new AdtError(`ADT: refusing to send credentials to ${target.origin} — destination '${this.destination.name}' is ` +
+                    `${base.origin}. Cross-origin request URLs are rejected (credentials must never leave the destination host).`);
+            }
             return path;
+        }
         return `${this.base}${path}`;
     }
     cookieHeader() {
-        return [...this.cookies.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+        const now = Date.now();
+        const parts = [];
+        for (const [key, entry] of this.cookies) {
+            if (entry.expiresAt !== undefined && entry.expiresAt <= now) {
+                this.cookies.delete(key); // honor expiry instead of replaying stale cookies (audit P3)
+                continue;
+            }
+            parts.push(`${key}=${entry.value}`);
+        }
+        return parts.join('; ');
     }
     storeCookies(headers) {
         const setCookie = headers.getSetCookie?.() ?? [];
         for (const raw of setCookie) {
-            const [pair] = raw.split(';');
+            const segments = raw.split(';');
+            const [pair] = segments;
             if (!pair)
                 continue;
             const eq = pair.indexOf('=');
@@ -161,12 +216,34 @@ export class AdtClient {
                 continue;
             const key = pair.slice(0, eq).trim();
             const value = pair.slice(eq + 1).trim();
+            // Expires / Max-Age attributes (audit P3): previously ignored, so a
+            // server-side session timeout kept replaying dead cookies.
+            let expiresAt;
+            for (const attr of segments.slice(1)) {
+                const eq2 = attr.indexOf('=');
+                const attrKey = (eq2 < 0 ? attr : attr.slice(0, eq2)).trim().toLowerCase();
+                const attrValue = eq2 < 0 ? '' : attr.slice(eq2 + 1).trim();
+                if (attrKey === 'max-age') {
+                    const seconds = Number(attrValue);
+                    if (Number.isFinite(seconds))
+                        expiresAt = seconds <= 0 ? 0 : Date.now() + seconds * 1000;
+                }
+                else if (attrKey === 'expires') {
+                    const at = Date.parse(attrValue);
+                    if (!Number.isNaN(at))
+                        expiresAt = at;
+                }
+            }
+            if (expiresAt !== undefined && expiresAt <= Date.now()) {
+                this.cookies.delete(key);
+                continue;
+            }
             // Never let the server force a different client into the context cookie.
             if (key === 'sap-usercontext' && this.destination.client) {
-                this.cookies.set(key, `sap-client=${this.destination.client}`);
+                this.cookies.set(key, { value: `sap-client=${this.destination.client}`, expiresAt });
             }
             else {
-                this.cookies.set(key, value);
+                this.cookies.set(key, { value, expiresAt });
             }
         }
     }
@@ -206,20 +283,33 @@ export class AdtClient {
             if (csrf)
                 reqHeaders['X-CSRF-Token'] = csrf;
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeoutMs ?? this.destination.timeoutMs ?? 60_000);
+            const timerMs = timeoutMs ?? this.destination.timeoutMs ?? 60_000;
+            const timer = setTimeout(() => controller.abort(), timerMs);
             // Link the caller's cooperative-cancellation signal: whichever fires
-            // first (timeout or abort) cancels the fetch. Passing `signal` on the
-            // listener options removes it again once the controller aborts, so a
-            // long-lived caller signal never accumulates listeners across requests.
+            // first (timeout or abort) cancels the fetch. The listener is removed
+            // EXPLICITLY once the request settles — on the success path the
+            // caller's long-lived session signal never aborts, so neither `once`
+            // nor the `signal` listener option would ever fire and the listener
+            // (plus its closure) would accumulate on every request (audit H3).
+            let unlinkCallerSignal;
             if (signal) {
                 if (signal.aborted)
                     controller.abort(signal.reason);
-                else
-                    signal.addEventListener('abort', () => controller.abort(signal.reason), {
-                        once: true,
-                        signal: controller.signal,
-                    });
+                else {
+                    const onCallerAbort = () => controller.abort(signal.reason);
+                    signal.addEventListener('abort', onCallerAbort, { once: true });
+                    unlinkCallerSignal = () => signal.removeEventListener('abort', onCallerAbort);
+                }
             }
+            // The timer and the caller-signal link stay armed until the response
+            // BODY has been consumed (audit M8): previously they were torn down
+            // right after the headers arrived, letting a slow body hang for
+            // undici's default 300 s bodyTimeout regardless of `timeoutMs`.
+            const cleanup = () => {
+                clearTimeout(timer);
+                unlinkCallerSignal?.();
+                unlinkCallerSignal = undefined;
+            };
             let response;
             try {
                 const init = {
@@ -239,34 +329,68 @@ export class AdtClient {
                 response = await this.fetchImpl(this.buildUrl(path), init);
             }
             catch (cause) {
+                cleanup();
                 if (controller.signal.aborted && signal?.aborted) {
                     throw new AdtError(`ADT ${method} ${path} aborted: ${cause.message ?? cause}`);
                 }
                 if (controller.signal.aborted) {
-                    throw new AdtError(`ADT ${method} ${path} timed out after ${timeoutMs ?? this.destination.timeoutMs ?? 60_000} ms`);
+                    throw new AdtError(`ADT ${method} ${path} timed out after ${timerMs} ms`);
                 }
                 throw new AdtError(`ADT request failed: ${cause.message}`);
             }
-            finally {
-                clearTimeout(timer);
-            }
             this.storeCookies(response.headers);
             if (!raw && !response.ok) {
-                const text = await response.text().catch(() => '');
+                // Error bodies are read inside the same window too, but a read
+                // failure degrades to an empty error body (as before) — the HTTP
+                // status is the more useful signal.
+                let text = '';
+                try {
+                    text = await response.text();
+                }
+                catch {
+                    text = '';
+                }
+                cleanup();
                 const messages = parseErrorBody(text);
                 const detail = messages.map((m) => `${m.severity}: ${m.text}`).join(' | ');
                 const csrfHint = (response.headers.get('x-csrf-token') ?? '').toLowerCase() === 'required';
                 const csrfError = /csrf/i.test(text);
                 const sessionLost = response.status === 401 && method !== 'GET';
                 if ((csrfRequired(response.status, csrfHint, csrfError) || sessionLost) && attempt === 0) {
-                    // Session/token was rejected; refresh and retry once.
+                    // Session/token was rejected; refresh and retry once. A failure of
+                    // the refresh probe must NOT mask the original 401/403 (audit P3).
                     this.resetSession();
-                    csrf = await this.ensureCsrfToken(signal);
+                    try {
+                        csrf = await this.ensureCsrfToken(signal);
+                    }
+                    catch (refreshError) {
+                        throw new AdtError(`ADT ${method} ${path} -> HTTP ${response.status} (session rejected; token refresh also failed: ` +
+                            `${refreshError.message})`, response.status);
+                    }
                     continue;
                 }
                 throw new AdtError(`ADT ${method} ${path} -> HTTP ${response.status}${detail ? `: ${detail}` : ''}`, response.status, messages, text);
             }
-            return { status: response.status, headers: response.headers, text: await response.text().catch(() => '') };
+            // Success body — read inside the timeout window; a body that stalls
+            // past `timerMs` (or a session abort) fails the whole request instead
+            // of silently returning an empty source.
+            let text;
+            try {
+                text = await response.text();
+            }
+            catch (cause) {
+                if (controller.signal.aborted && signal?.aborted) {
+                    throw new AdtError(`ADT ${method} ${path} aborted while reading the body: ${cause.message ?? cause}`);
+                }
+                if (controller.signal.aborted) {
+                    throw new AdtError(`ADT ${method} ${path} timed out after ${timerMs} ms while reading the response body`);
+                }
+                throw new AdtError(`ADT ${method} ${path}: reading the response body failed: ${cause.message}`);
+            }
+            finally {
+                cleanup();
+            }
+            return { status: response.status, headers: response.headers, text };
         }
         throw new AdtError(`ADT ${method} ${path} -> CSRF retry exhausted`);
     }
@@ -300,10 +424,14 @@ export class AdtClient {
     // ---------------------------------------------------------------------------
     // Discovery & system information
     // ---------------------------------------------------------------------------
-    /** Fetch the discovery document (AtomPub service doc; tolerant of simple XML). */
+    /** Fetch the discovery document (AtomPub service doc; tolerant of simple XML).
+     *
+     * The destination's `sap-client`/`sap-language` ride along (audit P3):
+     * multi-client systems answer discovery per client, and a client-less
+     * probe could bind the session to the wrong client. */
     async discover(options = {}) {
         const res = await this.request({
-            path: ENDPOINTS.discovery(),
+            path: `${ENDPOINTS.discovery()}${toQuery(this.baseQuery({}))}`,
             accept: 'application/atomsvc+xml, application/xml',
             signal: options.signal,
         });
@@ -321,6 +449,7 @@ export class AdtClient {
         let userName = '';
         let client = '';
         let language = '';
+        let jsonRelease = '';
         try {
             const res = await this.request({
                 path: `${ADT_BASE_PATH}/core/http/systeminformation?sap-client=${encodeURIComponent(this.destination.client ?? '')}`,
@@ -332,6 +461,7 @@ export class AdtClient {
             userName = data.userName ?? '';
             client = data.client ?? '';
             language = data.language ?? '';
+            jsonRelease = data.release ?? '';
         }
         catch (error) {
             // A caller-initiated abort must not be swallowed by this fallback.
@@ -342,7 +472,16 @@ export class AdtClient {
         const discovery = await this.discover({ signal: options.signal });
         const features = discovery.features;
         systemId = systemId || features['systemId'] || features['SAP_SYSTEM_ID'] || '';
-        const release = features['release'] ?? features['SAP_SYSTEM_RELEASE'] ?? '';
+        // Older on-prem backends expose the release under different feature keys
+        // (or only in the systeminformation JSON) — probe all known spellings so
+        // `release` is not left empty when the primary key is absent. `||` (not
+        // `??`): an empty string from one source must not short-circuit the rest.
+        const release = jsonRelease ||
+            features['release'] ||
+            features['SAP_SYSTEM_RELEASE'] ||
+            features['SAP_BASIS_RELEASE'] ||
+            features['SAP_SYSTEM_RELEASE_ID'] ||
+            '';
         const abapCloud = Object.keys(features).some((k) => k.toLowerCase().includes('cloud')) || features['ABAP_CLOUD'] === 'true';
         return {
             destination: this.destination.name,
@@ -449,10 +588,22 @@ export class AdtClient {
         const attempts = uri.endsWith('/source/main') ? [uri] : [`${uri}/source/main`, uri];
         const withVersion = (path) => options.version ? `${path}${path.includes('?') ? '&' : '?'}version=${options.version}` : path;
         let lastError;
-        for (const path of attempts) {
+        for (let i = 0; i < attempts.length; i++) {
+            const path = attempts[i];
             try {
                 const res = await this.request({ path: withVersion(path), accept: 'text/plain', signal: options.signal });
-                return parseSourceResponse(res.text, uri, res.headers.get('content-type') ?? '');
+                const parsed = parseSourceResponse(res.text, uri, res.headers.get('content-type') ?? '');
+                // Bare-URI fallback hygiene (audit P3): an XML body WITHOUT a code
+                // node is object METADATA, not a source — accepting it turned a
+                // 404-on-/source/main into bogus success with an empty source. Only
+                // the /source/main attempt may return whatever it returns.
+                if (i > 0 &&
+                    parsed.source.trim() === '' &&
+                    !/<(?:[\w.-]+:)?code\b/.test(parsed.rawXml ?? '')) {
+                    lastError = new AdtError(`ADT GET ${path} -> not a source representation (no code node, empty body)`, res.status);
+                    continue;
+                }
+                return parsed;
             }
             catch (error) {
                 if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
@@ -469,9 +620,19 @@ export class AdtClient {
      * and pass the lock handle (from {@link lock}) as `lockHandle`.
      */
     async writeSource(objectUri, source, options = {}) {
-        const uri = normalizeUri(objectUri);
-        const path = uri.endsWith('/source/main') ? uri : `${uri}/source/main`;
+        // Split off any query the caller's URI already carries (audit P3):
+        // appending /source/main and then the parameter query used to produce
+        // `…?a=b?lockHandle=…` for URIs that already had a `?`.
+        const [bareUri, existingQuery = ''] = normalizeUri(objectUri).split('?');
+        const path = bareUri.endsWith('/source/main') ? bareUri : `${bareUri}/source/main`;
         const query = this.baseQuery({
+            ...Object.fromEntries(existingQuery
+                .split('&')
+                .filter(Boolean)
+                .map((kv) => {
+                const eq = kv.indexOf('=');
+                return eq < 0 ? [kv, ''] : [kv.slice(0, eq), kv.slice(eq + 1)];
+            })),
             ...(options.lockHandle ? { lockHandle: options.lockHandle } : {}),
             ...(options.transport ? { corrNr: options.transport } : {}),
         });
@@ -714,6 +875,7 @@ export class AdtClient {
     // ---------------------------------------------------------------------------
     /** Run ABAP Test Cockpit checks; polls the async run until completion. */
     async runAtc(objects, options = {}) {
+        const startedAt = Date.now();
         const body = buildAtcRunRequest(objects, options.variant);
         // Some backends reject the start request unless clientWait=false is sent
         // explicitly (error: 'Only "false" is currently supported as
@@ -754,11 +916,15 @@ export class AdtClient {
             timeoutMs: 60_000,
             signal: options.signal,
         });
-        return parseAtcResultBody(results.text, displayId);
+        // The result body carries no runtime on most backends — report the
+        // wall-clock time of the whole start→poll→fetch cycle instead of 0.
+        return { ...parseAtcResultBody(results.text, displayId), durationMs: Date.now() - startedAt };
     }
     /**
-     * List existing ATC runs (the results collection). The backend requires at
-     * least one filter; when none is given the logged-on user is used.
+     * List existing ATC runs (the results collection). Backends vary: many
+     * require at least one filter (the logged-on user is sent as the default),
+     * but subset implementations accept a PARAMETERLESS query only and reject
+     * any filter with HTTP 400 — in that case the request is retried bare.
      */
     async listAtcRuns(options = {}) {
         const params = this.baseQuery({
@@ -772,11 +938,29 @@ export class AdtClient {
             ...(options.sysId ? { sysId: options.sysId } : {}),
             ...(options.contactPerson ? { contactPerson: options.contactPerson } : {}),
         });
-        const res = await this.request({
-            path: `${ENDPOINTS.atcResults()}${toQuery(params)}`,
-            accept: 'application/xml',
-            signal: options.signal,
-        });
+        let res;
+        try {
+            res = await this.request({
+                path: `${ENDPOINTS.atcResults()}${toQuery(params)}`,
+                accept: 'application/xml',
+                signal: options.signal,
+            });
+        }
+        catch (error) {
+            // Subset ATC-results services reject every filter parameter (400) while
+            // serving the parameterless collection fine. A caller-initiated abort
+            // must not be retried.
+            if (error instanceof AdtError && error.status === 400 && !options.signal?.aborted) {
+                res = await this.request({
+                    path: `${ENDPOINTS.atcResults()}${toQuery(this.baseQuery())}`,
+                    accept: 'application/xml',
+                    signal: options.signal,
+                });
+            }
+            else {
+                throw error;
+            }
+        }
         return parseAtcResultList(res.text);
     }
     /**
@@ -799,16 +983,48 @@ export class AdtClient {
     // ---------------------------------------------------------------------------
     /** List transport requests of the current user (or all users). */
     async listTransports(options = {}) {
+        const backendStatus = options.status === 'modifiable'
+            ? 'D'
+            : options.status === 'released'
+                ? 'R'
+                : options.status && options.status !== 'all'
+                    ? options.status
+                    : undefined;
         const params = this.baseQuery({
             ...(options.allUsers ? { user: '*' } : {}),
             ...(options.category ? { type: options.category } : {}),
-            ...(options.status && options.status !== 'all' ? { status: options.status } : {}),
+            ...(backendStatus ? { status: backendStatus } : {}),
         });
-        const res = await this.request({
-            path: `${ENDPOINTS.transportRequests()}${toQuery(params)}`,
-            accept: MEDIA.transportOrganizerTree,
-            signal: options.signal,
-        });
+        let res;
+        try {
+            res = await this.request({
+                path: `${ENDPOINTS.transportRequests()}${toQuery(params)}`,
+                accept: MEDIA.transportOrganizerTree,
+                signal: options.signal,
+            });
+        }
+        catch (error) {
+            // Backends without a server-side status parameter reject it outright
+            // (HTTP 400) — retry unfiltered and rely on the client-side filter.
+            // A caller-initiated abort must not be retried.
+            if (error instanceof AdtError &&
+                error.status === 400 &&
+                backendStatus &&
+                !options.signal?.aborted) {
+                const unfiltered = this.baseQuery({
+                    ...(options.allUsers ? { user: '*' } : {}),
+                    ...(options.category ? { type: options.category } : {}),
+                });
+                res = await this.request({
+                    path: `${ENDPOINTS.transportRequests()}${toQuery(unfiltered)}`,
+                    accept: MEDIA.transportOrganizerTree,
+                    signal: options.signal,
+                });
+            }
+            else {
+                throw error;
+            }
+        }
         const root = parseXml(res.text);
         const transports = [];
         // Real backends return a Transport Organizer Tree (tm:root → tm:workbench /
@@ -918,8 +1134,15 @@ export class AdtClient {
             if (options.signal?.aborted)
                 throw error;
             // Older / restricted ADT profiles do not expose the ddic/cds preview
-            // collection; fall back to the freestyle SQL endpoint.
+            // collection; fall back to the freestyle SQL endpoint. The entity name
+            // is INTERPOLATED into that statement, so only plain DDIC name
+            // characters may enter (the primary route encodes the name; this one
+            // could not — audit M3).
             if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                if (!/^[A-Za-z0-9_/]+$/.test(name)) {
+                    throw new AdtError(`ADT: refusing to build a SQL fallback for entity name '${name}' — unexpected characters ` +
+                        '(only letters, digits, underscore and slash are allowed in DDIC entity names)');
+                }
                 return this.runSqlQuery(`SELECT * FROM ${name} UP TO ${top} ROWS`, { top, signal: options.signal });
             }
             throw error;
@@ -993,11 +1216,9 @@ export class AdtClient {
                 if (error instanceof AdtError && (error.status === 406 || error.status === 404 || error.status === 405)) {
                     continue; // wrong media type / unsupported route → try the next
                 }
-                // A non-negotiation error (e.g. 401/403/500) is authoritative.
-                if (error instanceof AdtError) {
-                    return { locked: undefined, note: `could not read object metadata: ${error.message}` };
-                }
-                continue;
+                // A non-negotiation error (e.g. 401/403/500, or a network failure —
+                // audit P3: non-AdtError used to be swallowed) is authoritative.
+                return { locked: undefined, note: `could not read object metadata: ${error.message}` };
             }
         }
         // Metadata did not expose lock state → try the transports relationship
@@ -1007,7 +1228,9 @@ export class AdtClient {
             return viaTransports;
         return {
             locked: undefined,
-            note: 'backend does not expose lock state in object metadata',
+            note: 'backend does not expose lock state in object metadata — concurrent editors cannot be detected this way; ' +
+                'after writing, confirm the change persisted (adt_edit_object/adt_write_object report a `persisted` flag ' +
+                'from a post-write read-back)',
         };
     }
     /**
@@ -1036,8 +1259,11 @@ export class AdtClient {
                     };
                 }
             }
-            catch {
-                // endpoint not supported → keep probing / degrade below
+            catch (error) {
+                // endpoint not supported → keep probing / degrade below; a caller
+                // abort must still surface (audit P3).
+                if (signal?.aborted)
+                    throw error;
             }
         }
         return { locked: undefined };
@@ -1157,11 +1383,23 @@ export class AdtClient {
             parseCreatedUri(res.text) ??
             uriForCreated(request.type, request.name);
         const name = uri.split('/').pop()?.toUpperCase() ?? request.name;
+        // A 200 may still carry an error envelope in the body (audit P3): some
+        // profiles answer exceptions with HTTP 200 — an E message means the
+        // create did NOT happen.
+        const envelopeMessages = parseErrorBody(res.text).filter((m) => m.severity === 'E' || m.severity === 'A');
+        const created = (res.status === 201 || res.status === 200) && envelopeMessages.length === 0;
         return {
-            success: res.status === 201 || res.status === 200,
-            uri,
-            object: uri ? { uri, type: request.type, name, category } : undefined,
-            messages: [],
+            success: created,
+            uri: created ? uri : undefined,
+            object: created && uri ? { uri, type: request.type, name, category } : undefined,
+            // Some profiles answer the create with the transport the object was
+            // recorded into (CORRNR in the response body) — surface it so callers
+            // can policy-check backend auto-assignments (audit M7).
+            transport: request.transport ?? parseCorrNr(res.text),
+            messages: envelopeMessages.map((m) => ({
+                severity: m.severity,
+                text: m.text || `create answered HTTP ${res.status} with an error envelope`,
+            })),
         };
     }
     /**
@@ -1228,9 +1466,16 @@ export class AdtClient {
     async listDumps(options = {}) {
         // The backend filters via the `$query` expression syntax, e.g.
         // `and( equals( user, X ) )`; it is combined with the time-range params.
-        const query = options.user
-            ? `and( equals( user, ${options.user.trim()} ) )`
-            : undefined;
+        // The user value is INTERPOLATED into that expression, so only inert
+        // username characters may enter (fail-closed, same shape as the SQL
+        // entity-name whitelist, audit M3): `)` / `,` / quotes could alter the
+        // predicate. The unquoted wire format is the field-verified one and is
+        // provably safe once the charset is whitelisted.
+        const user = options.user?.trim();
+        if (user && !/^[A-Za-z0-9_.-]+$/.test(user)) {
+            throw new AdtError(`ADT: refusing to build a dumps $query filter for user '${user}' — unexpected characters`);
+        }
+        const query = user ? `and( equals( user, ${user} ) )` : undefined;
         const params = this.baseQuery({
             ...(query ? { $query: query } : {}),
             ...(options.from ? { from: options.from } : {}),
@@ -1353,7 +1598,9 @@ export class AdtClient {
             signal: options.signal,
         });
         const contentTypeHeader = res.headers.get('content-type') ?? '';
-        const boundaryMatch = /boundary=([^;\s]+)/.exec(contentTypeHeader);
+        // Quoted boundary values (`boundary="batch_…"`) are legal — the old
+        // pattern captured the quote character (audit P3).
+        const boundaryMatch = /boundary="?([^";\s]+)"?/.exec(contentTypeHeader);
         return parseBatchResponseParts(res.text, boundaryMatch?.[1] ?? boundary);
     }
     // ---------------------------------------------------------------------------
@@ -1373,15 +1620,18 @@ export class AdtClient {
      * Read-modify-write the structured metadata of a DDIC object: lock → GET
      * current XML → patch only the provided fields → PUT → unlock. The
      * optional `onLocked` hook runs right after the lock (with the backend
-     * transport the lock assigned) so callers can enforce policy and abort
-     * BEFORE anything is written — a throw rolls the lock back and propagates.
+     * transport the lock assigned AND the lock handle) so callers can enforce
+     * policy, register the lock in a ledger, or otherwise react BEFORE
+     * anything is written — a throw rolls the lock back and propagates.
      */
     async writeStructure(objectUri, kind, changes, options = {}) {
         const uri = objectBaseUri(objectUri);
         const { handle, transport: assigned } = await this.lock(uri, { signal: options.signal });
+        let outcome;
+        let unlocked = false;
         try {
             if (options.onLocked)
-                options.onLocked(options.transport ? undefined : assigned);
+                options.onLocked(options.transport ? undefined : assigned, handle);
             const current = await this.request({
                 path: `${uri}${toQuery(this.baseQuery({}))}`,
                 accept: structureMediaType(kind),
@@ -1406,13 +1656,14 @@ export class AdtClient {
                 accept: structureMediaType(kind),
                 signal: options.signal,
             });
-            return { success: true, data: parseStructure(effective.text, kind), transport: options.transport ?? assigned };
+            outcome = { success: true, data: parseStructure(effective.text, kind), transport: options.transport ?? assigned };
         }
         finally {
             // Cleanup deliberately runs WITHOUT the caller signal: an aborted write
             // must still release the backend lock it acquired.
-            await this.unlock(uri, handle).catch(() => undefined);
+            unlocked = await this.unlock(uri, handle).then(() => true, () => false);
         }
+        return { ...outcome, unlocked };
     }
     // ---------------------------------------------------------------------------
     // Diagnostics
@@ -1463,7 +1714,7 @@ function sleep(ms, signal) {
         }
         const sig = signal;
         if (sig.aborted) {
-            reject(sig.reason ?? new Error('aborted'));
+            reject(new AdtError(`aborted: ${String(sig.reason?.message ?? sig.reason ?? 'aborted')}`));
             return;
         }
         const timer = setTimeout(() => {
@@ -1472,7 +1723,11 @@ function sleep(ms, signal) {
         }, ms);
         function onAbort() {
             clearTimeout(timer);
-            reject(sig.reason instanceof Error ? sig.reason : new AdtError(`aborted: ${String(sig.reason)}`));
+            // Always reject with AdtError (audit P3): a raw caller-supplied reason
+            // (e.g. a DOMException) used to escape and break the error contract.
+            const reason = sig.reason;
+            const detail = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+            reject(new AdtError(`aborted: ${detail}`));
         }
         sig.addEventListener('abort', onAbort, { once: true });
     });
@@ -1613,8 +1868,26 @@ function buildCreateObjectRequest(request) {
     // and interfaces. Older plugin versions emitted `class:name`/`intf:name`,
     // which strict backends reject with HTTP 400: "expected attribute
     // {http://www.sap.com/adt/core}name" (ExceptionInvalidData).
+    //
+    // The element namespace is only declared for the types that have one
+    // (audit P3): for the adtcore-defaulted types (TABL/DTEL/TTYP/MSAG/DEVC)
+    // the old code declared `xmlns:adtcore="http://www.sap.com/adt/adtcore"`
+    // next to the real core namespace — a duplicate/bogus declaration strict
+    // backends reject.
+    const nsUri = ns === 'class'
+        ? 'http://www.sap.com/adt/oo/classes'
+        : ns === 'intf'
+            ? 'http://www.sap.com/adt/oo/interfaces'
+            : ns === 'prog'
+                ? 'http://www.sap.com/adt/programs/programs'
+                : ns === 'fugr'
+                    ? 'http://www.sap.com/adt/functions/groups'
+                    : ns === 'ddls'
+                        ? 'http://www.sap.com/adt/ddl'
+                        : undefined;
+    const nsDecl = nsUri ? ` xmlns:${ns}="${nsUri}"` : '';
     return `<?xml version="1.0" encoding="UTF-8"?>
-<${tag} xmlns:${ns}="http://www.sap.com/adt/${ns === 'class' ? 'oo/classes' : ns === 'intf' ? 'oo/interfaces' : ns === 'prog' ? 'programs/programs' : ns === 'fugr' ? 'functions/groups' : ns === 'ddls' ? 'ddl' : ns}" xmlns:adtcore="http://www.sap.com/adt/core"
+<${tag}${nsDecl} xmlns:adtcore="http://www.sap.com/adt/core"
        adtcore:description="${escapeXml(request.description)}" adtcore:language="EN" adtcore:name="${escapeXml(request.name)}"
        adtcore:type="${escapeXml(request.type)}" adtcore:masterLanguage="EN">
   <adtcore:packageRef adtcore:name="${escapeXml(request.packageName || '$TMP')}"/>
@@ -1898,6 +2171,27 @@ function parseLockTransport(xml) {
         return undefined;
     }
 }
+/**
+ * Best-effort CORRNR extraction from an object-creation response (audit M7):
+ * some ADT profiles report the transport request the new object was recorded
+ * into — as an attribute (`adtcore:corrNr="D01K961234"`) or as an element
+ * (`<transportNumber>…</transportNumber>`). Returns `undefined` when the
+ * response does not carry one.
+ */
+function parseCorrNr(text) {
+    if (!text)
+        return undefined;
+    const patterns = [
+        /corrNr\s*=\s*["']([A-Za-z][A-Za-z0-9]{4,19})["']/i,
+        /<(?:[\w-]+:)?(?:transportNumber|corrNr|trkorr)>\s*([A-Za-z][A-Za-z0-9]{4,19})\s*<\/(?:[\w-]+:)?(?:transportNumber|corrNr|trkorr)>/i,
+    ];
+    for (const pattern of patterns) {
+        const hit = pattern.exec(text);
+        if (hit?.[1])
+            return hit[1].toUpperCase();
+    }
+    return undefined;
+}
 // --- Activation -------------------------------------------------------------
 function parseActivationResult(xml) {
     const root = parseXml(xml);
@@ -1909,7 +2203,6 @@ function parseActivationResult(xml) {
     // Per-object references in the response.
     for (const el of children(root, 'objectReference')) {
         const uri = attr(el, 'uri') ?? '';
-        const status = attr(el, 'status') ?? (messageEls.length ? 'ERROR' : 'ACTIVATED');
         const objMessages = [];
         for (const msg of children(el, 'message')) {
             const severity = severityOf(attr(msg, 'type'));
@@ -1926,15 +2219,23 @@ function parseActivationResult(xml) {
             if (severity === 'E')
                 success = false;
         }
+        // Audit P3: a GLOBAL E message (e.g. "object not found") used to mark
+        // EVERY object ERROR — including ones whose own status says ACTIVATED.
+        // The object's explicit status and its OWN messages are authoritative;
+        // the global fallback applies only to objects reporting neither.
+        const ownStatus = attr(el, 'status');
+        const hasOwnErrors = objMessages.some((m) => m.severity === 'E');
+        const status = ownStatus ?? (messageEls.length || hasOwnErrors ? 'ERROR' : 'ACTIVATED');
         if (status === 'ERROR')
             success = false;
+        const failed = status === 'ERROR' || hasOwnErrors;
         items.push({
             uri,
             type: attr(el, 'type') ?? '',
             name: attr(el, 'name') ?? '',
             status,
             message: objMessages.map((m) => m.text).join('; ') || undefined,
-            severity: messageEls.length ? 'E' : 'S',
+            severity: failed ? 'E' : 'S',
             syntaxErrors: objMessages,
         });
     }
@@ -1996,12 +2297,19 @@ function parseCheckMessages(xml) {
 }
 // --- Async run helpers ------------------------------------------------------
 function extractRunId(response) {
+    // Prefer well-formed ids first (audit P3): a bare hex-char run also
+    // matches hostname fragments like `deadbeef.example.com`, so the generic
+    // pattern is only a guarded last resort.
+    const UUID = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+    const LONG_HEX = /(?<![0-9A-Za-z.-])[0-9a-fA-F]{16,}(?![0-9A-Za-z.-])/;
+    const GUARDED = /(?<![0-9A-Za-z.-])[0-9a-fA-F-]{8,}(?![0-9A-Za-z.-])/;
+    const pick = (value) => UUID.exec(value)?.[0] ?? LONG_HEX.exec(value)?.[0] ?? GUARDED.exec(value)?.[0];
     // Location header (201) or a link/ID element in the body.
     const location = response.headers.get('location');
     if (location) {
-        const match = /([0-9a-fA-F-]{8,})/.exec(location);
+        const match = pick(location);
         if (match)
-            return match[1];
+            return match;
     }
     try {
         const root = parseXml(response.text);
@@ -2013,9 +2321,9 @@ function extractRunId(response) {
             const href = attr(link, 'href');
             if (!href)
                 continue;
-            const match = /([0-9a-fA-F-]{8,})/.exec(href);
+            const match = pick(href);
             if (match)
-                return match[1];
+                return match;
         }
     }
     catch {
@@ -2305,7 +2613,10 @@ function parseAtcResult(xml, variant) {
                 severity,
                 message: attr(err, 'message') ?? '',
                 objectName,
-                uri: '',
+                // The checkstyle file name is typically the object (include) URI —
+                // keep it so line numbers stay attributable to the right source.
+                uri: fileName,
+                locationUri: fileName.startsWith('/') ? fileName : undefined,
                 line: attr(err, 'line') ? Number(attr(err, 'line')) : undefined,
                 offset: attr(err, 'column') ? Number(attr(err, 'column')) : undefined,
                 messageId: attr(err, 'source'),
@@ -2470,14 +2781,32 @@ function parseAtcResultBody(xml, displayId) {
             CATASTROPHIC: 0,
         };
         const objectsNode = child(result, 'objects');
+        // Priority tally from the finding attributes — used to derive aggregates
+        // when the result body carries no <aggregates> node (subset backends).
+        let p1 = 0;
+        let p2 = 0;
+        let p3 = 0;
+        let p4 = 0;
         for (const obj of children(objectsNode ?? result, 'object')) {
             const objectName = attr(obj, 'name') ?? '';
             const findingsNode = child(obj, 'findings');
             for (const finding of children(findingsNode ?? obj, 'finding')) {
                 const priority = Number(attr(finding, 'priority') ?? 0);
-                const severity = Number.isFinite(priority) ? severityFromPriority(priority) : 'INFO';
+                const severity = Number.isFinite(priority) && priority > 0 ? severityFromPriority(priority) : 'INFO';
+                if (priority === 1)
+                    p1++;
+                else if (priority === 2)
+                    p2++;
+                else if (priority === 3)
+                    p3++;
+                else if (priority === 4)
+                    p4++;
                 const location = attr(finding, 'location') ?? '';
                 const locMatch = /#start=(\d+)(?:,(\d+))?/.exec(location);
+                // The location's URI part (before #start=…) points at the exact
+                // object/include the line refers to — often an INCLUDE while
+                // objectName stays the MAIN program name.
+                const locationUri = location && !location.startsWith('#') ? location.split('#')[0] : undefined;
                 counts[severity] = (counts[severity] ?? 0) + 1;
                 findings.push({
                     check: attr(finding, 'checkId') ?? '',
@@ -2486,6 +2815,7 @@ function parseAtcResultBody(xml, displayId) {
                     message: attr(finding, 'messageTitle') ?? attr(finding, 'messageId') ?? '',
                     objectName,
                     uri: attr(finding, 'uri') ?? '',
+                    locationUri,
                     line: locMatch ? Number(locMatch[1]) : undefined,
                     offset: locMatch && locMatch[2] ? Number(locMatch[2]) : undefined,
                     messageId: attr(finding, 'messageId'),
@@ -2494,7 +2824,10 @@ function parseAtcResultBody(xml, displayId) {
             }
         }
         const clean = counts.ERROR + counts.CRITICAL + counts.CATASTROPHIC === 0;
-        const aggregates = parseAggregatesNode(child(result, 'aggregates'));
+        // Prefer the backend's aggregates node; derive P1-P4 from the findings
+        // when absent so callers do not see all-zero counts on subset backends.
+        const aggregates = parseAggregatesNode(child(result, 'aggregates')) ??
+            (findings.length > 0 ? { priority1: p1, priority2: p2, priority3: p3, priority4: p4, failures: 0 } : undefined);
         return {
             success: true,
             clean,

@@ -64,6 +64,14 @@ export declare class AdtClient {
     /** Connection identifier sent as `sap-adt-connection-id` on every request. */
     private readonly connectionId;
     constructor(destination: AdtDestination, fetchImpl?: typeof fetch);
+    /**
+     * Absolute request URLs are tolerated ONLY when they are same-origin with
+     * the destination: every request carries `Authorization` and the session
+     * cookie, and backend-influenced URLs (version content URIs, search hits)
+     * must never forward those credentials to a third-party host (audit M1).
+     * fetch already strips credentials on cross-origin redirects; this closes
+     * the initial-URL gap.
+     */
     private buildUrl;
     private cookieHeader;
     private storeCookies;
@@ -79,7 +87,11 @@ export declare class AdtClient {
     private ensureCsrfToken;
     /** Reset cached session state (cookies + CSRF). */
     resetSession(): void;
-    /** Fetch the discovery document (AtomPub service doc; tolerant of simple XML). */
+    /** Fetch the discovery document (AtomPub service doc; tolerant of simple XML).
+     *
+     * The destination's `sap-client`/`sap-language` ride along (audit P3):
+     * multi-client systems answer discovery per client, and a client-less
+     * probe could bind the session to the wrong client. */
     discover(options?: {
         signal?: AbortSignal;
     }): Promise<AdtDiscovery>;
@@ -204,8 +216,10 @@ export declare class AdtClient {
         signal?: AbortSignal;
     }): Promise<AdtAtcResult>;
     /**
-     * List existing ATC runs (the results collection). The backend requires at
-     * least one filter; when none is given the logged-on user is used.
+     * List existing ATC runs (the results collection). Backends vary: many
+     * require at least one filter (the logged-on user is sent as the default),
+     * but subset implementations accept a PARAMETERLESS query only and reject
+     * any filter with HTTP 400 — in that case the request is retried bare.
      */
     listAtcRuns(options?: {
         createdBy?: string;
@@ -231,8 +245,10 @@ export declare class AdtClient {
         category?: 'K' | 'C' | 'T';
         /** Restrict by release state. Semantic values: 'modifiable' (open requests,
          *  alias 'D'), 'released' (already published, aliases 'R'/'L'), 'all' (no
-         *  filter). Any other value is forwarded to the backend as the `status`
-         *  query parameter and not filtered client-side. */
+         *  filter). Semantic words are translated to the CTO letter codes before
+         * they hit the wire ('modifiable'→'D', 'released'→'R') — subset backends
+         * match the literal value and otherwise return zero rows. The client-side
+         * filter always applies as a safety net. */
         status?: string;
         signal?: AbortSignal;
     }): Promise<AdtTransport[]>;
@@ -376,12 +392,13 @@ export declare class AdtClient {
      * Read-modify-write the structured metadata of a DDIC object: lock → GET
      * current XML → patch only the provided fields → PUT → unlock. The
      * optional `onLocked` hook runs right after the lock (with the backend
-     * transport the lock assigned) so callers can enforce policy and abort
-     * BEFORE anything is written — a throw rolls the lock back and propagates.
+     * transport the lock assigned AND the lock handle) so callers can enforce
+     * policy, register the lock in a ledger, or otherwise react BEFORE
+     * anything is written — a throw rolls the lock back and propagates.
      */
     writeStructure(objectUri: string, kind: AdtStructureKind, changes: AdtStructureChanges, options?: {
         transport?: string;
-        onLocked?: (assignedTransport: string | undefined) => void;
+        onLocked?: (assignedTransport: string | undefined, lockHandle: string | undefined) => void;
         signal?: AbortSignal;
     }): Promise<AdtStructureWriteResult>;
     /**

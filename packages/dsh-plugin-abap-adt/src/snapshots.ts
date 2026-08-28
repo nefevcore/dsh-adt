@@ -21,7 +21,7 @@
  * verify→write race: other writers cannot sneak in, they would need the lock.
  *
  * Files live under `.adt-snapshots/<destination>/` in the DSH workspace
- * (sandbox-aware via ctx.fs):
+ * (sandbox-aware via the optional dsh-fs service, `ctx.get('fs')`):
  *   <name>.<category>.abap            — the source text (editable in place;
  *                                        adt_push_object uploads it after
  *                                        verification)
@@ -72,6 +72,25 @@ export function hashSource(source: string): string {
   return createHash('sha256').update(source.replace(/\r\n/g, '\n')).digest('hex');
 }
 
+/**
+ * Tolerant equality for post-write persistence verification: compares what we
+ * WROTE against what a read-back returns, ignoring the normalizations real
+ * backends apply to stored sources (CRLF↔LF, trailing whitespace/newlines at
+ * EOF). Anything beyond that means the server holds DIFFERENT content — most
+ * likely a concurrent editor (same user, other session) saved a stale buffer
+ * over our write.
+ */
+export function sourcesEquivalent(written: string, readBack: string): boolean {
+  const normalize = (s: string): string =>
+    s
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      .map((line) => line.replace(/[ \t]+$/, ''))
+      .join('\n')
+      .replace(/\n+$/, '');
+  return normalize(written) === normalize(readBack);
+}
+
 function fileStem(ref: { name: string; type: string }): string {
   const short = (ref.type.split('/')[0] ?? 'obj').toLowerCase();
   return `${ref.name.toLowerCase()}.${short}.abap`;
@@ -88,7 +107,8 @@ export async function loadSnapshot(
   destination: string,
   ref: { name: string; type: string; uri: string },
 ): Promise<ObjectSnapshot | undefined> {
-  const fs = ctx.fs;
+  // Optional service (audit D1): no dsh-fs → no snapshots, callers degrade.
+  const fs = ctx.get('fs');
   if (!fs) return undefined;
   const { file, sidecar } = snapshotPaths(destination, ref);
   try {
@@ -111,8 +131,10 @@ export async function saveSnapshot(
   ref: { name: string; type: string; uri: string },
   source: string,
 ): Promise<string> {
-  const fs = ctx.fs;
-  if (!fs) throw new Error('adt: snapshotting requires the dsh filesystem service (ctx.fs)');
+  // Optional service (audit D1): snapshotting needs dsh-fs; callers treat a
+  // throw here as "no snapshot available", not a read failure.
+  const fs = ctx.get('fs');
+  if (!fs) throw new Error('adt: snapshotting requires the dsh filesystem service (ctx.get(\'fs\'))');
   const { file, sidecar } = snapshotPaths(destination, ref);
   const meta: SnapshotSidecar = {
     destination,

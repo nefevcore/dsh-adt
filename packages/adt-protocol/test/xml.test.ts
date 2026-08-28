@@ -43,3 +43,24 @@ test('rejects mismatched closing tags', () => {
 test('rejects unterminated element', () => {
   assert.throws(() => parseXml('<a><b>text'), /unterminated/);
 });
+
+test('DOCTYPE with a quoted ">" inside the system id parses (audit P3)', () => {
+  const doc = parseXml(`<!DOCTYPE r SYSTEM "a>b"><r><x>1</x></r>`);
+  assert.equal(doc.name, 'r');
+  assert.equal(childText(doc, 'x'), '1');
+});
+
+test('deeply nested input is rejected with a clear error, not a stack overflow (audit P3)', () => {
+  const depth = 2000;
+  const hostile = '<a>'.repeat(depth) + '</a>'.repeat(depth);
+  assert.throws(() => parseXml(hostile), /exceeds 500|nesting/);
+});
+
+test('invalid character references degrade to U+FFFD instead of RangeError (audit P3)', () => {
+  const doc = parseXml('<r><a>&#x110000;</a><b>&#0;</b><c>&#xD800;</c></r>');
+  assert.equal(childText(doc, 'a'), '\u{FFFD}');
+  assert.equal(childText(doc, 'b'), '\u{FFFD}');
+  assert.equal(childText(doc, 'c'), '\u{FFFD}');
+  // Valid references still decode (text of the ROOT element here).
+  assert.equal(parseXml('<r>&#65;</r>').text, 'A');
+});

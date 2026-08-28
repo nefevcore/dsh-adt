@@ -339,7 +339,8 @@ export function localTools(_deps: ToolDeps, ctx: Context) {
       },
       timeoutMs: 300_000,
       execute: async (args, exec) => {
-        const fs = ctx.fs;
+        // Optional service (audit D1): resolved at call time, not injected.
+        const fs = ctx.get('fs');
         if (!fs) throw new Error('adt_local_check requires the dsh filesystem service');
         return runLocalCheck(String(args.dir), {
           severity: typeof args.severity === 'string' ? (args.severity as CheckSeverity) : undefined,

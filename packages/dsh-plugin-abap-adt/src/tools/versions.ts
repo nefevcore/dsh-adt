@@ -128,6 +128,7 @@ export function versionTools(deps: ToolDeps) {
             fromLabel: { type: 'string', required: true },
             toLabel: { type: 'string', required: true },
             diff: { type: 'string', required: true },
+            note: { type: 'string', description: 'Present when the diff was truncated at the char cap.' },
             versions: {
               type: 'array',
               required: true,
@@ -219,13 +220,22 @@ export function versionTools(deps: ToolDeps) {
 
         const identical = from.source === to.source;
         const pendingCheck = from.label === 'saved' && to.label === 'active';
+        // Context cap (audit P3): fully-divergent sources used to emit BOTH
+        // sides in full through the diff.
+        const MAX_DIFF_CHARS = 20_000;
+        const fullDiff = unifiedDiff(from.source, to.source);
+        const truncatedDiff = fullDiff.length > MAX_DIFF_CHARS;
         return {
           objectUri: ref.uri,
           identical,
           pendingChanges: pendingCheck ? !identical : undefined,
           fromLabel: from.label,
           toLabel: to.label,
-          diff: unifiedDiff(from.source, to.source),
+          diff: truncatedDiff ? fullDiff.slice(0, MAX_DIFF_CHARS) : fullDiff,
+          note: truncatedDiff
+            ? `diff truncated at ${MAX_DIFF_CHARS} chars — the sources differ too much for a line diff; ` +
+              'compare targeted windows via adt_read_object startLine/endLine instead'
+            : undefined,
           versions: versions.map((v) => ({
             versionId: v.versionId.split('/').pop() ?? v.versionId,
             author: v.author,
