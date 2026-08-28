@@ -216,6 +216,3 @@ export class AdtRegistry {
     this.destinations.clear();
   }
 }
-
-/** Not used at runtime; exported for tool typing. */
-export type { PluginConfig, EffectiveConfig, DestinationConfig };

@@ -67,8 +67,4 @@ export interface MockDump {
     text: string;
 }
 export declare const DUMPS: MockDump[];
-export declare const PACKAGES: Record<string, {
-    description: string;
-    parent?: string;
-}>;
 //# sourceMappingURL=data.d.ts.map

@@ -42,6 +42,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dshHome } from './config.js';
 
 /** The plugin row appended to the copied composition. */
 export const PLUGIN_ROW = `
@@ -59,11 +60,6 @@ export const PLUGIN_ROW = `
 /** preset.yml body for the generated preset. */
 export function renderPresetYml(name: string, description: string): string {
   return 'name: ' + JSON.stringify(name) + '\ndescription: ' + JSON.stringify(description) + '\n';
-}
-
-/** The DSH home directory: `${DSH_HOME}` or `~/.dsh`. */
-export function dshHome(): string {
-  return process.env.DSH_HOME || join(homedir(), '.dsh');
 }
 
 /**

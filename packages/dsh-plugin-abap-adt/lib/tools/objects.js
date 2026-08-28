@@ -10,7 +10,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, } from './common.js';
+import { DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, } from './common.js';
 import { refFromName } from '../resolve.js';
 /** True when the backend answers GET on the object URI (object exists). */
 async function objectExists(client, uri) {
@@ -80,10 +80,7 @@ export function objectTools(deps) {
             // Permission check: package whitelist + transportable-edit rule.
             entry.policy.assertEditAllowed(packageName, 'adt_create_object');
             const transport = optStr(args.transport);
-            if (transport) {
-                entry.policy.assertTransportsEnabled('adt_create_object');
-                entry.policy.assertTransportAllowed(transport, 'adt_create_object');
-            }
+            assertExplicitTransport(entry.policy, transport, 'adt_create_object');
             const result = await (async () => {
                 try {
                     return await entry.client.createObject({
@@ -232,10 +229,7 @@ export function objectTools(deps) {
                 signal: exec.signal,
             });
             const transport = optStr(args.transport);
-            if (transport) {
-                entry.policy.assertTransportsEnabled('adt_delete_object');
-                entry.policy.assertTransportAllowed(transport, `adt_delete_object (${ref.name})`);
-            }
+            assertExplicitTransport(entry.policy, transport, 'adt_delete_object', ref.name);
             await entry.client.deleteObject(ref.uri, { transport, signal: exec.signal });
             // The object (and any lock on it) is gone — drop the ledger entry.
             ledger.deregister(entry.config.name, ref.uri);

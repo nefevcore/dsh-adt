@@ -26,6 +26,7 @@ import {
   DESTINATION_PARAM,
   OBJECT_REF_PARAMS,
   PACKAGE_HINT_PARAM,
+  assertExplicitTransport,
   assertObjectEditable,
   destinationOf,
   objectRefArgs,
@@ -293,10 +294,7 @@ export function structureTools(deps: ToolDeps) {
         signal: exec.signal,
       });
       const transport = optStr(args.transport);
-      if (transport) {
-        entry.policy.assertTransportsEnabled('adt_write_structure');
-        entry.policy.assertTransportAllowed(transport, 'adt_write_structure');
-      }
+      assertExplicitTransport(entry.policy, transport, 'adt_write_structure');
 
       const changes: AdtStructureChanges = {};
       const changed: string[] = [];

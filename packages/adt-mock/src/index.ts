@@ -1,2 +1,2 @@
 export { createMockAdtServer, type MockAdtOptions } from './server.js';
-export { OBJECTS, PACKAGES } from './data.js';
+export { OBJECTS } from './data.js';

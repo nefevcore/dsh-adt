@@ -1,5 +1,5 @@
 import { AdtClient, type AdtDestination } from '@nefevcore/abap-adt-protocol';
-import type { DestinationConfig, EffectiveConfig, PluginConfig } from './config.js';
+import type { EffectiveConfig } from './config.js';
 import { AdtPolicy } from './policy.js';
 export interface RegistryDestination {
     config: AdtDestination;
@@ -59,6 +59,4 @@ export declare class AdtRegistry {
     };
     dispose(): Promise<void>;
 }
-/** Not used at runtime; exported for tool typing. */
-export type { PluginConfig, EffectiveConfig, DestinationConfig };
 //# sourceMappingURL=registry.d.ts.map

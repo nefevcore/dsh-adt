@@ -105,20 +105,8 @@ interface AdtResponse {
 }
 
 function severityOf(text: string | undefined): 'E' | 'W' | 'I' | 'S' | 'A' {
-  switch (text) {
-    case 'E':
-      return 'E';
-    case 'W':
-      return 'W';
-    case 'I':
-      return 'I';
-    case 'S':
-      return 'S';
-    case 'A':
-      return 'A';
-    default:
-      return 'I';
-  }
+  // Known severities pass through unchanged; anything else degrades to 'I'.
+  return text === 'E' || text === 'W' || text === 'S' || text === 'A' ? text : 'I';
 }
 
 /** Parse an ADT message list from `<...:message>` / `<exc:exception>` elements. */
@@ -131,8 +119,8 @@ export function parseAdtMessages(root: XmlNode): AdtMessage[] {
       id: attr(el, 'id'),
       code: attr(el, 'code'),
       longText: childText(el, 'longText'),
-      line: attr(el, 'line') ? Number(attr(el, 'line')) : undefined,
-      offset: attr(el, 'offset') ? Number(attr(el, 'offset')) : undefined,
+      line: numAttr(el, 'line'),
+      offset: numAttr(el, 'offset'),
     });
   }
   // `exc:exception` error envelope (standard ADT error body).
@@ -148,14 +136,25 @@ export function parseAdtMessages(root: XmlNode): AdtMessage[] {
   return messages;
 }
 
+/** Parse XML tolerantly: `undefined` instead of a throw on malformed input. */
+function tryParseXml(xml: string): XmlNode | undefined {
+  try {
+    return parseXml(xml);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Numeric attribute: truthy string → Number (NaN passes through), else undefined. */
+function numAttr(node: XmlNode, key: string): number | undefined {
+  const v = attr(node, key);
+  return v ? Number(v) : undefined;
+}
+
 /** Extract ADT messages from an error response body (best effort). */
 function parseErrorBody(body: string): AdtMessage[] {
-  try {
-    const root = parseXml(body);
-    return parseAdtMessages(root);
-  } catch {
-    return [];
-  }
+  const root = tryParseXml(body);
+  return root ? parseAdtMessages(root) : [];
 }
 
 /**
@@ -485,7 +484,7 @@ export class AdtClient {
     if (this.csrfToken) return this.csrfToken;
     // The session and CSRF token must be bound to the destination client:
     // multi-client systems reject tokens issued against another client.
-    const path = `${ENDPOINTS.discovery()}${toQuery(this.baseQuery({}))}`;
+    const path = `${ENDPOINTS.discovery()}${toQuery(this.baseQuery())}`;
     const response = await this.request({
       method: 'GET',
       path,
@@ -519,7 +518,7 @@ export class AdtClient {
    * probe could bind the session to the wrong client. */
   async discover(options: { signal?: AbortSignal } = {}): Promise<AdtDiscovery> {
     const res = await this.request({
-      path: `${ENDPOINTS.discovery()}${toQuery(this.baseQuery({}))}`,
+      path: `${ENDPOINTS.discovery()}${toQuery(this.baseQuery())}`,
       accept: 'application/atomsvc+xml, application/xml',
       signal: options.signal,
     });
@@ -786,7 +785,7 @@ export class AdtClient {
     const res = await this.request({
       method: 'POST',
       path: `${uri}${toQuery(query)}`,
-      accept: 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result',
+      accept: MEDIA.lockResult,
       stateful: true,
       signal: options.signal,
     });
@@ -803,7 +802,7 @@ export class AdtClient {
     await this.request({
       method: 'POST',
       path: `${uri}${toQuery(query)}`,
-      accept: 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result',
+      accept: MEDIA.lockResult,
       stateful: true,
       signal: options.signal,
     });
@@ -943,7 +942,7 @@ export class AdtClient {
     options: { timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<AdtUnitRunResult> {
     const body = buildUnitRunRequest(objects);
-    const query = this.baseQuery({});
+    const query = this.baseQuery();
     let start: AdtResponse;
     try {
       start = await this.request({
@@ -999,7 +998,7 @@ export class AdtClient {
     const body = buildUnitRunRequestLegacy(objects);
     const res = await this.request({
       method: 'POST',
-      path: `${ENDPOINTS.unitTestRunsLegacy()}${toQuery(this.baseQuery({}))}`,
+      path: `${ENDPOINTS.unitTestRunsLegacy()}${toQuery(this.baseQuery())}`,
       body,
       contentType: 'application/xml',
       accept: 'application/xml',
@@ -1082,10 +1081,10 @@ export class AdtClient {
       signal?: AbortSignal;
     } = {},
   ): Promise<AdtAtcRunSummary[]> {
+    const createdBy = options.createdBy
+      ?? (this.destination.auth.type === 'basic' ? this.destination.auth.username : undefined);
     const params = this.baseQuery({
-      ...(options.createdBy ?? (this.destination.auth.type === 'basic' ? this.destination.auth.username : undefined)
-        ? { createdBy: options.createdBy ?? (this.destination.auth.type === 'basic' ? this.destination.auth.username : undefined) }
-        : {}),
+      ...(createdBy ? { createdBy } : {}),
       ...(options.ageMin !== undefined ? { ageMin: options.ageMin } : {}),
       ...(options.ageMax !== undefined ? { ageMax: options.ageMax } : {}),
       ...(options.central ? { centralResult: 'true' } : {}),
@@ -1746,7 +1745,7 @@ export class AdtClient {
     if (!name) throw new AdtError('ADT: program name is required');
     const res = await this.request({
       method: 'POST',
-      path: `${ENDPOINTS.programRun(name)}${toQuery(this.baseQuery({}))}`,
+      path: `${ENDPOINTS.programRun(name)}${toQuery(this.baseQuery())}`,
       accept: 'text/plain, application/xml',
       stateful: true,
       timeoutMs: 300_000,
@@ -1765,7 +1764,7 @@ export class AdtClient {
     if (!name) throw new AdtError('ADT: class name is required');
     const res = await this.request({
       method: 'POST',
-      path: `${ENDPOINTS.classRun(name)}${toQuery(this.baseQuery({}))}`,
+      path: `${ENDPOINTS.classRun(name)}${toQuery(this.baseQuery())}`,
       accept: 'text/plain, application/xml',
       stateful: true,
       timeoutMs: 300_000,
@@ -1809,7 +1808,7 @@ export class AdtClient {
 
     const res = await this.request({
       method: 'POST',
-      path: `${ENDPOINTS.batch()}${toQuery(this.baseQuery({}))}`,
+      path: `${ENDPOINTS.batch()}${toQuery(this.baseQuery())}`,
       body,
       contentType: `multipart/mixed; boundary=${boundary}`,
       accept: 'multipart/mixed',
@@ -1836,7 +1835,7 @@ export class AdtClient {
   ): Promise<AdtStructureData> {
     const uri = objectBaseUri(objectUri);
     const res = await this.request({
-      path: `${uri}${toQuery(this.baseQuery({}))}`,
+      path: `${uri}${toQuery(this.baseQuery())}`,
       accept: structureMediaType(kind),
       signal: options.signal,
     });
@@ -1868,7 +1867,7 @@ export class AdtClient {
     try {
       if (options.onLocked) options.onLocked(options.transport ? undefined : assigned, handle);
       const current = await this.request({
-        path: `${uri}${toQuery(this.baseQuery({}))}`,
+        path: `${uri}${toQuery(this.baseQuery())}`,
         accept: structureMediaType(kind),
         signal: options.signal,
       });
@@ -2258,7 +2257,7 @@ function parseSearchResult(xml: string, query: string): AdtSearchResult {
       type: attr(el, 'type') ?? '',
       uri,
       line: childText(el, 'line') ?? childText(el, 'excerpt') ?? attr(el, 'excerpt') ?? '',
-      lineNumber: attr(el, 'lineNumber') ? Number(attr(el, 'lineNumber')) : undefined,
+      lineNumber: numAttr(el, 'lineNumber'),
     });
   }
   return { count: objects.length + sources.length, query, objects, sources };
@@ -2268,10 +2267,8 @@ function parseSourceResponse(xml: string, uri: string, contentType = ''): AdtSou
   if (!xml.trimStart().startsWith('<')) {
     return { source: xml, mediaType: 'text/plain', uri, properties: [], rawXml: xml };
   }
-  let root: XmlNode;
-  try {
-    root = parseXml(xml);
-  } catch {
+  const root = tryParseXml(xml);
+  if (!root) {
     // XML-looking but unparseable → treat as plain text.
     return { source: xml, mediaType: contentType || 'text/plain', uri, properties: [], rawXml: xml };
   }
@@ -2415,30 +2412,24 @@ function deepText(node: XmlNode): string {
 }
 
 function parseLockHandle(xml: string): string | undefined {
-  try {
-    const root = parseXml(xml);
-    // ABAP backends commonly nest the handle under <asx:abap><asx:values>
-    // <LOCK_HANDLE>…</LOCK_HANDLE>, so search the whole tree (not only direct
-    // children) and also accept an attribute on the root element.
-    const nested = findTextDeep(root, 'LOCK_HANDLE') ?? findTextDeep(root, 'lockHandle');
-    if (nested) return nested;
-    const attr = root.attributes['lockHandle'] ?? root.attributes['LOCK_HANDLE'];
-    return attr ?? undefined;
-  } catch {
-    return undefined;
-  }
+  const root = tryParseXml(xml);
+  if (!root) return undefined;
+  // ABAP backends commonly nest the handle under <asx:abap><asx:values>
+  // <LOCK_HANDLE>…</LOCK_HANDLE>, so search the whole tree (not only direct
+  // children) and also accept an attribute on the root element.
+  const nested = findTextDeep(root, 'LOCK_HANDLE') ?? findTextDeep(root, 'lockHandle');
+  if (nested) return nested;
+  const attrValue = root.attributes['lockHandle'] ?? root.attributes['LOCK_HANDLE'];
+  return attrValue ?? undefined;
 }
 
 function parseLockTransport(xml: string): string | undefined {
-  try {
-    const root = parseXml(xml);
-    const nested = findTextDeep(root, 'CORRNR') ?? findTextDeep(root, 'corrNr');
-    if (nested) return nested;
-    const attr = root.attributes['corrNr'] ?? root.attributes['CORRNR'];
-    return attr ?? undefined;
-  } catch {
-    return undefined;
-  }
+  const root = tryParseXml(xml);
+  if (!root) return undefined;
+  const nested = findTextDeep(root, 'CORRNR') ?? findTextDeep(root, 'corrNr');
+  if (nested) return nested;
+  const attrValue = root.attributes['corrNr'] ?? root.attributes['CORRNR'];
+  return attrValue ?? undefined;
 }
 
 /**
@@ -2484,8 +2475,8 @@ function parseActivationResult(xml: string): AdtActivationResult {
         id: attr(msg, 'id'),
         code: attr(msg, 'code'),
         longText: deepText(child(msg, 'longText') ?? msg) || undefined,
-        line: attr(msg, 'line') ? Number(attr(msg, 'line')) : undefined,
-        offset: attr(msg, 'offset') ? Number(attr(msg, 'offset')) : undefined,
+        line: numAttr(msg, 'line'),
+        offset: numAttr(msg, 'offset'),
       };
       objMessages.push(parsed);
       if (severity === 'E') success = false;
@@ -2532,24 +2523,16 @@ function parseActivationResult(xml: string): AdtActivationResult {
 function collectMessages(root: XmlNode): AdtMessage[] {
   const out: AdtMessage[] = [];
   const walk = (node: XmlNode): void => {
-    for (const el of children(node, 'msg') ?? []) {
-      const severity = severityOf(attr(el, 'type'));
-      out.push({
-        severity,
-        text: deepText(child(el, 'shortText') ?? child(el, 'text') ?? el) || '',
-        id: attr(el, 'id'),
-        code: attr(el, 'code'),
-        longText: deepText(child(el, 'longText') ?? el) || undefined,
-      });
-    }
-    for (const el of children(node, 'message')) {
-      out.push({
-        severity: severityOf(attr(el, 'type')),
-        text: deepText(child(el, 'shortText') ?? child(el, 'text') ?? el) || '',
-        id: attr(el, 'id'),
-        code: attr(el, 'code'),
-        longText: deepText(child(el, 'longText') ?? el) || undefined,
-      });
+    for (const name of ['msg', 'message'] as const) {
+      for (const el of children(node, name)) {
+        out.push({
+          severity: severityOf(attr(el, 'type')),
+          text: deepText(child(el, 'shortText') ?? child(el, 'text') ?? el) || '',
+          id: attr(el, 'id'),
+          code: attr(el, 'code'),
+          longText: deepText(child(el, 'longText') ?? el) || undefined,
+        });
+      }
     }
     for (const childNode of node.children) walk(childNode);
   };
@@ -2558,12 +2541,8 @@ function collectMessages(root: XmlNode): AdtMessage[] {
 }
 
 function parseCheckMessages(xml: string): AdtMessage[] {
-  try {
-    const root = parseXml(xml);
-    return collectMessages(root);
-  } catch {
-    return [];
-  }
+  const root = tryParseXml(xml);
+  return root ? collectMessages(root) : [];
 }
 
 // --- Async run helpers ------------------------------------------------------
@@ -2583,8 +2562,8 @@ function extractRunId(response: AdtResponse): string {
     const match = pick(location);
     if (match) return match;
   }
-  try {
-    const root = parseXml(response.text);
+  const root = tryParseXml(response.text);
+  if (root) {
     const id = childText(root, 'id') ?? attr(root, 'id') ?? attr(root, 'runId');
     if (id) return id;
     // Atom link rel="self"/"status" with the id embedded in href.
@@ -2594,64 +2573,53 @@ function extractRunId(response: AdtResponse): string {
       const match = pick(href);
       if (match) return match;
     }
-  } catch {
-    /* fall through */
   }
   throw new AdtError('ADT: could not extract run id from response', response.status, [], response.text);
 }
 
 function isUnitRunComplete(xml: string): boolean {
-  try {
-    const root = parseXml(xml);
-    const status = (attr(root, 'status') ?? childText(root, 'status') ?? '').toLowerCase();
-    return status === 'completed' || status === 'complete' || status === 'done' || status === 'finished' ||
-      (attr(root, 'completed') === 'true') || (attr(root, 'done') === 'true');
-  } catch {
-    return false;
-  }
+  const root = tryParseXml(xml);
+  if (!root) return false;
+  const status = (attr(root, 'status') ?? childText(root, 'status') ?? '').toLowerCase();
+  return status === 'completed' || status === 'complete' || status === 'done' || status === 'finished' ||
+    (attr(root, 'completed') === 'true') || (attr(root, 'done') === 'true');
 }
 
 function extractDisplayId(xml: string): string | undefined {
-  try {
-    const root = parseXml(xml);
-    const display = childText(root, 'displayId') ?? attr(root, 'displayId');
-    if (display) return display;
-    for (const link of children(root, 'link')) {
-      const rel = attr(link, 'rel') ?? '';
-      if (rel.includes('result')) {
-        const href = attr(link, 'href');
-        if (href) {
-          const match = /([0-9a-fA-F-]{8,})/.exec(href);
-          if (match) return match[1]!;
-        }
+  const root = tryParseXml(xml);
+  if (!root) return undefined;
+  const display = childText(root, 'displayId') ?? attr(root, 'displayId');
+  if (display) return display;
+  for (const link of children(root, 'link')) {
+    const rel = attr(link, 'rel') ?? '';
+    if (rel.includes('result')) {
+      const href = attr(link, 'href');
+      if (href) {
+        const match = /([0-9a-fA-F-]{8,})/.exec(href);
+        if (match) return match[1]!;
       }
     }
-    return undefined;
-  } catch {
-    return undefined;
   }
+  return undefined;
 }
 
 function isAtcRunComplete(xml: string): boolean {
-  try {
-    const root = parseXml(xml);
-    // Real backends use `status` ("Running"/"Completed"); tolerate `state`.
-    const status = (attr(root, 'status') ?? attr(root, 'state') ?? childText(root, 'status') ?? '').toLowerCase();
-    if (status) {
-      if (status.includes('completed') || status.includes('finished') || status.includes('done')) return true;
-      if (status.includes('running') || status.includes('in process')) return false;
-    }
-    const phases = children(root, 'phase');
-    if (phases.length) {
-      return phases.every((p) => {
-        const s = (attr(p, 'status') ?? attr(p, 'state') ?? '').toLowerCase();
-        return s === 'completed' || s === 'done' || s === 'finished';
-      });
-    }
-    return false;
-  } catch {
-    return false;
+  const root = tryParseXml(xml);
+  if (!root) return false;
+  // Real backends use `status` ("Running"/"Completed"); tolerate `state`.
+  const status = (attr(root, 'status') ?? attr(root, 'state') ?? childText(root, 'status') ?? '').toLowerCase();
+  if (status) {
+    if (status.includes('completed') || status.includes('finished') || status.includes('done')) return true;
+    if (status.includes('running') || status.includes('in process')) return false;
   }
+  const phases = children(root, 'phase');
+  if (phases.length) {
+    return phases.every((p) => {
+      const s = (attr(p, 'status') ?? attr(p, 'state') ?? '').toLowerCase();
+      return s === 'completed' || s === 'done' || s === 'finished';
+    });
+  }
+  return false;
 }
 
 // --- Unit result (JUnit XML) ------------------------------------------------
@@ -2670,10 +2638,8 @@ function descendantsByName(root: XmlNode, name: string): XmlNode[] {
 }
 
 function parseUnitRunResult(xml: string): AdtUnitRunResult {
-  let root: XmlNode;
-  try {
-    root = parseXml(xml);
-  } catch {
+  const root = tryParseXml(xml);
+  if (!root) {
     return {
       success: false,
       overall: 'ABORTED',
@@ -2755,8 +2721,8 @@ function parseUnitRunResult(xml: string): AdtUnitRunResult {
       const methods = descendantsByName(classEl, 'testMethod');
       const methodAlerts = new Set<XmlNode>();
       for (const m of methods) {
-        for (const a of descendantsByName(m, 'alert')) methodAlerts.add(a);
         const alerts = descendantsByName(m, 'alert');
+        for (const a of alerts) methodAlerts.add(a);
         const failed = alerts.some((a) => {
           const s = (attr(a, 'severity') ?? attr(a, 'kind') ?? '').toLowerCase();
           return s === 'fatal' || s === 'critical' || s === 'error';
@@ -2820,8 +2786,8 @@ function parseUnitRunResult(xml: string): AdtUnitRunResult {
           durationMs: duration ? Number(duration) : 0,
           message: childText(m, 'shortText') ?? childText(m, 'message') ?? undefined,
           longText: childText(m, 'longText') ?? undefined,
-          line: attr(m, 'line') ? Number(attr(m, 'line')) : undefined,
-          offset: attr(m, 'offset') ? Number(attr(m, 'offset')) : undefined,
+          line: numAttr(m, 'line'),
+          offset: numAttr(m, 'offset'),
         };
         total++;
         if (status === 'PASSED') passed++;
@@ -2844,16 +2810,19 @@ function parseUnitRunResult(xml: string): AdtUnitRunResult {
 
 // --- ATC result (checkstyle XML) --------------------------------------------
 
+/** Fresh all-zero ATC severity tally (shared by every ATC parser branch). */
+const EMPTY_ATC_COUNTS: Record<AdtAtcFinding['severity'], number> = {
+  INFO: 0,
+  WARNING: 0,
+  ERROR: 0,
+  CRITICAL: 0,
+  CATASTROPHIC: 0,
+};
+
 function parseAtcResult(xml: string, variant?: string): AdtAtcResult {
   const root = parseXml(xml);
   const findings: AdtAtcFinding[] = [];
-  const counts: Record<AdtAtcFinding['severity'], number> = {
-    INFO: 0,
-    WARNING: 0,
-    ERROR: 0,
-    CRITICAL: 0,
-    CATASTROPHIC: 0,
-  };
+  const counts: Record<AdtAtcFinding['severity'], number> = { ...EMPTY_ATC_COUNTS };
   for (const file of children(root, 'file')) {
     const fileName = attr(file, 'name') ?? '';
     const objectName = fileName.split('/').pop()?.split('.')[0] ?? fileName;
@@ -2870,8 +2839,8 @@ function parseAtcResult(xml: string, variant?: string): AdtAtcResult {
         // keep it so line numbers stay attributable to the right source.
         uri: fileName,
         locationUri: fileName.startsWith('/') ? fileName : undefined,
-        line: attr(err, 'line') ? Number(attr(err, 'line')) : undefined,
-        offset: attr(err, 'column') ? Number(attr(err, 'column')) : undefined,
+        line: numAttr(err, 'line'),
+        offset: numAttr(err, 'column'),
         messageId: attr(err, 'source'),
         longText: undefined,
       });
@@ -3003,32 +2972,22 @@ function parseAtcResultBody(xml: string, displayId?: string): AdtAtcResult {
     success: true,
     clean: true,
     findings: [],
-    counts: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0, CATASTROPHIC: 0 },
+    counts: { ...EMPTY_ATC_COUNTS },
     durationMs: 0,
     displayId,
     rawXml: xml,
   });
   const trimmed = xml.trimStart();
   if (!trimmed.startsWith('<')) return emptyResult();
-  let root: XmlNode;
-  try {
-    root = parseXml(xml);
-  } catch {
-    return emptyResult();
-  }
+  const root = tryParseXml(xml);
+  if (!root) return emptyResult();
   if (root.name === 'checkstyle') return { ...parseAtcResult(xml), displayId };
 
   // atcresult envelope: resultList → result → objects → object → findings → finding
   const result = child(root, 'result') ?? root;
   if (result.name === 'resultList' || child(root, 'result') || child(result, 'displayId') || child(result, 'objects')) {
     const findings: AdtAtcFinding[] = [];
-    const counts: Record<AdtAtcFinding['severity'], number> = {
-      INFO: 0,
-      WARNING: 0,
-      ERROR: 0,
-      CRITICAL: 0,
-      CATASTROPHIC: 0,
-    };
+    const counts: Record<AdtAtcFinding['severity'], number> = { ...EMPTY_ATC_COUNTS };
     const objectsNode = child(result, 'objects');
     // Priority tally from the finding attributes — used to derive aggregates
     // when the result body carries no <aggregates> node (subset backends).
@@ -3107,33 +3066,16 @@ function severityFromCheckstyle(value: string | undefined): AdtAtcFinding['sever
 }
 
 function parseCreatedUri(xml: string): string | undefined {
-  try {
-    const root = parseXml(xml);
-    return attr(root, 'uri') ?? attr(root, 'href') ?? undefined;
-  } catch {
-    return undefined;
-  }
+  const root = tryParseXml(xml);
+  return root ? (attr(root, 'uri') ?? attr(root, 'href') ?? undefined) : undefined;
 }
 
 /** Object URI by convention for a freshly created object (fallback when the
  * backend returns no Location header / body, e.g. minimal ADT profiles). */
 function uriForCreated(type: string, name: string): string {
   const cat = type.split('/')[0]!;
-  const map: Record<string, string> = {
-    CLAS: '/sap/bc/adt/oo/classes/',
-    INTF: '/sap/bc/adt/oo/interfaces/',
-    PROG: '/sap/bc/adt/programs/programs/',
-    FUNC: '/sap/bc/adt/fugr/',
-    DDLS: '/sap/bc/adt/ddls/sources/',
-    TABL: '/sap/bc/adt/ddic/tables/',
-    STRU: '/sap/bc/adt/ddic/structures/',
-    DOMA: '/sap/bc/adt/ddic/domains/',
-    DTEL: '/sap/bc/adt/ddic/dataelements/',
-    TTYP: '/sap/bc/adt/ddic/tabletypes/',
-    MSAG: '/sap/bc/adt/msgclass/',
-    DEVC: '/sap/bc/adt/packages/',
-  };
-  return `${map[cat] ?? '/sap/bc/adt/repository/objects/'}${name.toLowerCase()}`;
+  const base = ENDPOINTS.createByType[cat as keyof typeof ENDPOINTS.createByType];
+  return `${base ? base() : `${ADT_BASE_PATH}/repository/objects`}/${name.toLowerCase()}`;
 }
 
 // --- Transports -------------------------------------------------------------
@@ -3248,12 +3190,8 @@ function dumpIdFromEntry(entry: XmlNode): string | undefined {
 
 /** Parse the runtime-dumps Atom feed into summaries. */
 function parseDumpsFeed(xml: string): AdtDumpSummary[] {
-  let root: XmlNode;
-  try {
-    root = parseXml(xml);
-  } catch {
-    return [];
-  }
+  const root = tryParseXml(xml);
+  if (!root) return [];
   const dumps: AdtDumpSummary[] = [];
   for (const entry of children(root, 'entry')) {
     const id = dumpIdFromEntry(entry);
@@ -3274,28 +3212,26 @@ function parseDumpsFeed(xml: string): AdtDumpSummary[] {
 /** Tolerant structured-XML dump parser: every text-bearing child becomes a section. */
 function parseDumpDetail(xml: string, id: string): AdtDumpDetail {
   const sections: Array<{ name: string; value: string }> = [];
-  let title: string | undefined;
-  try {
-    const root = parseXml(xml);
-    title = attr(root, 'type') ?? attr(root, 'name') ?? childText(root, 'name') ?? childText(root, 'title');
-    const walk = (node: XmlNode): void => {
-      for (const c of node.children) {
-        if (c.children.length === 0 && c.text) {
-          sections.push({ name: c.name, value: c.text });
-        } else if (c.children.length > 0) {
-          // Composite nodes contribute a flattened key/value view.
-          for (const gc of c.children) {
-            if (gc.text) sections.push({ name: `${c.name}.${gc.name}`, value: gc.text });
-          }
-          walk(c);
-        }
-      }
-    };
-    walk(root);
-  } catch {
+  const root = tryParseXml(xml);
+  if (!root) {
     // Non-XML body → keep raw.
     return { id, sections: [], raw: xml, view: 'default' };
   }
+  const title = attr(root, 'type') ?? attr(root, 'name') ?? childText(root, 'name') ?? childText(root, 'title');
+  const walk = (node: XmlNode): void => {
+    for (const c of node.children) {
+      if (c.children.length === 0 && c.text) {
+        sections.push({ name: c.name, value: c.text });
+      } else if (c.children.length > 0) {
+        // Composite nodes contribute a flattened key/value view.
+        for (const gc of c.children) {
+          if (gc.text) sections.push({ name: `${c.name}.${gc.name}`, value: gc.text });
+        }
+        walk(c);
+      }
+    }
+  };
+  walk(root);
   return { id, title, sections, view: 'default' };
 }
 

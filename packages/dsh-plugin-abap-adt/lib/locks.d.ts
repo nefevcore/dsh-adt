@@ -32,7 +32,5 @@ export declare class LockLedger {
     forDestination(destination: string): LockEntry[];
     /** The recorded handle for one object (undefined when unknown). */
     handleFor(destination: string, uri: string): string | undefined;
-    /** All entries (for reporting). */
-    all(): LockEntry[];
 }
 //# sourceMappingURL=locks.d.ts.map

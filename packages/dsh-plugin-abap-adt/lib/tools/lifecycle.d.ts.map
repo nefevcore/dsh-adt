@@ -1,1 +1,1 @@
-{"version":3,"file":"lifecycle.d.ts","sourceRoot":"","sources":["../../src/tools/lifecycle.ts"],"names":[],"mappings":"AACA,OAAO,EAOL,KAAK,QAAQ,EACd,MAAM,aAAa,CAAC;AAGrB,wBAAgB,cAAc,CAAC,IAAI,EAAE,QAAQ,qDAyQ5C"}
+{"version":3,"file":"lifecycle.d.ts","sourceRoot":"","sources":["../../src/tools/lifecycle.ts"],"names":[],"mappings":"AACA,OAAO,EAQL,KAAK,QAAQ,EACd,MAAM,aAAa,CAAC;AAGrB,wBAAgB,cAAc,CAAC,IAAI,EAAE,QAAQ,qDAsQ5C"}

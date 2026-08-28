@@ -29,8 +29,6 @@
 import type { AdtStructureChanges, AdtStructureData, AdtStructureKind } from './types.js';
 /** Negotiation media type per structured kind (Accept + PUT Content-Type). */
 export declare function structureMediaType(kind: AdtStructureKind): string;
-/** Object type code (ADT form) per structured kind. */
-export declare function structureTypeCode(kind: AdtStructureKind): string;
 /** Parse a structured-metadata XML body into typed JSON (per kind). */
 export declare function parseStructure(xml: string, kind: AdtStructureKind): AdtStructureData;
 /**

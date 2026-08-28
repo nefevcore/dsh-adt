@@ -336,8 +336,4 @@ export const DUMPS = [
         text: 'Runtime limit of 600 seconds exceeded in SELECT on ZBIGTABLE.',
     },
 ];
-export const PACKAGES = {
-    ZPACK_DEMO: { description: 'Demo development package' },
-    $TMP: { description: 'Local Objects (package for local development)' },
-};
 //# sourceMappingURL=data.js.map

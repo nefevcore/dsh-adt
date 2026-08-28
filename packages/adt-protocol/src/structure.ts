@@ -51,20 +51,6 @@ export function structureMediaType(kind: AdtStructureKind): string {
   }
 }
 
-/** Object type code (ADT form) per structured kind. */
-export function structureTypeCode(kind: AdtStructureKind): string {
-  switch (kind) {
-    case 'MSAG':
-      return 'MSAG/N';
-    case 'DOMA':
-      return 'DOMA/DT';
-    case 'DTEL':
-      return 'DTEL/DT';
-    case 'TTYP':
-      return 'TTYP/DT';
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------

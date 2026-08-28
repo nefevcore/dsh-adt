@@ -21,7 +21,7 @@
 # ① 安装（装进 web profile；仅安装，不自动加载）
 dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin
 
-# ② 生成按会话启用的 agent 预设（一次性；复制默认预设并追加插件行）
+# ② 生成按会话启用的 agent 预设（一次性；复制 standard 预设、追加插件行并剔除 tool-cordis/skill-filesystem 行）
 dsh plugin --profile web exec abap-adt-preset
 
 # 更新到最新版（更新不会动你的预设与配置）
@@ -33,7 +33,7 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 
 **默认不加载，按会话启用（by design）**：包内不声明 `dsh.bundle`，安装只是把包放进 profile 的依赖里——`adt_*` 工具**只出现在用 `abap-adt` 预设创建的会话**，其他会话完全不受影响。安装时 dsh 会提示 `declares no dsh.bundle — installed as a plain dependency`，这正是预期行为。
 
-②生成的预设：复制部署默认预设（`~/.dsh/settings.yaml` 的 `agent-presets.default`，通常是 `cordis`）到 `~/.dsh/.agent-presets/abap-adt/` 并追加插件行；支持 `--id/--from/--name/--force/--dry-run`。重启 DSH 后新建会话，在预设 chip 选「ABAP Development」即可。手工建预设的说明见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md)。
+②生成的预设：复制 `standard` 预设（完整编码代理、不含插件开发工具集）到 `~/.dsh/.agent-presets/abap-adt/`，追加插件行并剔除源里可能携带的 `tool-cordis` / `skill-filesystem` 行；刻意不复制部署默认预设——默认为 `cordis` 时会带入 `tool-cordis`（其 Host Cordis inspect provider 与活动 cordis 会话冲突），需要时 `--from` 可覆盖。支持 `--id/--from/--name/--force/--dry-run`。重启 DSH 后新建会话，在预设 chip 选「ABAP Development」即可。手工建预设的说明见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md)。
 
 DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更走 DSH settings，免重启热生效。连接真实系统的 `destinations` 与权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
@@ -104,7 +104,7 @@ abap-adt:
 ③ 旧版独立文件 ~/.dsh/abap-adt.yml            （已废弃，仅迁移期兼容，出现即告警）
 ④ settings.yaml 的 abap-adt: 用户段           （用户覆盖层）
 ⑤ 显式 configFile（团队共享，最权威）          （路径可来自 ②-④ 任一层；~ 展开、相对路径锚定 dsh home）
-⑥ SAP_* 环境变量                              （仅权限四开关，且仅在 ①-⑤ 均未设置时生效）
+⑥ SAP_* 环境变量                              （仅权限六开关，且仅在 ①-⑤ 均未设置时生效）
 ```
 
 - `destinations` 跨层按名字合并：高层的同名条目覆盖低层，新名字追加——随包发布的 `destinations: []` 永远不会挡住其他层

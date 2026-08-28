@@ -6,7 +6,7 @@
 dsh plugin --profile web exec abap-adt-preset
 ```
 
-它会复制部署默认预设到 `~/.dsh/.agent-presets/abap-adt/`、追加插件行、写
+它会复制 `standard` 预设到 `~/.dsh/.agent-presets/abap-adt/`、追加插件行、剔除源里的 `tool-cordis`/`skill-filesystem` 行、写
 `preset.yml`（支持 `--id/--from/--name/--force/--dry-run`）。本目录的文件是
 **手工建预设时的模板**（生成器找不到 dsh 安装、或想定制时用），内容与生成
 产物一致。
@@ -34,7 +34,7 @@ dsh plugin --profile web exec abap-adt-preset
   稳定；destinations/权限是**环境信息**，随人随机器变。混在一起每次换系统
   都要改 300 多行的组合文件，且容易把密码带进去。
 - 分层优先级（DSH settings 规范）：settings 用户段（`~/.dsh/settings.yaml`
-  的 `abap-adt:`）> 预设行内联 config > schema 默认值；权限四开关还可用
+  的 `abap-adt:`）> 预设行内联 config > schema 默认值；权限六开关还可用
   `SAP_*` 环境变量兜底。`destinations` 跨层按名字合并，本机段覆盖预设同名
   条目、新名字追加。
 - 想换共享配置（比如团队统一一份）就在任意层写

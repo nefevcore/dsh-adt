@@ -1,5 +1,28 @@
 import { resolveObject, resolvePackageName } from '../resolve.js';
 import { AdtPolicyError } from '../policy.js';
+/**
+ * Policy pre-check for an explicitly-passed transport (shared by every tool
+ * that accepts one): no transport → no check; otherwise the transport family
+ * must be enabled and the exact number allowed. `objectName` (when given) is
+ * included in the denial context to identify the object involved.
+ */
+export function assertExplicitTransport(policy, transport, toolName, objectName) {
+    if (!transport)
+        return;
+    policy.assertTransportsEnabled(toolName);
+    policy.assertTransportAllowed(transport, objectName ? `${toolName} (${objectName})` : toolName);
+}
+/** Shared activation summary for the write-family tools. */
+export function activationSummary(act) {
+    return {
+        success: act.success,
+        message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ' ' + i.message : ''}`).join('; ') || undefined,
+    };
+}
+/** Attribute the effective transport to its source (user-passed vs lock-assigned). */
+export function transportSourceOf(effectiveTransport, userTransport) {
+    return effectiveTransport ? (userTransport ? 'user' : 'auto') : undefined;
+}
 /** Parameter spec for the destination selector used by every tool. */
 export const DESTINATION_PARAM = {
     destination: {
@@ -174,17 +197,5 @@ export function deepCompact(value) {
         return out;
     }
     return value;
-}
-/** Render an object list as a compact table. */
-export function renderObjectRefs(refs) {
-    if (refs.length === 0)
-        return '(no objects)';
-    const rows = refs.map((r) => `- ${r.name} (${r.type}) — ${r.uri}`);
-    return rows.join('\n');
-}
-/** A terse success renderer shared by lifecycle tools. */
-export function renderMessages(title, lines) {
-    const body = lines.length ? lines.join('\n') : '(no messages)';
-    return `${title}\n${body}`;
 }
 //# sourceMappingURL=common.js.map

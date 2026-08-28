@@ -131,7 +131,7 @@
 - **入参**：`displayId`*；`includeExemptedFindings`（默认 false）。
 - **返回**：`displayId, title?, checkVariant?, clean, findings[]（含 uri?）, counts{}, aggregates?（结果体缺失时按 finding priority 推导）, durationMs, rawXml?`。
 
-## 6. 传输与版本（3 + 1 移除）
+## 6. 传输与版本（4）
 
 > **已移除 `adt_release_transport`**：释放传输不可逆且需要人工判断（导入顺序/窗口/缓冲区状态），Agent 应把一切准备到「可释放的请求」，最后一步留给人。协议客户端 `releaseTransport()` 保留。
 
@@ -171,7 +171,7 @@
 - **入参**：`objects`（数组，可省 = 账本全量）；`dryRun`（默认 false；true 时只列候选锁、不做任何 ERP 解锁调用——候选清单纯本地可得，无需后端支持）。
 - **返回**：`destination, dryRun?, attempted, released[] { objectUri, note? }, failed[] { objectUri, reason }, remainingLedger`（dryRun 时 candidates 全部列在 failed 里并标注 "dry run"）。
 
-## 8. 批量与门禁（3）
+## 8. 批量与门禁（4）
 
 ### adt_batch ⏱180s
 协议级 `$batch`：多个 ADT 请求打包进**一次 HTTP 往返**（`POST /sap/bc/adt/$batch`，multipart 内嵌 HTTP）。代理尺度的只读扇出（一次拉 20 个对象源码 / 元数据+版本+锁状态）。

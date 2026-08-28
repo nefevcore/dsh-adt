@@ -16,10 +16,6 @@ export interface AdtQueryParams {
     [key: string]: string | number | boolean | undefined;
 }
 export declare const MEDIA: {
-    /** Discovery service response (AtomPub). */
-    readonly discovery: "application/atomsvc+xml";
-    /** Object reference list (adtcore). */
-    readonly objectList: "application/vnd.sap.adt.objectlist.v1+xml";
     /** A single object reference. */
     readonly object: "application/vnd.sap.adt.object.v1+xml";
     /** Activation request/response. */
@@ -38,42 +34,26 @@ export declare const MEDIA: {
     readonly atcRunParameters: "application/vnd.sap.atc.run.parameters.v1+xml";
     /** ATC run / status. */
     readonly atcRun: "application/vnd.sap.atc.run.v1+xml";
-    /** ATC results (checkstyle XML). */
-    readonly atcResult: "application/vnd.sap.atc.checkstyle.v1+xml";
     /** Transport request tree (list). */
     readonly transportOrganizerTree: "application/vnd.sap.adt.transportorganizertree.v1+xml";
     /** Single transport request. */
     readonly transportOrganizer: "application/vnd.sap.adt.transportorganizer.v1+xml";
     /** Repository node structure. */
     readonly nodeStructure: "application/vnd.sap.adt.repository.nodestructure.v1+xml";
-    /** Package collection. */
-    readonly packages: "application/vnd.sap.adt.packages.v2+xml";
     /** Lock result envelope. */
     readonly lockResult: "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result";
     /** Generic source (XML-wrapped). */
     readonly source: "application/vnd.sap.adt.source.v1+xml";
-    /** Plain ABAP source. */
-    readonly abapSource: "application/vnd.sap.adt.abapsource.v1+xml";
-    /** Error body. */
-    readonly error: "application/xml";
 };
 /** Build a query string from parameters (ADT style: repeated keys allowed). */
 export declare function toQuery(params: AdtQueryParams | undefined): string;
 export declare const ENDPOINTS: {
     /** Service discovery — CSRF probe endpoint; lists every ADT service. */
     readonly discovery: () => string;
-    /** Legacy discovery (BASIS ≤ 7.40). */
-    readonly discoveryLegacy: () => string;
-    /** ATO settings (ABAP Cloud / release info). */
-    readonly atoSettings: () => string;
-    /** Repository information system (search + metadata). */
-    readonly informationsystem: (query?: AdtQueryParams) => string;
     /** Quick object / source search. */
     readonly search: (query: AdtQueryParams) => string;
     /** Where-used references for an object (`?uri=` template). */
     readonly whereUsed: (query?: AdtQueryParams) => string;
-    /** Where-used scope (searchable object types) for an object. */
-    readonly whereUsedScope: (query?: AdtQueryParams) => string;
     /** Data preview of a DDIC entity (table / structure / view). */
     readonly dataPreviewDdic: (name: string, query?: AdtQueryParams) => string;
     /** Data preview of a CDS view. */
@@ -117,8 +97,6 @@ export declare const ENDPOINTS: {
     readonly atcResults: (query?: AdtQueryParams) => string;
     /** CTO transport requests of the current user / system. */
     readonly transportRequests: (query?: AdtQueryParams) => string;
-    /** Packages endpoint. */
-    readonly packages: (query?: AdtQueryParams) => string;
     /** Type-specific object creation endpoints (POST + `package` query param). */
     readonly createByType: {
         readonly CLAS: (query?: AdtQueryParams) => string;
@@ -134,14 +112,8 @@ export declare const ENDPOINTS: {
         readonly MSAG: (query?: AdtQueryParams) => string;
         readonly DEVC: (query?: AdtQueryParams) => string;
     };
-    /** Source access for an object: `<uri>/source/main`. */
-    readonly objectSource: (objectUri: string, query?: AdtQueryParams) => string;
     /** Modern deletion service (POST + `del:deletionRequest` body). */
     readonly deletion: (query?: AdtQueryParams) => string;
-    /** Deletion pre-check service. */
-    readonly deletionCheck: (query?: AdtQueryParams) => string;
-    /** System time / ping (lightweight reachability probe). */
-    readonly systemTime: () => string;
     /** Runtime dumps feed (ST22 short-dump list; Atom feed, $-style paging). */
     readonly runtimeDumps: (query?: AdtQueryParams) => string;
     /** One runtime dump by id; `view` selects default/summary/formatted. */
@@ -153,6 +125,4 @@ export declare const ENDPOINTS: {
     /** Protocol-level `$batch` (multipart/mixed embedded HTTP requests). */
     readonly batch: () => string;
 };
-/** Human-readable object type labels (used when search does not provide them). */
-export declare const OBJECT_TYPE_LABELS: Record<string, string>;
 //# sourceMappingURL=endpoints.d.ts.map

@@ -42,6 +42,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dshHome } from './config.js';
 /** The plugin row appended to the copied composition. */
 export const PLUGIN_ROW = `
 # --- abap-adt (appended by abap-adt-preset) ---
@@ -57,10 +58,6 @@ export const PLUGIN_ROW = `
 /** preset.yml body for the generated preset. */
 export function renderPresetYml(name, description) {
     return 'name: ' + JSON.stringify(name) + '\ndescription: ' + JSON.stringify(description) + '\n';
-}
-/** The DSH home directory: `${DSH_HOME}` or `~/.dsh`. */
-export function dshHome() {
-    return process.env.DSH_HOME || join(homedir(), '.dsh');
 }
 /**
  * The default source preset: always `standard` (audit D2). Deliberately NOT

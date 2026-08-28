@@ -40,19 +40,6 @@ export function structureMediaType(kind) {
             return 'application/vnd.sap.adt.tabletypes.v2+xml';
     }
 }
-/** Object type code (ADT form) per structured kind. */
-export function structureTypeCode(kind) {
-    switch (kind) {
-        case 'MSAG':
-            return 'MSAG/N';
-        case 'DOMA':
-            return 'DOMA/DT';
-        case 'DTEL':
-            return 'DTEL/DT';
-        case 'TTYP':
-            return 'TTYP/DT';
-    }
-}
 // ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------

@@ -402,7 +402,3 @@ export const DUMPS: MockDump[] = [
   },
 ];
 
-export const PACKAGES: Record<string, { description: string; parent?: string }> = {
-  ZPACK_DEMO: { description: 'Demo development package' },
-  $TMP: { description: 'Local Objects (package for local development)' },
-};

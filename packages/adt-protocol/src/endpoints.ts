@@ -19,10 +19,6 @@ export interface AdtQueryParams {
 }
 
 export const MEDIA = {
-  /** Discovery service response (AtomPub). */
-  discovery: 'application/atomsvc+xml',
-  /** Object reference list (adtcore). */
-  objectList: 'application/vnd.sap.adt.objectlist.v1+xml',
   /** A single object reference. */
   object: 'application/vnd.sap.adt.object.v1+xml',
   /** Activation request/response. */
@@ -41,24 +37,16 @@ export const MEDIA = {
   atcRunParameters: 'application/vnd.sap.atc.run.parameters.v1+xml',
   /** ATC run / status. */
   atcRun: 'application/vnd.sap.atc.run.v1+xml',
-  /** ATC results (checkstyle XML). */
-  atcResult: 'application/vnd.sap.atc.checkstyle.v1+xml',
   /** Transport request tree (list). */
   transportOrganizerTree: 'application/vnd.sap.adt.transportorganizertree.v1+xml',
   /** Single transport request. */
   transportOrganizer: 'application/vnd.sap.adt.transportorganizer.v1+xml',
   /** Repository node structure. */
   nodeStructure: 'application/vnd.sap.adt.repository.nodestructure.v1+xml',
-  /** Package collection. */
-  packages: 'application/vnd.sap.adt.packages.v2+xml',
   /** Lock result envelope. */
   lockResult: 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result',
   /** Generic source (XML-wrapped). */
   source: 'application/vnd.sap.adt.source.v1+xml',
-  /** Plain ABAP source. */
-  abapSource: 'application/vnd.sap.adt.abapsource.v1+xml',
-  /** Error body. */
-  error: 'application/xml',
 } as const;
 
 /** Build a query string from parameters (ADT style: repeated keys allowed). */
@@ -76,16 +64,6 @@ export const ENDPOINTS = {
   /** Service discovery — CSRF probe endpoint; lists every ADT service. */
   discovery: () => `${ADT_BASE}/core/discovery`,
 
-  /** Legacy discovery (BASIS ≤ 7.40). */
-  discoveryLegacy: () => `${ADT_BASE}/discovery`,
-
-  /** ATO settings (ABAP Cloud / release info). */
-  atoSettings: () => `${ADT_BASE}/ato/settings`,
-
-  /** Repository information system (search + metadata). */
-  informationsystem: (query?: AdtQueryParams) =>
-    `${ADT_BASE}/repository/informationsystem${toQuery(query)}`,
-
   /** Quick object / source search. */
   search: (query: AdtQueryParams) =>
     `${ADT_BASE}/repository/informationsystem/search${toQuery(query)}`,
@@ -93,10 +71,6 @@ export const ENDPOINTS = {
   /** Where-used references for an object (`?uri=` template). */
   whereUsed: (query?: AdtQueryParams) =>
     `${ADT_BASE}/repository/informationsystem/usageReferences${toQuery(query)}`,
-
-  /** Where-used scope (searchable object types) for an object. */
-  whereUsedScope: (query?: AdtQueryParams) =>
-    `${ADT_BASE}/repository/informationsystem/usageReferences/scope${toQuery(query)}`,
 
   /** Data preview of a DDIC entity (table / structure / view). */
   dataPreviewDdic: (name: string, query?: AdtQueryParams) =>
@@ -158,9 +132,6 @@ export const ENDPOINTS = {
   /** CTO transport requests of the current user / system. */
   transportRequests: (query?: AdtQueryParams) => `${ADT_BASE}/cts/transportrequests${toQuery(query)}`,
 
-  /** Packages endpoint. */
-  packages: (query?: AdtQueryParams) => `${ADT_BASE}/packages${toQuery(query)}`,
-
   /** Type-specific object creation endpoints (POST + `package` query param). */
   createByType: {
     CLAS: (query?: AdtQueryParams) => `${ADT_BASE}/oo/classes${toQuery(query)}`,
@@ -177,18 +148,8 @@ export const ENDPOINTS = {
     DEVC: (query?: AdtQueryParams) => `${ADT_BASE}/packages${toQuery(query)}`,
   },
 
-  /** Source access for an object: `<uri>/source/main`. */
-  objectSource: (objectUri: string, query?: AdtQueryParams) =>
-    `${objectUri}/source/main${toQuery(query)}`,
-
   /** Modern deletion service (POST + `del:deletionRequest` body). */
   deletion: (query?: AdtQueryParams) => `${ADT_BASE}/deletion/delete${toQuery(query)}`,
-
-  /** Deletion pre-check service. */
-  deletionCheck: (query?: AdtQueryParams) => `${ADT_BASE}/deletion/check${toQuery(query)}`,
-
-  /** System time / ping (lightweight reachability probe). */
-  systemTime: () => `${ADT_BASE}/core/system/time`,
 
   /** Runtime dumps feed (ST22 short-dump list; Atom feed, $-style paging). */
   runtimeDumps: (query?: AdtQueryParams) => `${ADT_BASE}/runtime/dumps${toQuery(query)}`,
@@ -208,34 +169,3 @@ export const ENDPOINTS = {
   batch: () => `${ADT_BASE}/$batch`,
 } as const;
 
-/** Human-readable object type labels (used when search does not provide them). */
-export const OBJECT_TYPE_LABELS: Record<string, string> = {
-  'CLAS/OC': 'Class (Class Pool)',
-  'CLAS/OM': 'Class Method',
-  'CLAS/I': 'Class Include',
-  'INTF/OI': 'Interface',
-  'PROG/P': 'Program',
-  'PROG/I': 'Include',
-  'FUGR/F': 'Function Group',
-  'FUGR/FF': 'Function Module',
-  'FUGR/I': 'Function Group Include',
-  'DDLS/DF': 'CDS Data Definition',
-  'DCLS/DL': 'CDS Access Control',
-  'DDLX/EX': 'CDS Metadata Extension',
-  'BDEF/BDO': 'Behavior Definition',
-  'SRVD/SRV': 'Service Definition',
-  'STOB/DO': 'CDS Entity',
-  'TABL/DT': 'Table',
-  'STRU/DT': 'Structure',
-  'MSAG/N': 'Message Class',
-  'TYPE/TY': 'Type Group',
-  'DEVC/K': 'Package',
-  'R3TR/CLAS': 'Class',
-  'R3TR/INTF': 'Interface',
-  'R3TR/PROG': 'Program',
-  'R3TR/FUNC': 'Function Group',
-  'R3TR/TABL': 'Table',
-  'R3TR/VIEW': 'View',
-  'R3TR/DDLS': 'CDS View',
-  'R3TR/DEVC': 'Package',
-};

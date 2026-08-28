@@ -1,6 +1,28 @@
 import type { AdtClient, AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 import type { AdtRegistry, RegistryDestination } from '../registry.js';
 import type { LockLedger } from '../locks.js';
+import type { AdtPolicy } from '../policy.js';
+/**
+ * Policy pre-check for an explicitly-passed transport (shared by every tool
+ * that accepts one): no transport → no check; otherwise the transport family
+ * must be enabled and the exact number allowed. `objectName` (when given) is
+ * included in the denial context to identify the object involved.
+ */
+export declare function assertExplicitTransport(policy: AdtPolicy, transport: string | undefined, toolName: string, objectName?: string): void;
+/** Shared activation summary for the write-family tools. */
+export declare function activationSummary(act: {
+    success: boolean;
+    items: Array<{
+        name: string;
+        status: string;
+        message?: string;
+    }>;
+}): {
+    success: boolean;
+    message?: string;
+};
+/** Attribute the effective transport to its source (user-passed vs lock-assigned). */
+export declare function transportSourceOf(effectiveTransport: string | undefined, userTransport: string | undefined): 'user' | 'auto' | undefined;
 /** Parameter spec for the destination selector used by every tool. */
 export declare const DESTINATION_PARAM: {
     readonly destination: {
@@ -164,8 +186,4 @@ export declare function text(content: string): Array<{
  * `undefined`, because JSON has no representation for it). `null` is kept.
  */
 export declare function deepCompact(value: unknown): unknown;
-/** Render an object list as a compact table. */
-export declare function renderObjectRefs(refs: AdtObjectRef[]): string;
-/** A terse success renderer shared by lifecycle tools. */
-export declare function renderMessages(title: string, lines: string[]): string;
 //# sourceMappingURL=common.d.ts.map

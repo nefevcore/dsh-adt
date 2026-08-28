@@ -18,7 +18,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError, } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertObjectEditable, destinationOf, objectRefArgs, optStr, resolveToolObject, text, } from './common.js';
+import { DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, objectRefArgs, optStr, resolveToolObject, text, } from './common.js';
 const KINDS = ['MSAG', 'DOMA', 'DTEL', 'TTYP'];
 const KIND_DESCRIPTIONS = {
     MSAG: 'messages: [{number, text, selfExplanatory}] — full replacement list (absent numbers are deleted)',
@@ -249,10 +249,7 @@ export function structureTools(deps) {
                 signal: exec.signal,
             });
             const transport = optStr(args.transport);
-            if (transport) {
-                entry.policy.assertTransportsEnabled('adt_write_structure');
-                entry.policy.assertTransportAllowed(transport, 'adt_write_structure');
-            }
+            assertExplicitTransport(entry.policy, transport, 'adt_write_structure');
             const changes = {};
             const changed = [];
             if (optStr(args.description) !== undefined) {

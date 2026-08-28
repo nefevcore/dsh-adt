@@ -150,9 +150,4 @@ export class LockLedger {
   handleFor(destination: string, uri: string): string | undefined {
     return this.entries.find((e) => e.destination === destination && e.uri === uri)?.handle;
   }
-
-  /** All entries (for reporting). */
-  all(): LockEntry[] {
-    return [...this.entries];
-  }
 }

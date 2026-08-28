@@ -2,7 +2,7 @@
 # 保存即热生效（目的地表与权限策略原地重建，无需重启 DSH）。
 #
 # 解析优先级（就近覆盖）：本段（settings 用户层）> 插件行内联 config
-# （预设/patch 的 composition base）> schema 默认值；权限四开关在本段与
+# （预设/patch 的 composition base）> schema 默认值；权限六开关在本段与
 # 内联均未设置时看 SAP_* 环境变量。destinations 跨层按名字合并，
 # 本段的同名条目覆盖内联，新名字追加。
 #

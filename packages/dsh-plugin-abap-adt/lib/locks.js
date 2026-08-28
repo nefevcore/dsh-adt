@@ -130,9 +130,5 @@ export class LockLedger {
     handleFor(destination, uri) {
         return this.entries.find((e) => e.destination === destination && e.uri === uri)?.handle;
     }
-    /** All entries (for reporting). */
-    all() {
-        return [...this.entries];
-    }
 }
 //# sourceMappingURL=locks.js.map

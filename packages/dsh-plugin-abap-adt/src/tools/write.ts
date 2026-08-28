@@ -25,11 +25,14 @@ import {
   DESTINATION_PARAM,
   OBJECT_REF_PARAMS,
   PACKAGE_HINT_PARAM,
+  activationSummary,
+  assertExplicitTransport,
   assertObjectEditable,
   destinationOf,
   optStr,
   resolveToolObject,
   text,
+  transportSourceOf,
   type ToolDeps,
 } from './common.js';
 
@@ -665,10 +668,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       // An explicitly-passed transport must be policy-allowed up front; the
       // write (PUT ?corrNr=…) records the change into EXACTLY this request.
       const transport = optStr(args.transport);
-      if (transport) {
-        entry.policy.assertTransportsEnabled('adt_write_object');
-        entry.policy.assertTransportAllowed(transport, `adt_write_object (${ref.name})`);
-      }
+      assertExplicitTransport(entry.policy, transport, 'adt_write_object', ref.name);
 
       const unlock = args.unlock !== false;
       let unlocked = false;
@@ -701,10 +701,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         if (args.activate === true) {
           const act = await entry.client.activate([ref], { transport: effectiveTransport ?? undefined, signal: exec.signal });
           activated = act.success;
-          activationResult = {
-            success: act.success,
-            message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ' ' + i.message : ''}`).join('; ') || undefined,
-          };
+          activationResult = activationSummary(act);
         }
         succeeded = true;
       } finally {
@@ -730,11 +727,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       if (ctx.get('fs') && persistCheck.readBackSource !== undefined) {
         await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
       }
-      const transportSource: 'user' | 'auto' | undefined = effectiveTransport
-        ? transport
-          ? 'user'
-          : 'auto'
-        : undefined;
+      const transportSource = transportSourceOf(effectiveTransport, transport);
       return {
         uri: ref.uri,
         name: ref.name,
@@ -951,10 +944,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       // Explicitly-passed transport: policy-check up front, then the write
       // (PUT ?corrNr=…) records the change into EXACTLY this request.
       const transport = optStr(args.transport);
-      if (transport) {
-        entry.policy.assertTransportsEnabled('adt_edit_object');
-        entry.policy.assertTransportAllowed(transport, `adt_edit_object (${ref.name})`);
-      }
+      assertExplicitTransport(entry.policy, transport, 'adt_edit_object', ref.name);
 
       let unlocked = false;
       let activated = false;
@@ -993,10 +983,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         if (args.activate === true) {
           const act = await entry.client.activate([ref], { transport: effectiveTransport ?? undefined, signal: exec.signal });
           activated = act.success;
-          activationResult = {
-            success: act.success,
-            message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ' ' + i.message : ''}`).join('; ') || undefined,
-          };
+          activationResult = activationSummary(act);
         }
       } finally {
         const released = await entry.client
@@ -1016,11 +1003,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
         }
       }
-      const transportSource: 'user' | 'auto' | undefined = effectiveTransport
-        ? transport
-          ? 'user'
-          : 'auto'
-        : undefined;
+      const transportSource = transportSourceOf(effectiveTransport, transport);
       // In oldText mode report the first/last quoted line as the block labels.
       const oldQuoteLines = oldText !== undefined ? oldText.replace(/\r\n/g, '\n').split('\n') : undefined;
       const startLabel = oldQuoteLines ? (oldQuoteLines[0] ?? '').trim() : startText;
@@ -1178,10 +1161,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       }
 
       const transport = optStr(args.transport);
-      if (transport) {
-        entry.policy.assertTransportsEnabled('adt_push_object');
-        entry.policy.assertTransportAllowed(transport, `adt_push_object (${ref.name})`);
-      }
+      assertExplicitTransport(entry.policy, transport, 'adt_push_object', ref.name);
 
       let unlocked = false;
       let activated = false;
@@ -1220,11 +1200,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
       if (persistCheck.readBackSource !== undefined) {
         await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
       }
-      const transportSource: 'user' | 'auto' | undefined = effectiveTransport
-        ? transport
-          ? 'user'
-          : 'auto'
-        : undefined;
+      const transportSource = transportSourceOf(effectiveTransport, transport);
       return {
         uri: ref.uri,
         name: ref.name,

@@ -3,8 +3,6 @@
 export declare const PLUGIN_ROW = "\n# --- abap-adt (appended by abap-adt-preset) ---\n# This row is what scopes the adt_* tools to sessions on this preset; the\n# source preset (and global sessions) never loads them.\n# Destinations / permission policy live in ~/.dsh/settings.yaml under\n# abap-adt: (hot-applies); demo starts an in-process mock destination.\n- id: abap-adt\n  name: '@nefevcore/abap-adt-dsh-plugin'\n  config:\n    demo: true\n";
 /** preset.yml body for the generated preset. */
 export declare function renderPresetYml(name: string, description: string): string;
-/** The DSH home directory: `${DSH_HOME}` or `~/.dsh`. */
-export declare function dshHome(): string;
 /**
  * The default source preset: always `standard` (audit D2). Deliberately NOT
  * the deployment default from settings.yaml — on deployments where that is

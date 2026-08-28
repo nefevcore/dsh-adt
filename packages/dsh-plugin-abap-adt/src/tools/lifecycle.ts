@@ -2,6 +2,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import {
   DESTINATION_PARAM,
   OBJECTS_PARAM,
+  assertExplicitTransport,
   assertObjectEditable,
   destinationOf,
   requireObjectList,
@@ -126,10 +127,7 @@ export function lifecycleTools(deps: ToolDeps) {
       // always allowed; a real activation is an edit and must satisfy the
       // policy for every object.
       const transport = typeof args.transport === 'string' && args.transport.trim().length > 0 ? args.transport.trim() : undefined;
-      if (transport) {
-        entry.policy.assertTransportsEnabled('adt_activate');
-        entry.policy.assertTransportAllowed(transport, 'adt_activate');
-      }
+      assertExplicitTransport(entry.policy, transport, 'adt_activate');
       if (!checkOnly) {
         for (let i = 0; i < refs.length; i++) {
           await assertObjectEditable(entry, refs[i]!, {
