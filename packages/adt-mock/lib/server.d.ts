@@ -9,6 +9,12 @@
  * Behaviors mirror the real protocol (verified against open-source clients):
  * Basic auth, session cookies, CSRF tokens on state-changing requests, and
  * the correct `application/vnd.sap.*` media types in responses.
+ *
+ * Routing is a declarative table (ROUTES): `method` guards and CSRF
+ * enforcement for state-changing routes are declared per route instead of
+ * hand-written per branch, so a new route cannot silently miss them. A path
+ * match under the wrong method falls through to the trailing 404 (the
+ * historical behavior); the single modeled 405 is transport release.
  */
 import { type IncomingMessage, type ServerResponse } from 'node:http';
 import { type MockObject } from './data.js';

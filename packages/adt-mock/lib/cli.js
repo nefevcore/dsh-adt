@@ -12,8 +12,9 @@ const server = createMockAdtServer({
 });
 try {
     const actualPort = await server.listen();
-    console.log(`Mock ADT server listening on http://127.0.0.1:${actualPort}/sap/bc/adt`);
-    console.log(`Base URL for the plugin destination: http://127.0.0.1:${actualPort}`);
+    const host = process.env.ADT_MOCK_HOST ?? '127.0.0.1';
+    console.log(`Mock ADT server listening on http://${host}:${actualPort}/sap/bc/adt`);
+    console.log(`Base URL for the plugin destination: http://${host}:${actualPort}`);
     console.log('Press Ctrl+C to stop.');
 }
 catch (error) {
