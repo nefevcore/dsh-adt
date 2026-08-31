@@ -13,6 +13,7 @@
 import { Context } from '@deepseek-ai/cordis';
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings';
 import { Config, composeLayers, resolveEffectiveConfig, type PluginConfig } from './config.js';
+import { credentialResolverOf } from './credentials.js';
 import { AdtRegistry } from './registry.js';
 import { LockLedger } from './locks.js';
 import { deepCompact } from './tools/common.js';
@@ -37,6 +38,7 @@ import { policyTools } from './tools/policy.js';
 import { dumpTools } from './tools/dumps.js';
 import { executeTools } from './tools/execute.js';
 import { structureTools } from './tools/structure.js';
+import { destinationTools } from './tools/destinations.js';
 
 const name = 'abap-adt';
 // Only `tools` is a hard dependency (audit D1): without it the plugin has no
@@ -81,7 +83,12 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
   // registry — that would restart the demo mock outside any disposer's reach
   // (leaked listeners until process exit).
   let disposed = false;
-  const registry = await AdtRegistry.create(composeLayers([config]));
+  // Password references (passwordEnv / ADT_<NAME>_PASSWORD) resolve through
+  // the DSH credential service when mounted: process env > the user's
+  // ~/.dsh/.credentials.yaml > .env files, re-resolved per tool call.
+  const registry = await AdtRegistry.create(composeLayers([config]), {
+    credentialResolver: credentialResolverOf(ctx),
+  });
   async function rebuild(): Promise<void> {
     rebuildChain = rebuildChain.then(async () => {
       if (disposed) return; // plugin already unloaded — do not revive the registry
@@ -124,6 +131,7 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
   const deps = { registry, ledger };
   const tools = [
     ...systemTools(deps),
+    ...destinationTools(deps, ctx),
     ...searchTools(deps),
     ...readTools(deps, ctx),
     ...writeTools(deps, ctx),

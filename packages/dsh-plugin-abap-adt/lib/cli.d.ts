@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** The plugin row appended to the copied composition. */
-export declare const PLUGIN_ROW = "\n# --- abap-adt (appended by abap-adt-preset) ---\n# This row is what scopes the adt_* tools to sessions on this preset; the\n# source preset (and global sessions) never loads them.\n# Destinations / permission policy live in ~/.dsh/settings.yaml under\n# abap-adt: (hot-applies); demo starts an in-process mock destination.\n- id: abap-adt\n  name: '@nefevcore/abap-adt-dsh-plugin'\n  config:\n    demo: true\n";
+export declare const PLUGIN_ROW = "\n# --- abap-adt (appended by abap-adt-preset) ---\n# This row is what scopes the adt_* tools to sessions on this preset; the\n# source preset (and global sessions) never loads them.\n# Destinations live in the session WORKSPACE file\n# <workspace>/.dsh-abap-adt/destinations.yaml (create them conversationally\n# with adt_create_destination \u2014 imports from the local SAP GUI \u2014 or by hand);\n# global fallbacks/policy live in ~/.dsh/settings.yaml under abap-adt:\n# (both hot-apply); demo starts an in-process mock destination.\n- id: abap-adt\n  name: '@nefevcore/abap-adt-dsh-plugin'\n  config:\n    demo: true\n";
 /** preset.yml body for the generated preset. */
 export declare function renderPresetYml(name: string, description: string): string;
 /**

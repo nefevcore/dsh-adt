@@ -1,6 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { JsonValue, ToolResultView } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
 
 /** Upper bound for presentation metadata: past this the UI falls back to the
  * generic card rather than persisting a huge copy of the search result. */
@@ -174,7 +174,7 @@ export function searchTools(deps: ToolDeps) {
       },
       isConcurrencySafe: () => true,
       execute: async (args, exec) => {
-        const entry = registry.require(destinationOf(args));
+        const entry = await registry.require(destinationOf(args), sessionCwd(exec));
         const packageName = optStr(args.packageName)?.toUpperCase();
         const clamp = typeof args.maxResults === 'number' ? clampWithNote(args.maxResults, 1, 100, 'maxResults') : { value: 25, note: undefined as string | undefined };
         const maxResults = clamp.value;

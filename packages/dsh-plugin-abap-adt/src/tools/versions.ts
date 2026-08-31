@@ -13,7 +13,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, optStr, resolveToolObject, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, optStr, resolveToolObject, text, type ToolDeps } from './common.js';
 
 /** One line-diff operation. */
 export interface DiffOp {
@@ -167,7 +167,7 @@ export function versionTools(deps: ToolDeps) {
       },
       isConcurrencySafe: () => true,
       execute: async (args, exec) => {
-        const entry = registry.require(destinationOf(args));
+        const entry = await registry.require(destinationOf(args), sessionCwd(exec));
         const ref = await resolveToolObject(entry.client, args, exec.signal);
 
         let versions;

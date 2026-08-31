@@ -1,5 +1,16 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
+import { sessionCwd,
+  ATC_AGGREGATES_SCHEMA,
+  ATC_COUNTS_SCHEMA,
+  ATC_FINDINGS_SCHEMA,
+  atcAggregatesSuffix,
+  atcFindingOutput,
+  renderAtcFindings,
+  DESTINATION_PARAM,
+  destinationOf,
+  text,
+  type ToolDeps,
+} from './common.js';
 
 /**
  * ATC run-introspection tools: list existing ATC runs on the system and fetch
@@ -65,18 +76,7 @@ export function atcRunTools(deps: ToolDeps) {
                 createdBy: { type: 'string' },
                 status: { type: 'string' },
                 kind: { type: 'string' },
-                aggregates: {
-                  type: 'object',
-                  additionalProperties: false,
-
-                  properties: {
-                    priority1: { type: 'integer', required: true },
-                    priority2: { type: 'integer', required: true },
-                    priority3: { type: 'integer', required: true },
-                    priority4: { type: 'integer', required: true },
-                    failures: { type: 'integer', required: true },
-                  },
-                },
+                aggregates: ATC_AGGREGATES_SCHEMA,
                 attributes: { type: 'object', additionalProperties: true },
               },
             },
@@ -102,7 +102,7 @@ export function atcRunTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const runs = await entry.client.listAtcRuns({
         createdBy: typeof args.createdBy === 'string' && args.createdBy ? args.createdBy : undefined,
         ageMin: typeof args.ageMin === 'number' ? args.ageMin : undefined,
@@ -160,74 +160,22 @@ export function atcRunTools(deps: ToolDeps) {
           title: { type: 'string' },
           checkVariant: { type: 'string' },
           clean: { type: 'boolean', required: true },
-          findings: {
-            type: 'array',
-            required: true,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-
-              properties: {
-                checkTitle: { type: 'string', required: true },
-                severity: { type: 'string', required: true },
-                message: { type: 'string', required: true },
-                objectName: { type: 'string', required: true },
-                uri: {
-                  type: 'string',
-                  description:
-                    'URI of the object the `line` refers to (often an include while objectName is the main program).',
-                },
-                line: { type: 'integer' },
-                check: { type: 'string' },
-              },
-            },
-          },
-          counts: {
-            type: 'object',
-            required: true,
-            additionalProperties: false,
-
-            properties: {
-              INFO: { type: 'integer', required: true },
-              WARNING: { type: 'integer', required: true },
-              ERROR: { type: 'integer', required: true },
-              CRITICAL: { type: 'integer', required: true },
-              CATASTROPHIC: { type: 'integer', required: true },
-            },
-          },
-          aggregates: {
-            type: 'object',
-            additionalProperties: false,
-
-            properties: {
-              priority1: { type: 'integer', required: true },
-              priority2: { type: 'integer', required: true },
-              priority3: { type: 'integer', required: true },
-              priority4: { type: 'integer', required: true },
-              failures: { type: 'integer', required: true },
-            },
-          },
+          findings: ATC_FINDINGS_SCHEMA,
+          counts: ATC_COUNTS_SCHEMA,
+          aggregates: ATC_AGGREGATES_SCHEMA,
           durationMs: { type: 'integer', required: true },
           rawXml: { type: 'string' },
         },
       },
       render: (_args, value) => {
-        const agg = value.aggregates
-          ? ` (P1 ${value.aggregates.priority1}, P2 ${value.aggregates.priority2}, P3 ${value.aggregates.priority3}, P4 ${value.aggregates.priority4})`
-          : '';
         const lines = [
           `ATC result ${value.displayId}${value.title ? ` "${value.title}"` : ''}${value.checkVariant ? ` [${value.checkVariant}]` : ''}: ` +
             `${value.clean ? 'CLEAN' : 'findings'} — ` +
             `INFO ${value.counts.INFO}, WARNING ${value.counts.WARNING}, ERROR ${value.counts.ERROR}, ` +
-            `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC}${agg}`,
+            `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC}` +
+            atcAggregatesSuffix(value.aggregates),
+          ...renderAtcFindings(value.findings),
         ];
-        for (const f of value.findings) {
-          // Make the include↔line mapping visible when the finding's URI names
-          // a different object than the (main program) objectName.
-          const uriBase = f.uri ? f.uri.replace(/\/source\/main.*$/, '').split('/').pop()?.split('.')[0] : undefined;
-          const inInclude = uriBase && uriBase.toUpperCase() !== f.objectName.toUpperCase() ? ` (in ${uriBase})` : '';
-          lines.push(`- [${f.severity}] ${f.objectName}${inInclude}${f.line ? `:${f.line}` : ''} — ${f.checkTitle}: ${f.message}`);
-        }
         if (value.rawXml && value.findings.length === 0) {
           lines.push('');
           lines.push('(raw response — not checkstyle XML, showing excerpt)');
@@ -238,7 +186,7 @@ export function atcRunTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const result = await entry.client.getAtcResult(String(args.displayId), {
         includeExemptedFindings: args.includeExemptedFindings === true,
         signal: exec.signal,
@@ -248,15 +196,7 @@ export function atcRunTools(deps: ToolDeps) {
         title: result.title,
         checkVariant: result.checkVariant,
         clean: result.clean,
-        findings: result.findings.map((f) => ({
-          checkTitle: f.checkTitle,
-          severity: f.severity,
-          message: f.message,
-          objectName: f.objectName,
-          uri: f.locationUri || f.uri || undefined,
-          line: f.line,
-          check: f.check,
-        })),
+        findings: result.findings.map(atcFindingOutput),
         counts: result.counts,
         aggregates: result.aggregates,
         durationMs: result.durationMs,

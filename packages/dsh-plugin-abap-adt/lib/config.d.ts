@@ -2,7 +2,7 @@
  * Plugin configuration schema (schemastery) and the DSH-settings layering
  * pipeline.
  *
- * The plugin registers its Config schema as the `abap-adt` settings namespace
+ *  * The plugin registers its Config schema as the `abap-adt` settings namespace
  * via `installSettingsSection` (see index.ts), so the composition entry (the
  * plugin row's `config:` block) becomes the namespace `base` and the user's
  * `~/.dsh/settings.yaml` `abap-adt:` section becomes the user layer. The
@@ -15,6 +15,9 @@
  *   4. settings user section — `abap-adt:` in ~/.dsh/settings.yaml
  *   5. explicit `configFile` — authoritative team-shared override; its path
  *      comes from any lower layer
+ *   6. workspace file — `<session cwd>/.dsh-abap-adt/destinations.yaml`
+ *      (nearest; per-session, resolved at tool-call time because the preset
+ *      mount is shared across sessions — see registry.ts viewFor())
  *
  * Policy keys (`enableTransports` / `allowedTransports` /
  * `allowTransportableEdits` / `allowedPackages`) deliberately carry NO schema
@@ -269,6 +272,28 @@ export interface EffectiveConfig {
 }
 /** Default external config file name inside the dsh home directory. */
 export declare const DEFAULT_CONFIG_FILE = "abap-adt.yml";
+/**
+ * Workspace-scoped config: every session has a working directory (its
+ * "workspace", `exec.agent.session.header.cwd`), and destinations configured
+ * there are private to that workspace — e.g.
+ * `<workspace>/.dsh-abap-adt/destinations.yaml`. This is the nearest config
+ * layer: it overrides the settings user section for `destinations` (merged by
+ * name, workspace wins), `defaultDestination`, and permission-policy keys.
+ */
+export declare const WORKSPACE_CONFIG_DIR = ".dsh-abap-adt";
+/** Candidate file names inside the workspace config dir, first hit wins. */
+export declare const WORKSPACE_CONFIG_FILES: readonly ["destinations.yaml", "destinations.yml"];
+/**
+ * Resolve the workspace config file candidates for a workspace root
+ * (`<cwd>/.dsh-abap-adt/destinations.yaml`, then `.yml`).
+ */
+export declare function workspaceConfigCandidates(cwd: string): string[];
+/**
+ * The workspace config file for a cwd: the first existing candidate, or the
+ * primary candidate when none exists yet (so creators can pre-resolve the
+ * path they are about to write).
+ */
+export declare function workspaceConfigPath(cwd: string): string;
 /** Built-in defaults, applied last (mirrors the schema defaults above). */
 export declare function builtinDefaults(): EffectiveConfig;
 /** The dsh home directory: `${DSH_HOME}` or `~/.dsh`. */
@@ -293,11 +318,19 @@ export declare function autoDiscoverConfigFile(): string;
  */
 export declare function composeLayers(layers: Array<Partial<PluginConfig> | undefined>): EffectiveConfig;
 /**
+ * Validate a parsed external config document (shared by the async file
+ * loader and the sync workspace loader). Throws with the path in the message
+ * on shape errors; returns `{}` for an empty document.
+ */
+export declare function validateExternalConfig(parsed: unknown, path: string): Partial<PluginConfig>;
+/**
  * Read and validate an external config file. Throws with the path in the
  * message on YAML/shape errors (a broken config should fail loudly);
  * returns an empty object for an empty file.
  */
 export declare function loadExternalConfigFile(path: string): Promise<Partial<PluginConfig>>;
+/** Parse + validate config file text (shared by async and sync loaders). */
+export declare function parseExternalConfigText(raw: string, path: string): Partial<PluginConfig>;
 /** Inputs to {@link resolveEffectiveConfig}. */
 export interface EffectiveSource {
     /** Composition entry: the plugin row's `config:` block (namespace `base`). */
@@ -320,11 +353,33 @@ export declare function resolveEffectiveConfig(source: EffectiveSource): Promise
     config: EffectiveConfig;
     warnings: string[];
 }>;
-/** Resolve the password for a destination: config > passwordEnv > convention. */
+/**
+ * Resolves a destination's password reference names, in priority order:
+ * the explicit `passwordEnv`, else the `ADT_<NAME>_PASSWORD` convention,
+ * with `ADT_PASSWORD` as the shared fallback.
+ */
+export declare function passwordRefNames(dest: {
+    passwordEnv?: string;
+    name: string;
+}): string[];
+/**
+ * Resolve the password for a destination, layer by layer (first hit wins):
+ *
+ *   1. `config.password` (plaintext in the config file — supported, discouraged)
+ *   2. per reference name (explicit `passwordEnv`, else the
+ *      `ADT_<NAME>_PASSWORD` convention, then `ADT_PASSWORD`):
+ *        a. the DSH credential service (`~/.dsh/.credentials.yaml` layered
+ *           over `.env` files — `resolver`), when mounted
+ *        b. the raw process environment
+ *
+ * The credential-service read is per call (the service contract forbids
+ * caching across operations), so an edited credentials file reaches the next
+ * tool call without a restart — which is why `resolvePassword` is async.
+ */
 export declare function resolvePassword(dest: {
     password?: string;
     passwordEnv?: string;
     name: string;
-}): string;
+}, resolver?: (ref: string) => Promise<string | undefined>): Promise<string>;
 export {};
 //# sourceMappingURL=config.d.ts.map

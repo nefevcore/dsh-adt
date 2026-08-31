@@ -33,6 +33,111 @@ export function activationSummary(act: {
   };
 }
 
+// --- ATC result fragments (adt_run_atc / adt_get_atc_result / adt_list_atc_runs) ---
+
+/** One ATC finding as the tools report it (mapped from the protocol shape). */
+export interface AtcFindingOutput {
+  checkTitle: string;
+  severity: string;
+  message: string;
+  objectName: string;
+  uri?: string;
+  line?: number;
+  check?: string;
+}
+
+/** `findings` array schema shared by the ATC-reporting tools. */
+export const ATC_FINDINGS_SCHEMA = {
+  type: 'array',
+  required: true,
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      checkTitle: { type: 'string', required: true },
+      severity: { type: 'string', required: true },
+      message: { type: 'string', required: true },
+      objectName: { type: 'string', required: true },
+      uri: {
+        type: 'string',
+        description:
+          'URI of the object the `line` refers to (often an include while objectName is the main program).',
+      },
+      line: { type: 'integer' },
+      check: { type: 'string' },
+    },
+  },
+} as const;
+
+/** Severity-counts schema shared by the ATC-reporting tools. */
+export const ATC_COUNTS_SCHEMA = {
+  type: 'object',
+  required: true,
+  additionalProperties: false,
+  properties: {
+    INFO: { type: 'integer', required: true },
+    WARNING: { type: 'integer', required: true },
+    ERROR: { type: 'integer', required: true },
+    CRITICAL: { type: 'integer', required: true },
+    CATASTROPHIC: { type: 'integer', required: true },
+  },
+} as const;
+
+/** P1–P4 aggregates schema shared by the ATC tools (list/run/result). */
+export const ATC_AGGREGATES_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    priority1: { type: 'integer', required: true },
+    priority2: { type: 'integer', required: true },
+    priority3: { type: 'integer', required: true },
+    priority4: { type: 'integer', required: true },
+    failures: { type: 'integer', required: true },
+  },
+} as const;
+
+/** Map a protocol ATC finding to the tools' output shape. */
+export function atcFindingOutput(f: {
+  checkTitle: string;
+  severity: string;
+  message: string;
+  objectName: string;
+  locationUri?: string;
+  uri?: string;
+  line?: number;
+  check?: string;
+}): AtcFindingOutput {
+  return {
+    checkTitle: f.checkTitle,
+    severity: f.severity,
+    message: f.message,
+    objectName: f.objectName,
+    uri: f.locationUri || f.uri || undefined,
+    line: f.line,
+    check: f.check,
+  };
+}
+
+/**
+ * Render ATC findings, making the include↔line mapping visible: backends
+ * often report findings under the MAIN program name while `line` counts in
+ * the INCLUDE — when the finding's URI names a different object, say so.
+ */
+export function renderAtcFindings(findings: AtcFindingOutput[]): string[] {
+  return findings.map((f) => {
+    const uriBase = f.uri ? f.uri.replace(/\/source\/main.*$/, '').split('/').pop()?.split('.')[0] : undefined;
+    const inInclude = uriBase && uriBase.toUpperCase() !== f.objectName.toUpperCase() ? ` (in ${uriBase})` : '';
+    return `- [${f.severity}] ${f.objectName}${inInclude}${f.line ? `:${f.line}` : ''} — ${f.checkTitle}: ${f.message}`;
+  });
+}
+
+/** Render the P1–P4 aggregates suffix (empty when no aggregates are present). */
+export function atcAggregatesSuffix(aggregates?: { priority1: number; priority2: number; priority3: number; priority4: number }): string {
+  return aggregates
+    ? ` (P1 ${aggregates.priority1}, P2 ${aggregates.priority2}, P3 ${aggregates.priority3}, P4 ${aggregates.priority4})`
+    : '';
+}
+
 /** Attribute the effective transport to its source (user-passed vs lock-assigned). */
 export function transportSourceOf(
   effectiveTransport: string | undefined,
@@ -153,6 +258,19 @@ export const NAME_TYPE_OBJECTS_PARAM = {
 /** Pull the destination param value out of raw args. */
 export function destinationOf(args: Record<string, unknown>): string | undefined {
   return optStr(args['destination']);
+}
+
+/**
+ * The session workspace directory of a tool execution
+ * (`exec.agent.session.header.cwd` — the same seam dsh-tool-fs/bash/pwsh
+ * use), falling back to undefined. Workspace-layer destination resolution
+ * (see registry.ts `viewFor`) keys off this, so `adt_*` calls see the
+ * `<cwd>/.dsh-abap-adt/destinations.yaml` of the session that made them.
+ */
+export function sessionCwd(exec: unknown): string | undefined {
+  const agent = (exec as { agent?: { session?: { header?: { cwd?: unknown } } } } | undefined)?.agent;
+  const cwd = agent?.session?.header?.cwd;
+  return typeof cwd === 'string' && cwd.length > 0 ? cwd : undefined;
 }
 
 /** A raw arg as a non-empty string, else `undefined`. */

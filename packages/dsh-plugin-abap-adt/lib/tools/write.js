@@ -13,7 +13,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { hashSource, loadSnapshot, saveSnapshot, sourcesEquivalent, SnapshotConflictError, } from '../snapshots.js';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, activationSummary, assertExplicitTransport, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, transportSourceOf, } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, activationSummary, assertExplicitTransport, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, transportSourceOf, } from './common.js';
 /**
  * Post-write persistence verification — the answer to a real-world incident:
  * on a shared development account, ANOTHER session (second DSH session, ADT
@@ -71,6 +71,129 @@ async function resolveSourceInput(ctx, args) {
     if (inline !== undefined)
         return inline;
     throw new Error('adt: `source` or `sourceFile` is required');
+}
+// ---------------------------------------------------------------------------
+// The shared locked-write pipeline of the write-family tools
+// ---------------------------------------------------------------------------
+/** Status fields every write-family tool reports (schema fragment + renderer input). */
+const WRITE_STATUS_SCHEMA = {
+    unlocked: { type: 'boolean' },
+    activated: { type: 'boolean' },
+    persisted: {
+        type: 'boolean',
+        description: 'Whether a post-write read-back still matched what was written. false = a concurrent editor overwrote ' +
+            'the change — redo the edit after re-reading; undefined = could not verify.',
+    },
+    warning: { type: 'string', description: 'Present when persistence is false or could not be verified.' },
+    transport: {
+        type: 'string',
+        description: 'Transport request the change was recorded into (when transportable).',
+    },
+    transportSource: {
+        type: 'string',
+        enum: ['user', 'auto'],
+        description: 'user = the transport you passed; auto = backend-assigned on lock (it may be a NEW request).',
+    },
+    activation: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { success: { type: 'boolean' }, message: { type: 'string' } },
+    },
+};
+/** Render suffix shared by the write-family tools (lock/activation/transport/persistence). */
+function writeStatusSuffix(value) {
+    return (`${value.unlocked === false ? ' (still locked)' : ''}` +
+        `${value.activated ? ' · activated' : ''}` +
+        (value.transport
+            ? ` · change recorded in transport ${value.transport}${value.transportSource === 'auto' ? ' (backend-assigned — pass transport to choose)' : ''}`
+            : '') +
+        `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}` +
+        (value.persisted === false
+            ? `\n⚠ ${value.warning ?? 'change was NOT persisted — re-read and redo'}`
+            : value.warning
+                ? `\n⚠ ${value.warning}`
+                : ''));
+}
+/**
+ * The LOCKED-WRITE PIPELINE shared by adt_write_object / adt_edit_object /
+ * adt_push_object: lock → ledger.register → transport re-check (the
+ * backend-assigned CORRNR must pass policy too) → `produce` (tool-specific
+ * OCC verification + source computation) → PUT → finally unlock (error
+ * paths ALWAYS roll the lock back; on success only when asked) → optional
+ * activation AFTER the unlock.
+ *
+ * Activation ordering and no-throw semantics: several backends (verified on
+ * an S/4HANA sandbox) reject activation with HTTP 403 "user … is currently
+ * editing <object>" while the caller's OWN edit lock is still held — and a
+ * failed activation must not mislabel a persisted write as a failed call.
+ * So activation runs once the lock is released and its failure is REPORTED
+ * (activated:false + activation.message), never thrown.
+ */
+async function lockedWritePipeline(entry, ledger, params) {
+    const { handle, transport: assigned } = await entry.client.lock(params.ref.uri, { signal: params.signal });
+    // User-specified transport wins; otherwise the backend's lock-assigned
+    // CORRNR applies (an object already in an open request stays there, a
+    // fresh object gets a NEW auto-created task).
+    const effectiveTransport = params.transport ?? assigned;
+    ledger.register({
+        destination: entry.config.name,
+        uri: params.ref.uri,
+        name: params.ref.name,
+        handle,
+        transport: effectiveTransport,
+    });
+    let succeeded = false;
+    let unlocked = false;
+    let written;
+    try {
+        entry.policy.assertTransportUsage(effectiveTransport, `${params.toolName} (${params.ref.name})`);
+        written = await params.produce();
+        await entry.client.writeSource(params.ref.uri, written, {
+            lockHandle: handle,
+            transport: effectiveTransport ?? undefined,
+            signal: params.signal,
+        });
+        succeeded = true;
+    }
+    finally {
+        // On ERROR always roll the lock back (even with unlock:false — there is
+        // nothing to keep locked when the edit failed); on SUCCESS unlock only
+        // when asked. The ledger entry is forgotten only when the unlock actually
+        // happened — otherwise adt_unlock_all must still be able to retry it.
+        if (!succeeded || params.unlockOnSuccess) {
+            const released = await entry.client
+                .unlock(params.ref.uri, handle)
+                .then(() => true)
+                .catch(() => false);
+            if (released)
+                ledger.deregister(entry.config.name, params.ref.uri);
+            unlocked = released;
+        }
+    }
+    let activated = false;
+    let activation;
+    if (params.activate && succeeded) {
+        try {
+            const act = await entry.client.activate([params.ref], {
+                transport: effectiveTransport ?? undefined,
+                signal: params.signal,
+            });
+            activated = act.success;
+            activation = activationSummary(act);
+        }
+        catch (error) {
+            activated = false;
+            activation = { success: false, message: error.message };
+        }
+    }
+    return {
+        unlocked,
+        activated,
+        activation,
+        transport: effectiveTransport,
+        transportSource: transportSourceOf(effectiveTransport, params.transport),
+        written,
+    };
 }
 /** Auto-derive the closing statement for common ABAP block openers. */
 function defaultEndFor(startText) {
@@ -492,48 +615,14 @@ export function writeTools(deps, ctx) {
                     uri: { type: 'string', required: true },
                     name: { type: 'string', required: true },
                     updated: { type: 'boolean', required: true },
-                    unlocked: { type: 'boolean' },
-                    activated: { type: 'boolean' },
-                    persisted: {
-                        type: 'boolean',
-                        description: 'Whether a post-write read-back still matched what was written. false = a concurrent editor ' +
-                            'overwrote the change — redo the edit after re-reading; undefined = could not verify.',
-                    },
-                    warning: { type: 'string', description: 'Present when persistence is false or could not be verified.' },
-                    transport: {
-                        type: 'string',
-                        description: 'Transport request the change was recorded into (when transportable).',
-                    },
-                    transportSource: {
-                        type: 'string',
-                        enum: ['user', 'auto'],
-                        description: 'user = the transport you passed; auto = backend-assigned on lock (it may be a NEW request).',
-                    },
-                    activation: {
-                        type: 'object',
-                        additionalProperties: false,
-                        properties: {
-                            success: { type: 'boolean' },
-                            message: { type: 'string' },
-                        },
-                    },
+                    ...WRITE_STATUS_SCHEMA,
                 },
             },
             render: (_args, value) => text(`${value.name} (${value.uri}): source ${value.updated ? 'updated' : 'NOT updated'}` +
-                `${value.unlocked === false ? ' (still locked)' : ''}` +
-                `${value.activated ? ' · activated' : ''}` +
-                (value.transport
-                    ? ` · change recorded in transport ${value.transport}${value.transportSource === 'auto' ? ' (backend-assigned — pass transport to choose)' : ''}`
-                    : '') +
-                `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}` +
-                (value.persisted === false
-                    ? `\n⚠ ${value.warning ?? 'change was NOT persisted — re-read and redo'}`
-                    : value.warning
-                        ? `\n⚠ ${value.warning}`
-                        : '')),
+                writeStatusSuffix(value)),
         },
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_write_object' });
             // Permission check: package whitelist + transportable-edit rule.
             await assertObjectEditable(entry, ref, {
@@ -545,77 +634,46 @@ export function writeTools(deps, ctx) {
             // write (PUT ?corrNr=…) records the change into EXACTLY this request.
             const transport = optStr(args.transport);
             assertExplicitTransport(entry.policy, transport, 'adt_write_object', ref.name);
-            const unlock = args.unlock !== false;
-            let unlocked = false;
-            let activated = false;
-            let activationResult;
-            let src = '';
-            const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri, { signal: exec.signal });
-            // User-specified transport wins; otherwise the backend's lock-assigned
-            // CORRNR applies (an object already in an open request stays there, a
-            // fresh object gets a NEW auto-created task).
-            const effectiveTransport = transport ?? assignedTransport;
-            ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: effectiveTransport });
-            let succeeded = false;
-            try {
-                // Whatever transport is finally used — user's or auto-assigned — must
-                // be within allowedTransports, or the edit is rolled back.
-                entry.policy.assertTransportUsage(effectiveTransport, `adt_write_object (${ref.name})`);
-                src = await resolveSourceInput(ctx, args);
-                // Optimistic-concurrency guard: when a local snapshot exists (the
-                // agent READ this object before), refuse to overwrite a server copy
-                // that changed in between — verify under the lock (exclusive writers).
-                const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
-                if (snapshot) {
-                    const current = await entry.client.readSource(ref.uri, { signal: exec.signal });
-                    if (hashSource(current.source) !== snapshot.sidecar.baseHash) {
-                        throw new SnapshotConflictError(ref.name, snapshot.path, snapshot.sidecar.fetchedAt, 'adt_write_object');
+            const outcome = await lockedWritePipeline(entry, ledger, {
+                toolName: 'adt_write_object',
+                ref,
+                transport,
+                unlockOnSuccess: args.unlock !== false,
+                activate: args.activate === true,
+                signal: exec.signal,
+                produce: async () => {
+                    const src = await resolveSourceInput(ctx, args);
+                    // Optimistic-concurrency guard: when a local snapshot exists (the
+                    // agent READ this object before), refuse to overwrite a server copy
+                    // that changed in between — verify under the lock (exclusive writers).
+                    const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
+                    if (snapshot) {
+                        const current = await entry.client.readSource(ref.uri, { signal: exec.signal });
+                        if (hashSource(current.source) !== snapshot.sidecar.baseHash) {
+                            throw new SnapshotConflictError(ref.name, snapshot.path, snapshot.sidecar.fetchedAt, 'adt_write_object');
+                        }
                     }
-                }
-                await entry.client.writeSource(ref.uri, src, { lockHandle: handle, transport: effectiveTransport ?? undefined, signal: exec.signal });
-                if (args.activate === true) {
-                    const act = await entry.client.activate([ref], { transport: effectiveTransport ?? undefined, signal: exec.signal });
-                    activated = act.success;
-                    activationResult = activationSummary(act);
-                }
-                succeeded = true;
-            }
-            finally {
-                // Same finally shape as adt_edit_object / adt_push_object: on ERROR
-                // always roll back the lock (even with unlock:false — there is
-                // nothing to keep locked when the edit failed); on SUCCESS unlock
-                // only when unlock !== false. The ledger entry is forgotten only
-                // when the unlock actually happened — otherwise adt_unlock_all must
-                // still be able to retry it.
-                if (!succeeded || unlock) {
-                    const released = await entry.client
-                        .unlock(ref.uri, handle)
-                        .then(() => true)
-                        .catch(() => false);
-                    if (released)
-                        ledger.deregister(entry.config.name, ref.uri);
-                    unlocked = released;
-                }
-            }
+                    return src;
+                },
+            });
             // Post-write persistence verification + snapshot refresh from the same
             // read-back (OCC base = real server state, not what we SENT — backends
             // may normalize). See verifyPersisted for why the extra GET is worth it.
-            const persistCheck = await verifyPersisted(entry.client, ref, src, exec.signal);
+            const persistCheck = await verifyPersisted(entry.client, ref, outcome.written ?? '', exec.signal);
             if (ctx.get('fs') && persistCheck.readBackSource !== undefined) {
                 await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
             }
-            const transportSource = transportSourceOf(effectiveTransport, transport);
             return {
                 uri: ref.uri,
                 name: ref.name,
                 updated: true,
-                unlocked,
-                activated: activated || undefined,
+                unlocked: outcome.unlocked,
+                activated: outcome.activated || undefined,
                 persisted: persistCheck.persisted,
                 warning: persistCheck.warning,
-                transport: effectiveTransport,
-                transportSource,
-                activation: activationResult,
+                transport: outcome.transport,
+                transportSource: outcome.transportSource,
+                activation: outcome.activation,
             };
         },
     });
@@ -720,49 +778,15 @@ export function writeTools(deps, ctx) {
                         description: 'structured = ENDxxx resolved by nesting depth (safest); text = comment-stripped match; text-loose = spacing-tolerant; text-raw = matched comment text; line-number = position mode.',
                     },
                     occurrence: { type: 'integer', description: 'Which duplicate match was edited (when occurrence was used).' },
-                    unlocked: { type: 'boolean' },
-                    activated: { type: 'boolean' },
-                    persisted: {
-                        type: 'boolean',
-                        description: 'Whether a post-write read-back still matched what was written. false = a concurrent editor ' +
-                            'overwrote the change — redo the edit after re-reading; undefined = could not verify.',
-                    },
-                    warning: { type: 'string', description: 'Present when persistence is false or could not be verified.' },
-                    transport: {
-                        type: 'string',
-                        description: 'Transport request the change was recorded into (when transportable).',
-                    },
-                    transportSource: {
-                        type: 'string',
-                        enum: ['user', 'auto'],
-                        description: 'user = the transport you passed; auto = backend-assigned on lock (it may be a NEW request).',
-                    },
-                    activation: {
-                        type: 'object',
-                        additionalProperties: false,
-                        properties: {
-                            success: { type: 'boolean' },
-                            message: { type: 'string' },
-                        },
-                    },
+                    ...WRITE_STATUS_SCHEMA,
                 },
             },
             render: (_args, value) => text(`${value.name}: block [${value.start} … ${value.end}] (lines ${value.startLineNumber}..${value.endLineNumber}) ` +
                 `replaced (${value.oldLines} → ${value.newLines} lines)` +
-                `${value.unlocked === false ? ' (still locked)' : ''}` +
-                `${value.activated ? ' · activated' : ''}` +
-                (value.transport
-                    ? ` · change recorded in transport ${value.transport}${value.transportSource === 'auto' ? ' (backend-assigned — pass transport to choose)' : ''}`
-                    : '') +
-                `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}` +
-                (value.persisted === false
-                    ? `\n⚠ ${value.warning ?? 'change was NOT persisted — re-read and redo'}`
-                    : value.warning
-                        ? `\n⚠ ${value.warning}`
-                        : '')),
+                writeStatusSuffix(value)),
         },
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_edit_object' });
             await assertObjectEditable(entry, ref, {
                 toolName: 'adt_edit_object',
@@ -803,67 +827,49 @@ export function writeTools(deps, ctx) {
             // (PUT ?corrNr=…) records the change into EXACTLY this request.
             const transport = optStr(args.transport);
             assertExplicitTransport(entry.policy, transport, 'adt_edit_object', ref.name);
-            let unlocked = false;
-            let activated = false;
-            let activationResult;
             let replaced;
-            const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri, { signal: exec.signal });
-            // User-specified transport wins over the lock-assigned CORRNR.
-            const effectiveTransport = transport ?? assignedTransport;
-            ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: effectiveTransport });
-            try {
-                entry.policy.assertTransportUsage(effectiveTransport, `adt_edit_object (${ref.name})`);
-                const current = await entry.client.readSource(ref.uri, { signal: exec.signal });
-                // OCC: with a snapshot, verify the server still matches what the agent
-                // read and match against THE SNAPSHOT (deterministic). Without one,
-                // match against the fetched server source (legacy behavior).
-                const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
-                let base;
-                if (snapshot) {
-                    if (hashSource(current.source) !== snapshot.sidecar.baseHash) {
-                        throw new SnapshotConflictError(ref.name, snapshot.path, snapshot.sidecar.fetchedAt, 'adt_edit_object');
+            const outcome = await lockedWritePipeline(entry, ledger, {
+                toolName: 'adt_edit_object',
+                ref,
+                transport,
+                unlockOnSuccess: true,
+                activate: args.activate === true,
+                signal: exec.signal,
+                produce: async () => {
+                    const current = await entry.client.readSource(ref.uri, { signal: exec.signal });
+                    // OCC: with a snapshot, verify the server still matches what the agent
+                    // read and match against THE SNAPSHOT (deterministic). Without one,
+                    // match against the fetched server source (legacy behavior).
+                    const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
+                    let base;
+                    if (snapshot) {
+                        if (hashSource(current.source) !== snapshot.sidecar.baseHash) {
+                            throw new SnapshotConflictError(ref.name, snapshot.path, snapshot.sidecar.fetchedAt, 'adt_edit_object');
+                        }
+                        base = snapshot.source;
                     }
-                    base = snapshot.source;
-                }
-                else {
-                    base = current.source;
-                }
-                const replacementText = oldText !== undefined ? String(args.newText ?? '') : replacement;
-                replaced =
-                    oldText !== undefined
-                        ? replaceSourceText(base, oldText, replacementText, { occurrence })
-                        : replaceSourceBlock(base, startText, endText, replacementText, {
-                            occurrence,
-                            startLine: hasStartLine ? Number(args.startLine) : undefined,
-                            endLine: args.endLine !== undefined ? Number(args.endLine) : undefined,
-                        });
-                await entry.client.writeSource(ref.uri, replaced.full, { lockHandle: handle, transport: effectiveTransport ?? undefined, signal: exec.signal });
-                if (args.activate === true) {
-                    const act = await entry.client.activate([ref], { transport: effectiveTransport ?? undefined, signal: exec.signal });
-                    activated = act.success;
-                    activationResult = activationSummary(act);
-                }
-            }
-            finally {
-                const released = await entry.client
-                    .unlock(ref.uri, handle)
-                    .then(() => true)
-                    .catch(() => false);
-                if (released)
-                    ledger.deregister(entry.config.name, ref.uri);
-                unlocked = released;
-            }
+                    else {
+                        base = current.source;
+                    }
+                    const replacementText = oldText !== undefined ? String(args.newText ?? '') : replacement;
+                    replaced =
+                        oldText !== undefined
+                            ? replaceSourceText(base, oldText, replacementText, { occurrence })
+                            : replaceSourceBlock(base, startText, endText, replacementText, {
+                                occurrence,
+                                startLine: hasStartLine ? Number(args.startLine) : undefined,
+                                endLine: args.endLine !== undefined ? Number(args.endLine) : undefined,
+                            });
+                    return replaced.full;
+                },
+            });
             // Post-write persistence verification + snapshot refresh from the same
             // read-back (OCC base = real server state). See verifyPersisted for why
             // the extra GET is worth it.
-            let persistCheck = {};
-            if (replaced) {
-                persistCheck = await verifyPersisted(entry.client, ref, replaced.full, exec.signal);
-                if (ctx.get('fs') && persistCheck.readBackSource !== undefined) {
-                    await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
-                }
+            const persistCheck = await verifyPersisted(entry.client, ref, outcome.written ?? '', exec.signal);
+            if (ctx.get('fs') && persistCheck.readBackSource !== undefined) {
+                await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
             }
-            const transportSource = transportSourceOf(effectiveTransport, transport);
             // In oldText mode report the first/last quoted line as the block labels.
             const oldQuoteLines = oldText !== undefined ? oldText.replace(/\r\n/g, '\n').split('\n') : undefined;
             const startLabel = oldQuoteLines ? (oldQuoteLines[0] ?? '').trim() : startText;
@@ -880,13 +886,13 @@ export function writeTools(deps, ctx) {
                 newLines: replaced?.newLines ?? 0,
                 matchMode: replaced?.matchMode ?? 'text',
                 occurrence: replaced?.occurrence,
-                unlocked,
-                activated: activated || undefined,
+                unlocked: outcome.unlocked,
+                activated: outcome.activated || undefined,
                 persisted: persistCheck.persisted,
                 warning: persistCheck.warning,
-                transport: effectiveTransport,
-                transportSource,
-                activation: activationResult,
+                transport: outcome.transport,
+                transportSource: outcome.transportSource,
+                activation: outcome.activation,
             };
         },
     });
@@ -937,45 +943,18 @@ export function writeTools(deps, ctx) {
                         description: 'false when a custom `path` was uploaded without a known base (no conflict check).',
                     },
                     localCopy: { type: 'string', required: true },
-                    unlocked: { type: 'boolean' },
-                    activated: { type: 'boolean' },
-                    persisted: {
-                        type: 'boolean',
-                        description: 'Whether a post-write read-back still matched what was uploaded. false = a concurrent editor ' +
-                            'overwrote the change — redo after re-reading; undefined = could not verify.',
-                    },
-                    warning: { type: 'string', description: 'Present when persistence is false or could not be verified.' },
-                    transport: { type: 'string' },
-                    transportSource: { type: 'string', enum: ['user', 'auto'] },
-                    activation: {
-                        type: 'object',
-                        additionalProperties: false,
-                        properties: {
-                            success: { type: 'boolean' },
-                            message: { type: 'string' },
-                        },
-                    },
+                    ...WRITE_STATUS_SCHEMA,
                 },
             },
             render: (_args, value) => text(`${value.name}: pushed ${value.localCopy} → server` +
                 `${value.verified ? ' (conflict-verified)' : ' (NOT verified — custom path)'}` +
-                `${value.unlocked === false ? ' (still locked)' : ''}` +
-                `${value.activated ? ' · activated' : ''}` +
-                (value.transport
-                    ? ` · change recorded in transport ${value.transport}${value.transportSource === 'auto' ? ' (backend-assigned — pass transport to choose)' : ''}`
-                    : '') +
-                `${value.activation?.success === false ? ` · activation failed: ${value.activation.message ?? ''}` : ''}` +
-                (value.persisted === false
-                    ? `\n⚠ ${value.warning ?? 'change was NOT persisted — re-read and redo'}`
-                    : value.warning
-                        ? `\n⚠ ${value.warning}`
-                        : '')),
+                writeStatusSuffix(value)),
         },
         // 180s: push = verify (GET) + write (PUT) + optional activate + unlock;
         // a handful of client round trips, each with its own deadline.
         timeoutMs: 180_000,
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_push_object' });
             await assertObjectEditable(entry, ref, {
                 toolName: 'adt_push_object',
@@ -1009,59 +988,42 @@ export function writeTools(deps, ctx) {
             }
             const transport = optStr(args.transport);
             assertExplicitTransport(entry.policy, transport, 'adt_push_object', ref.name);
-            let unlocked = false;
-            let activated = false;
-            let activationResult;
-            const { handle, transport: assignedTransport } = await entry.client.lock(ref.uri, { signal: exec.signal });
-            const effectiveTransport = transport ?? assignedTransport;
-            ledger.register({ destination: entry.config.name, uri: ref.uri, name: ref.name, handle, transport: effectiveTransport });
-            try {
-                entry.policy.assertTransportUsage(effectiveTransport, `adt_push_object (${ref.name})`);
-                if (verified) {
-                    const current = await entry.client.readSource(ref.uri, { signal: exec.signal });
-                    if (hashSource(current.source) !== snapshot.sidecar.baseHash) {
-                        throw new SnapshotConflictError(ref.name, localCopy, snapshot.sidecar.fetchedAt, 'adt_push_object');
+            const outcome = await lockedWritePipeline(entry, ledger, {
+                toolName: 'adt_push_object',
+                ref,
+                transport,
+                unlockOnSuccess: true,
+                activate: args.activate === true,
+                signal: exec.signal,
+                produce: async () => {
+                    if (verified) {
+                        const current = await entry.client.readSource(ref.uri, { signal: exec.signal });
+                        if (hashSource(current.source) !== snapshot.sidecar.baseHash) {
+                            throw new SnapshotConflictError(ref.name, localCopy, snapshot.sidecar.fetchedAt, 'adt_push_object');
+                        }
                     }
-                }
-                await entry.client.writeSource(ref.uri, localSource, { lockHandle: handle, transport: effectiveTransport ?? undefined, signal: exec.signal });
-                if (args.activate === true) {
-                    const act = await entry.client.activate([ref], { transport: effectiveTransport ?? undefined, signal: exec.signal });
-                    activated = act.success;
-                    activationResult = {
-                        success: act.success,
-                        message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ` ${i.message}` : ''}`).join('; ') || undefined,
-                    };
-                }
-            }
-            finally {
-                const released = await entry.client
-                    .unlock(ref.uri, handle)
-                    .then(() => true)
-                    .catch(() => false);
-                if (released)
-                    ledger.deregister(entry.config.name, ref.uri);
-                unlocked = released;
-            }
+                    return localSource;
+                },
+            });
             // Post-write persistence verification + snapshot refresh from the same
             // read-back (new OCC base = real server state).
-            const persistCheck = await verifyPersisted(entry.client, ref, localSource, exec.signal);
+            const persistCheck = await verifyPersisted(entry.client, ref, outcome.written ?? '', exec.signal);
             if (persistCheck.readBackSource !== undefined) {
                 await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
             }
-            const transportSource = transportSourceOf(effectiveTransport, transport);
             return {
                 uri: ref.uri,
                 name: ref.name,
                 pushed: true,
                 verified,
                 localCopy,
-                unlocked,
-                activated: activated || undefined,
+                unlocked: outcome.unlocked,
+                activated: outcome.activated || undefined,
                 persisted: persistCheck.persisted,
                 warning: persistCheck.warning,
-                transport: effectiveTransport,
-                transportSource,
-                activation: activationResult,
+                transport: outcome.transport,
+                transportSource: outcome.transportSource,
+                activation: outcome.activation,
             };
         },
     });

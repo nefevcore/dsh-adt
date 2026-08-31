@@ -2,7 +2,7 @@
  * Plugin configuration schema (schemastery) and the DSH-settings layering
  * pipeline.
  *
- * The plugin registers its Config schema as the `abap-adt` settings namespace
+ *  * The plugin registers its Config schema as the `abap-adt` settings namespace
  * via `installSettingsSection` (see index.ts), so the composition entry (the
  * plugin row's `config:` block) becomes the namespace `base` and the user's
  * `~/.dsh/settings.yaml` `abap-adt:` section becomes the user layer. The
@@ -15,6 +15,9 @@
  *   4. settings user section — `abap-adt:` in ~/.dsh/settings.yaml
  *   5. explicit `configFile` — authoritative team-shared override; its path
  *      comes from any lower layer
+ *   6. workspace file — `<session cwd>/.dsh-abap-adt/destinations.yaml`
+ *      (nearest; per-session, resolved at tool-call time because the preset
+ *      mount is shared across sessions — see registry.ts viewFor())
  *
  * Policy keys (`enableTransports` / `allowedTransports` /
  * `allowTransportableEdits` / `allowedPackages`) deliberately carry NO schema
@@ -111,6 +114,32 @@ export const Config = z.object({
 });
 /** Default external config file name inside the dsh home directory. */
 export const DEFAULT_CONFIG_FILE = 'abap-adt.yml';
+/**
+ * Workspace-scoped config: every session has a working directory (its
+ * "workspace", `exec.agent.session.header.cwd`), and destinations configured
+ * there are private to that workspace — e.g.
+ * `<workspace>/.dsh-abap-adt/destinations.yaml`. This is the nearest config
+ * layer: it overrides the settings user section for `destinations` (merged by
+ * name, workspace wins), `defaultDestination`, and permission-policy keys.
+ */
+export const WORKSPACE_CONFIG_DIR = '.dsh-abap-adt';
+/** Candidate file names inside the workspace config dir, first hit wins. */
+export const WORKSPACE_CONFIG_FILES = ['destinations.yaml', 'destinations.yml'];
+/**
+ * Resolve the workspace config file candidates for a workspace root
+ * (`<cwd>/.dsh-abap-adt/destinations.yaml`, then `.yml`).
+ */
+export function workspaceConfigCandidates(cwd) {
+    return WORKSPACE_CONFIG_FILES.map((file) => join(cwd, WORKSPACE_CONFIG_DIR, file));
+}
+/**
+ * The workspace config file for a cwd: the first existing candidate, or the
+ * primary candidate when none exists yet (so creators can pre-resolve the
+ * path they are about to write).
+ */
+export function workspaceConfigPath(cwd) {
+    return workspaceConfigCandidates(cwd).find((p) => existsSync(p)) ?? workspaceConfigCandidates(cwd)[0];
+}
 /** Built-in defaults, applied last (mirrors the schema defaults above). */
 export function builtinDefaults() {
     return {
@@ -210,25 +239,11 @@ export function composeLayers(layers) {
     return merged;
 }
 /**
- * Read and validate an external config file. Throws with the path in the
- * message on YAML/shape errors (a broken config should fail loudly);
- * returns an empty object for an empty file.
+ * Validate a parsed external config document (shared by the async file
+ * loader and the sync workspace loader). Throws with the path in the message
+ * on shape errors; returns `{}` for an empty document.
  */
-export async function loadExternalConfigFile(path) {
-    let raw;
-    try {
-        raw = await readFile(path, 'utf8');
-    }
-    catch (error) {
-        throw new Error(`[abap-adt] cannot read config file ${path}: ${error.message}`);
-    }
-    let parsed;
-    try {
-        parsed = parse(raw);
-    }
-    catch (error) {
-        throw new Error(`[abap-adt] invalid YAML in ${path}: ${error.message}`);
-    }
+export function validateExternalConfig(parsed, path) {
     if (parsed === null || parsed === undefined)
         return {};
     if (typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -267,6 +282,32 @@ export async function loadExternalConfigFile(path) {
     return validated;
 }
 /**
+ * Read and validate an external config file. Throws with the path in the
+ * message on YAML/shape errors (a broken config should fail loudly);
+ * returns an empty object for an empty file.
+ */
+export async function loadExternalConfigFile(path) {
+    let raw;
+    try {
+        raw = await readFile(path, 'utf8');
+    }
+    catch (error) {
+        throw new Error(`[abap-adt] cannot read config file ${path}: ${error.message}`);
+    }
+    return parseExternalConfigText(raw, path);
+}
+/** Parse + validate config file text (shared by async and sync loaders). */
+export function parseExternalConfigText(raw, path) {
+    let parsed;
+    try {
+        parsed = parse(raw);
+    }
+    catch (error) {
+        throw new Error(`[abap-adt] invalid YAML in ${path}: ${error.message}`);
+    }
+    return validateExternalConfig(parsed, path);
+}
+/**
  * Resolve the effective plugin config across all layers (nearest wins):
  * schema defaults < composition entry < legacy file < settings user section <
  * explicit `configFile`. The legacy `${DSH_HOME:-~/.dsh}/abap-adt.yml` is
@@ -302,14 +343,40 @@ export async function resolveEffectiveConfig(source) {
         config.configFileUsed = usedPath;
     return { config, warnings };
 }
-/** Resolve the password for a destination: config > passwordEnv > convention. */
-export function resolvePassword(dest) {
+/**
+ * Resolves a destination's password reference names, in priority order:
+ * the explicit `passwordEnv`, else the `ADT_<NAME>_PASSWORD` convention,
+ * with `ADT_PASSWORD` as the shared fallback.
+ */
+export function passwordRefNames(dest) {
+    const primary = dest.passwordEnv ?? `ADT_${dest.name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_PASSWORD`;
+    return [primary, 'ADT_PASSWORD'];
+}
+/**
+ * Resolve the password for a destination, layer by layer (first hit wins):
+ *
+ *   1. `config.password` (plaintext in the config file — supported, discouraged)
+ *   2. per reference name (explicit `passwordEnv`, else the
+ *      `ADT_<NAME>_PASSWORD` convention, then `ADT_PASSWORD`):
+ *        a. the DSH credential service (`~/.dsh/.credentials.yaml` layered
+ *           over `.env` files — `resolver`), when mounted
+ *        b. the raw process environment
+ *
+ * The credential-service read is per call (the service contract forbids
+ * caching across operations), so an edited credentials file reaches the next
+ * tool call without a restart — which is why `resolvePassword` is async.
+ */
+export async function resolvePassword(dest, resolver) {
     if (dest.password)
         return dest.password;
-    const envName = dest.passwordEnv ?? `ADT_${dest.name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_PASSWORD`;
-    const direct = process.env[envName];
-    if (direct)
-        return direct;
-    return process.env.ADT_PASSWORD ?? '';
+    for (const ref of passwordRefNames(dest)) {
+        const viaService = resolver ? await resolver(ref) : undefined;
+        if (viaService)
+            return viaService;
+        const direct = process.env[ref];
+        if (direct)
+            return direct;
+    }
+    return '';
 }
 //# sourceMappingURL=config.js.map

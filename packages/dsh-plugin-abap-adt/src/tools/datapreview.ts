@@ -12,7 +12,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
 
 /** Map the shared type-code namespace onto the two preview API modes. */
 const KIND_TO_MODE: Record<string, 'ddic' | 'cds'> = {
@@ -102,7 +102,7 @@ export function dataPreviewTools(deps: ToolDeps) {
       },
       isConcurrencySafe: () => true,
       execute: async (args, exec) => {
-        const entry = registry.require(destinationOf(args));
+        const entry = await registry.require(destinationOf(args), sessionCwd(exec));
         const notes: string[] = [];
 
         const run = async <T>(fn: () => Promise<T>): Promise<T> => {

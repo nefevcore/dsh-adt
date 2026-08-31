@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { text, type ToolDeps } from './common.js';
+import { sessionCwd, text, type ToolDeps } from './common.js';
 
 /**
  * Read-only introspection tool for the ADT permission policy. Lets the agent
@@ -101,8 +101,8 @@ export function policyTools(deps: ToolDeps) {
       },
       isConcurrencySafe: () => true,
       // Read via the registry so a settings hot reload is reflected immediately.
-      execute: async () => {
-        const { global, perDestination } = registry.describePolicies();
+      execute: async (_args, exec) => {
+        const { global, perDestination } = await registry.describePolicies(sessionCwd(exec));
         return {
           enableTransports: global.enableTransports,
           allowedTransports: global.allowedTransports,

@@ -91,8 +91,13 @@ export function parseStructure(xml, kind) {
         case 'DOMA': {
             const properties = domaProperties(root);
             const fixedValues = [];
-            // fixValues may sit at the root or nested under <doma:content>.
-            const fixValues = child(root, 'fixValues') ?? child(child(root, 'content') ?? root, 'fixValues');
+            // fixValues may sit at the root, under <doma:content>, or (S/4 sandbox
+            // verified) nested one level deeper under <doma:valueInformation>.
+            const content = child(root, 'content');
+            const valueInfo = child(content ?? root, 'valueInformation');
+            const fixValues = child(root, 'fixValues') ??
+                child(content ?? root, 'fixValues') ??
+                child(valueInfo ?? root, 'fixValues');
             for (const fv of children(fixValues ?? root, 'fixValue')) {
                 fixedValues.push({
                     low: childText(fv, 'low') ?? '',
@@ -103,10 +108,30 @@ export function parseStructure(xml, kind) {
             return { ...base, kind: 'DOMA', properties, fixedValues };
         }
         case 'DTEL': {
-            const properties = dtelProperties(root);
+            // Some profiles (S/4 sandbox verified) wrap the data element in an
+            // outer <blue:wbobj> carrier: root name/description/packageRef live on
+            // the wrapper, the typed fields under a <dtel:dataElement> child. Descend
+            // when the wrapper is present.
+            const elementRoot = child(root, 'dataElement') ?? root;
+            const properties = dtelProperties(elementRoot);
             const labels = {};
-            const labelsEl = child(root, 'labels');
-            for (const label of children(labelsEl ?? root, 'label')) {
+            // Label shapes differ by release:
+            //   a) named elements  <dtel:shortFieldLabel>/<mediumFieldLabel>/
+            //      <longFieldLabel>/<headingFieldLabel> (S/4 sandbox verified);
+            //   b) typed elements  <dtel:label type="…">…
+            const namedLabels = [
+                ['shortText', 'shortFieldLabel'],
+                ['mediumText', 'mediumFieldLabel'],
+                ['longText', 'longFieldLabel'],
+                ['heading', 'headingFieldLabel'],
+            ];
+            for (const [key, localName] of namedLabels) {
+                const value = childText(elementRoot, localName);
+                if (value)
+                    labels[key] = value;
+            }
+            const labelsEl = child(elementRoot, 'labels') ?? child(root, 'labels');
+            for (const label of children(labelsEl ?? elementRoot, 'label')) {
                 const key = attr(label, 'type') ?? attr(label, 'kind');
                 if (key && label.text)
                     labels[key] = label.text;
@@ -137,7 +162,9 @@ function domaProperties(root) {
         scalar(output, 'lowercase');
         scalar(output, 'outputStyle');
     }
-    const valueTable = child(content, 'valueTableRef');
+    // valueTableRef may sit directly under <doma:content> or under
+    // <doma:valueInformation> (S/4 sandbox verified).
+    const valueTable = child(content, 'valueTableRef') ?? child(child(content, 'valueInformation') ?? content, 'valueTableRef');
     if (valueTable)
         props.valueTable = attr(valueTable, 'name') ?? '';
     return props;
@@ -382,8 +409,20 @@ export function patchStructureXml(xml, kind, changes) {
     }
     return out;
 }
-/** Patch one `<dtel:label type="…">` text (inserting the labels block if absent). */
+/** Patch one DTEL label. Understands BOTH wire shapes (see parseStructure):
+ *  named elements (<dtel:shortFieldLabel>…, S/4 sandbox) and typed elements
+ *  (<dtel:label type="…">…). The named form wins when present. */
 function patchLabel(xml, type, value) {
+    const named = {
+        shortText: 'shortFieldLabel',
+        mediumText: 'mediumFieldLabel',
+        longText: 'longFieldLabel',
+        heading: 'headingFieldLabel',
+    };
+    const namedLocal = named[type];
+    if (namedLocal && elementRange(xml, namedLocal)) {
+        return patchElementText(xml, null, namedLocal, value);
+    }
     // 1) The label exists → replace its text, preserving prefix and attributes.
     //    The type is regex-escaped before entering the RegExp source (audit M4).
     const labelRe = new RegExp(`(<((?:[\\w.-]+):)?label\\b[^>]*?(?:[\\w.-]+:)?type\\s*=\\s*"${escapeRegExp(type)}"[^>]*>)([\\s\\S]*?)</(?:[\\w.-]+:)?label\\s*>`);

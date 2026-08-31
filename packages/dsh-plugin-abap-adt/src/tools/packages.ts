@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
 
 export function packageTools(deps: ToolDeps) {
   const { registry } = deps;
@@ -52,7 +52,7 @@ export function packageTools(deps: ToolDeps) {
       },
       isConcurrencySafe: () => true,
       execute: async (args, exec) => {
-        const entry = registry.require(destinationOf(args));
+        const entry = await registry.require(destinationOf(args), sessionCwd(exec));
         const refs = await entry.client.packageContent(String(args.packageName), { signal: exec.signal });
         return {
           packageName: String(args.packageName),

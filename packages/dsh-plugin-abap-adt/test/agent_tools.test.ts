@@ -183,7 +183,7 @@ test('adt_batch: write part executes when the knob allows it', async () => {
     );
     assert.equal(result.ok, 1, JSON.stringify(result.parts));
     // The write really landed.
-    const check = await permissive.require().client.readSource('/sap/bc/adt/programs/programs/zprog_demo');
+    const check = await (await permissive.require()).client.readSource('/sap/bc/adt/programs/programs/zprog_demo');
     assert.ok(check.source.includes('rewritten via batch'));
   } finally {
     await permissive.dispose();
@@ -296,11 +296,11 @@ test('transport selection: user-specified request wins over the lock-assigned on
   );
   assert.equal(chosen.transportSource, 'user');
   assert.equal(chosen.transport, 'S4HK900001');
-  const versions = await registry.require().client.getVersions('/sap/bc/adt/oo/classes/zcl_runner');
+  const versions = await (await registry.require()).client.getVersions('/sap/bc/adt/oo/classes/zcl_runner');
   assert.equal(versions[0]?.transportRequest, 'S4HK900001');
 
   // 4. adt_edit_object honors the same semantics.
-  await registry.require().client.updateSource(
+  (await registry.require()).client.updateSource(
     '/sap/bc/adt/oo/classes/zcl_demo',
     'CLASS zcl_demo DEFINITION PUBLIC CREATE PUBLIC.\n  PUBLIC SECTION.\n    METHODS greet.\nENDCLASS.\n\nCLASS zcl_demo IMPLEMENTATION.\n  METHOD greet.\n  ENDMETHOD.\nENDCLASS.',
     { transport: 'S4HK900001' },
@@ -370,7 +370,7 @@ test('adt_activate hints: PROG include cascading + check-vs-activate scope', asy
   assert.equal(audit.hints.length, 0);
 
   // 2. Failed activation → hint that adt_check passing is no guarantee.
-  const client = registry.require().client;
+  const client = (await registry.require()).client;
   const uri = '/sap/bc/adt/programs/programs/zprog_demo';
   const good = (await client.readSource(uri)).source;
   await client.updateSource(uri, 'REPORT zprog_demo.\nZBROKEN is not defined.');
@@ -395,7 +395,7 @@ test('adt_activate hints: PROG include cascading + check-vs-activate scope', asy
 
 test('adt_version_diff: default = saved vs active (pending-activation check)', async () => {
   const by = tools();
-  const client = registry.require().client;
+  const client = (await registry.require()).client;
   const name = 'ZCL_FLAKY';
   const uri = '/sap/bc/adt/oo/classes/zcl_flaky';
   const original = (await client.readSource(uri)).source;
@@ -449,7 +449,7 @@ test('adt_version_diff: default = saved vs active (pending-activation check)', a
 
 test('adt_edit_object: single-line replacement (start == end, and end omitted)', async () => {
   const by = tools();
-  const client = registry.require().client;
+  const client = (await registry.require()).client;
   const uri = '/sap/bc/adt/programs/programs/zprog_demo';
   const original = (await client.readSource(uri)).source;
 
@@ -529,7 +529,7 @@ test('adt_edit_object: single-line replacement (start == end, and end omitted)',
 
 test('adt_edit_object: real-world Mod-block with Chinese comments (regression, impc-dev report)', async () => {
   const by = tools();
-  const client = registry.require().client;
+  const client = (await registry.require()).client;
   const uri = '/sap/bc/adt/programs/programs/zprog_demo';
   const original = (await client.readSource(uri)).source;
 
@@ -692,7 +692,7 @@ test('real-world include: line-number mode with stale-marker verification', () =
 
 test('real-world include: single-line edit via the tool against the mock', async () => {
   const by = tools();
-  const client = registry.require().client;
+  const client = (await registry.require()).client;
   const uri = '/sap/bc/adt/programs/programs/zprog_demo';
   const original = (await client.readSource(uri)).source;
   try {
@@ -894,7 +894,7 @@ test('oldText mode: not-found lists closest lines; mixed params rejected', () =>
 
 test('oldText mode via the tool against the mock (mode exclusivity + happy path)', async () => {
   const by = tools();
-  const client = registry.require().client;
+  const client = (await registry.require()).client;
   const uri = '/sap/bc/adt/programs/programs/zprog_demo';
   const original = (await client.readSource(uri)).source;
   try {
@@ -954,7 +954,7 @@ function memFs() {
 test('snapshot OCC: read creates snapshot; edit matches it; drift → [CONFLICT]', async () => {
   const mem = memFs();
   const by = tools({ registry, ledger: new LockLedger() }, mem.ctx);
-  const client = registry.require().client;
+  const client = (await registry.require()).client;
   const uri = '/sap/bc/adt/oo/classes/zcl_flaky';
   const original = (await client.readSource(uri)).source;
 
@@ -1008,7 +1008,7 @@ test('snapshot OCC: read creates snapshot; edit matches it; drift → [CONFLICT]
 test('snapshot OCC: write_object refuses stale view; push uploads a locally edited file', async () => {
   const mem = memFs();
   const by = tools({ registry, ledger: new LockLedger() }, mem.ctx);
-  const client = registry.require().client;
+  const client = (await registry.require()).client;
   const uri = '/sap/bc/adt/oo/classes/zcl_flaky';
   const original = (await client.readSource(uri)).source;
 
@@ -1098,7 +1098,7 @@ test('sourcesEquivalent: tolerant of backend normalization, strict on real diver
 
 test('edit/write verify persistence after the write (concurrent-overwrite regression)', async () => {
   const by = tools();
-  const client = registry.require().client;
+  const client = (await registry.require()).client;
   const uri = '/sap/bc/adt/programs/includes/zprog_demo_top';
   const original = (await client.readSource(uri)).source;
 
@@ -1406,10 +1406,13 @@ test('M6: adt_write_structure registers its lock in the persistent ledger', asyn
   );
   assert.deepEqual(written.changed, ['description']);
   // The lock was registered WITH its handle while held, and removed again
-  // after the protocol confirmed the unlock.
+  // after the protocol confirmed the unlock. The canonical message-class
+  // prefix is /messageclass/ (the mock still serves the legacy /msgclass/
+  // path — the client's 404 fallback bridges the two, but the ledger tracks
+  // the URI the tool resolved).
   assert.deepEqual(calls, [
-    `register:/sap/bc/adt/msgclass/zmsg_demo:handle`,
-    `deregister:/sap/bc/adt/msgclass/zmsg_demo`,
+    `register:/sap/bc/adt/messageclass/zmsg_demo:handle`,
+    `deregister:/sap/bc/adt/messageclass/zmsg_demo`,
   ]);
 
   // A real ledger gains no entry from a clean write (snapshot comparison —
@@ -1487,7 +1490,7 @@ test('M7: adt_create_object polices the backend auto-assigned transport', async 
     );
     // The rollback really removed the object again.
     await assert.rejects(
-      () => picky.require().client.readSource('/sap/bc/adt/oo/classes/zcl_transit'),
+      async () => (await picky.require()).client.readSource('/sap/bc/adt/oo/classes/zcl_transit'),
       /404/,
     );
 
@@ -1545,7 +1548,7 @@ test('M9: export sanitizes namespaced object names and reports the resolved path
   // A namespaced object (/NS/ZCL_DEMO) — its name contains slashes that
   // must never reach the file target (they would resolve as absolute
   // paths OUTSIDE targetDir).
-  await registry.require().client.createObject({
+  (await registry.require()).client.createObject({
     destination: 'demo',
     type: 'CLAS/OC',
     name: '/NS/ZCL_DEMO',

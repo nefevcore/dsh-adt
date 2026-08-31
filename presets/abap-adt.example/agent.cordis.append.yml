@@ -10,9 +10,11 @@
 #   4. 重启 DSH，新建会话时在预设 chip 里选它。
 #
 # 连接与权限配置（destinations / 权限管控）**不要写在这里**：
-# 放到 ~/.dsh/settings.yaml 的 abap-adt: 段（复制本目录的
-# settings-section.example 改），保存即热生效。
-# 预设文件保持稳定，换系统/改权限只动 settings.yaml。
+# 按项目放工作区文件 <工作区>/.dsh-abap-adt/destinations.yaml（或在对话里
+# 让代理调 adt_create_destination 创建，支持从本机 SAP GUI 导入）；
+# 全局兜底放 ~/.dsh/settings.yaml 的 abap-adt: 段（复制本目录的
+# settings-section.example 改）。保存即热生效。
+# 预设文件保持稳定，换系统/改权限只动配置文件。
 
 - id: abap-adt
   # 前提：先装进 profile（见仓库 README「安装与更新」）：

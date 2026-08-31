@@ -32,9 +32,12 @@
  *   --force         overwrite an existing preset directory
  *   --dry-run       show what would be written, change nothing
  *
- * Config (destinations / permission policy) does NOT live in the preset: it
- * lives in the `abap-adt:` section of `${DSH_HOME:-~/.dsh}/settings.yaml`
- * (DSH settings user layer, hot-applies).
+ * Config (destinations / permission policy) does NOT live in the preset:
+ * destinations primarily live in the per-workspace file
+ * `<workspace>/.dsh-abap-adt/destinations.yaml` (created by hand or by the
+ * `adt_create_destination` tool, which imports from the local SAP GUI);
+ * global fallbacks live in the `abap-adt:` section of
+ * `${DSH_HOME:-~/.dsh}/settings.yaml` (DSH settings user layer, hot-applies).
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -49,8 +52,11 @@ export const PLUGIN_ROW = `
 # --- abap-adt (appended by abap-adt-preset) ---
 # This row is what scopes the adt_* tools to sessions on this preset; the
 # source preset (and global sessions) never loads them.
-# Destinations / permission policy live in ~/.dsh/settings.yaml under
-# abap-adt: (hot-applies); demo starts an in-process mock destination.
+# Destinations live in the session WORKSPACE file
+# <workspace>/.dsh-abap-adt/destinations.yaml (create them conversationally
+# with adt_create_destination — imports from the local SAP GUI — or by hand);
+# global fallbacks/policy live in ~/.dsh/settings.yaml under abap-adt:
+# (both hot-apply); demo starts an in-process mock destination.
 - id: abap-adt
   name: '@nefevcore/abap-adt-dsh-plugin'
   config:
@@ -221,7 +227,9 @@ function help(): string {
     'into ~/.dsh/.agent-presets/<id>/, appends the abap-adt plugin row, and',
     'strips the plugin-authoring rows (tool-cordis, skill-filesystem) the',
     'source may carry, so only sessions created on this preset load the',
-    'adt_* tools. Config: ~/.dsh/settings.yaml `abap-adt:` section (hot-applies).',
+    'adt_* tools. Destinations: workspace file .dsh-abap-adt/destinations.yaml',
+    '(adt_create_destination can create it from the SAP GUI list); global',
+    'fallbacks: ~/.dsh/settings.yaml `abap-adt:` section (both hot-apply).',
   ].join('\n');
 }
 
@@ -320,7 +328,9 @@ export function main(argv: string[]): number {
       'next steps:',
       '  1. restart DSH (only needed once — this preset is new)',
       `  2. new session -> preset chip -> ${args.name}`,
-      '  3. configure systems in ~/.dsh/settings.yaml under `abap-adt:` (hot-applies)',
+      '  3. connect a system: just ask the agent to create the destination (adt_create_destination,',
+      '     imports from the local SAP GUI) — or hand-write <workspace>/.dsh-abap-adt/destinations.yaml;',
+      '     global fallbacks go to ~/.dsh/settings.yaml under `abap-adt:` (all hot-apply)',
     ].join('\n') + '\n',
   );
   return 0;

@@ -42,7 +42,12 @@ export function parseAdtMessages(root) {
     for (const el of children(root, 'message')) {
         messages.push({
             severity: severityOf(attr(el, 'type') ?? attr(el, 'severity')),
-            text: childText(el, 'text') ?? childText(el, 'shortText') ?? attr(el, 'shortText') ?? '',
+            // Real ADT error bodies put the human-readable text directly INSIDE the
+            // <message> element (e.g. EU510 "user … is currently editing …" — the
+            // whole reason a 403 is actionable at all). Older code only looked for
+            // child <text>/<shortText> elements, so those messages surfaced as an
+            // empty "E: " — losing the diagnosis.
+            text: childText(el, 'text') ?? childText(el, 'shortText') ?? attr(el, 'shortText') ?? el.text ?? '',
             id: attr(el, 'id'),
             code: attr(el, 'code'),
             longText: childText(el, 'longText'),
@@ -1605,12 +1610,35 @@ export class AdtClient {
     /** Read the structured metadata of a DDIC object as typed JSON. */
     async readStructure(objectUri, kind, options = {}) {
         const uri = objectBaseUri(objectUri);
-        const res = await this.request({
-            path: `${uri}${toQuery(this.baseQuery())}`,
-            accept: structureMediaType(kind),
-            signal: options.signal,
-        });
-        return parseStructure(res.text, kind);
+        const get = async (u) => {
+            const res = await this.request({
+                path: `${u}${toQuery(this.baseQuery())}`,
+                accept: structureMediaType(kind),
+                signal: options.signal,
+            });
+            return res.text;
+        };
+        let xml;
+        try {
+            xml = await get(uri);
+        }
+        catch (error) {
+            // Message-class URI prefixes differ across releases: modern profiles
+            // serve /sap/bc/adt/messageclass/<name>, older ones (and the bundled
+            // mock) only /sap/bc/adt/msgclass/<name>. Retry the other spelling on
+            // 404 instead of failing the read.
+            if (error instanceof AdtError &&
+                error.status === 404 &&
+                kind === 'MSAG' &&
+                /\/(messageclass|msgclass)\//.test(uri)) {
+                const alt = uri.includes('/messageclass/') ? uri.replace('/messageclass/', '/msgclass/') : uri.replace('/msgclass/', '/messageclass/');
+                xml = await get(alt);
+            }
+            else {
+                throw error;
+            }
+        }
+        return parseStructure(xml, kind);
     }
     /**
      * Read-modify-write the structured metadata of a DDIC object: lock → GET
@@ -1621,8 +1649,28 @@ export class AdtClient {
      * anything is written — a throw rolls the lock back and propagates.
      */
     async writeStructure(objectUri, kind, changes, options = {}) {
-        const uri = objectBaseUri(objectUri);
-        const { handle, transport: assigned } = await this.lock(uri, { signal: options.signal });
+        let uri = objectBaseUri(objectUri);
+        // Same message-class prefix duality as readStructure: probe-locked on the
+        // alternate spelling when the first LOCK misses the service (404).
+        let lock;
+        try {
+            lock = await this.lock(uri, { signal: options.signal });
+        }
+        catch (error) {
+            if (error instanceof AdtError &&
+                error.status === 404 &&
+                kind === 'MSAG' &&
+                /\/(messageclass|msgclass)\//.test(uri)) {
+                uri = uri.includes('/messageclass/')
+                    ? uri.replace('/messageclass/', '/msgclass/')
+                    : uri.replace('/msgclass/', '/messageclass/');
+                lock = await this.lock(uri, { signal: options.signal });
+            }
+            else {
+                throw error;
+            }
+        }
+        const { handle, transport: assigned } = lock;
         let outcome;
         let unlocked = false;
         try {
@@ -1865,8 +1913,22 @@ function buildCreateObjectRequest(request) {
     // which strict backends reject with HTTP 400: "expected attribute
     // {http://www.sap.com/adt/core}name" (ExceptionInvalidData).
     //
+    // Message classes are the odd one out: their create handler wants the
+    // MESSAGE-CLASS root element (<mc:messageClass>), not the generic
+    // <adtcore:object> — strict backends answer 400 "expected element
+    // {http://www.sap.com/adt/MessageClass}messageClass" otherwise
+    // (verified on an S/4HANA sandbox).
+    if (tag === 'mc:messageClass') {
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<mc:messageClass xmlns:mc="http://www.sap.com/adt/MessageClass" xmlns:adtcore="http://www.sap.com/adt/core"
+       adtcore:description="${escapeXml(request.description)}" adtcore:name="${escapeXml(request.name)}" adtcore:masterLanguage="EN">
+  <adtcore:packageRef adtcore:name="${escapeXml(request.packageName || '$TMP')}"/>
+${props}
+</mc:messageClass>`;
+    }
+    //
     // The element namespace is only declared for the types that have one
-    // (audit P3): for the adtcore-defaulted types (TABL/DTEL/TTYP/MSAG/DEVC)
+    // (audit P3): for the adtcore-defaulted types (TABL/DTEL/TTYP/DEVC)
     // the old code declared `xmlns:adtcore="http://www.sap.com/adt/adtcore"`
     // next to the real core namespace — a duplicate/bogus declaration strict
     // backends reject.
@@ -1920,6 +1982,8 @@ function createRootTag(type) {
             return 'fugr:functionGroup';
         case 'DDLS':
             return 'ddls:dataDefinition';
+        case 'MSAG':
+            return 'mc:messageClass';
         default:
             return 'adtcore:object';
     }
@@ -2947,7 +3011,16 @@ function parseDumpsFeed(xml) {
     }
     return dumps;
 }
-/** Tolerant structured-XML dump parser: every text-bearing child becomes a section. */
+/**
+ * Tolerant structured-XML dump parser: every text-bearing child becomes a
+ * section. Additionally understands the METADATA-only shape served by
+ * restricted ADT profiles (verified on an S/4HANA sandbox, S4C): the body is
+ * a `<dump:dump>` element whose INFORMATION lives in root ATTRIBUTES
+ * (error/exception/terminatedProgram/…) plus a `<dump:chapters>` index whose
+ * entries only carry title/line pointers into the `/formatted` view — there
+ * are no text-bearing leaf elements at all. Those attributes are surfaced as
+ * sections so the caller can decide to fetch the formatted view.
+ */
 function parseDumpDetail(xml, id) {
     const sections = [];
     const root = tryParseXml(xml);
@@ -2955,15 +3028,25 @@ function parseDumpDetail(xml, id) {
         // Non-XML body → keep raw.
         return { id, sections: [], raw: xml, view: 'default' };
     }
-    const title = attr(root, 'type') ?? attr(root, 'name') ?? childText(root, 'name') ?? childText(root, 'title');
+    const title = attr(root, 'title') ?? attr(root, 'type') ?? attr(root, 'name') ?? childText(root, 'name') ?? childText(root, 'title');
+    // Root attributes first — the metadata-only profiles carry ALL diagnostics here.
+    for (const key of ['error', 'exception', 'terminatedProgram', 'serverInstance', 'datetime', 'author']) {
+        const value = attr(root, key);
+        if (value)
+            sections.push({ name: key, value });
+    }
     const walk = (node) => {
         for (const c of node.children) {
+            if (c.name === 'chapter')
+                continue; // index metadata, not content
             if (c.children.length === 0 && c.text) {
                 sections.push({ name: c.name, value: c.text });
             }
             else if (c.children.length > 0) {
                 // Composite nodes contribute a flattened key/value view.
                 for (const gc of c.children) {
+                    if (gc.name === 'chapter')
+                        continue;
                     if (gc.text)
                         sections.push({ name: `${c.name}.${gc.name}`, value: gc.text });
                 }
@@ -2972,6 +3055,25 @@ function parseDumpDetail(xml, id) {
         }
     };
     walk(root);
+    // Chapter index of the metadata-only shape: "title (line …)" per chapter.
+    const chapterTitles = [];
+    const collectChapters = (node) => {
+        for (const c of node.children) {
+            if (c.name === 'chapter') {
+                const chapterTitle = attr(c, 'title');
+                const line = attr(c, 'line');
+                if (chapterTitle)
+                    chapterTitles.push(line ? `${chapterTitle} (line ${line})` : chapterTitle);
+            }
+            else {
+                collectChapters(c);
+            }
+        }
+    };
+    collectChapters(root);
+    if (chapterTitles.length > 0) {
+        sections.push({ name: 'chapters', value: chapterTitles.join(' | ') });
+    }
     return { id, title, sections, view: 'default' };
 }
 // --- $batch response parts ---------------------------------------------------

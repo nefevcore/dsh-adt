@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text } from './common.js';
 /** Upper bound for presentation metadata: past this the UI falls back to the
  * generic card rather than persisting a huge copy of the search result. */
 const SEARCH_META_MAX_ENTRIES = 500;
@@ -162,7 +162,7 @@ export function searchTools(deps) {
             },
             isConcurrencySafe: () => true,
             execute: async (args, exec) => {
-                const entry = registry.require(destinationOf(args));
+                const entry = await registry.require(destinationOf(args), sessionCwd(exec));
                 const packageName = optStr(args.packageName)?.toUpperCase();
                 const clamp = typeof args.maxResults === 'number' ? clampWithNote(args.maxResults, 1, 100, 'maxResults') : { value: 25, note: undefined };
                 const maxResults = clamp.value;

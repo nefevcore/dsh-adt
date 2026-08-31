@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import {
+import { sessionCwd,
   DESTINATION_PARAM,
   OBJECTS_PARAM,
   assertExplicitTransport,
@@ -107,7 +107,7 @@ export function lifecycleTools(deps: ToolDeps) {
     },
     output: activationOutput,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const checkOnly = args.checkOnly === true;
       const inputs = requireObjectList(args, 'adt_activate') as Array<{
         objectUri?: string;
@@ -238,7 +238,7 @@ export function lifecycleTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const inputs = requireObjectList(args, 'adt_check') as Array<{ objectUri?: string; name?: string; type?: string }>;
       const refs = await resolveObjects(entry.client, inputs, exec.signal);
 

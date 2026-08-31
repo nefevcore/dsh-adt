@@ -5,7 +5,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError, type AdtObjectRef } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, NAME_TYPE_OBJECTS_PARAM, clampWithNote, destinationOf, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, NAME_TYPE_OBJECTS_PARAM, clampWithNote, destinationOf, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
 
 export type GateStage = 'syntax' | 'unit' | 'atc';
@@ -87,7 +87,7 @@ export function gateTools(deps: ToolDeps) {
       // and adds headroom for activation and summary rendering).
       timeoutMs: 1_200_000,
       execute: async (args, exec) => {
-        const entry = registry.require(destinationOf(args));
+        const entry = await registry.require(destinationOf(args), sessionCwd(exec));
         const clamp = clampWithNote(Number(args.maxObjects ?? 100), 1, 500, 'maxObjects');
         const cap = clamp.value;
         let truncated = false;

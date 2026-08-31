@@ -650,7 +650,7 @@ function hTransportDetail({ res, state, path, opts }) {
 }
 // ---- Object creation (type-specific collections) ----
 async function hCreateObject({ res, req, state, url, path }) {
-    const createMatch = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|msgclass|packages)$/.exec(path);
+    const createMatch = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|messageclass|msgclass|packages)$/.exec(path);
     const body = await readBody(req);
     const nameMatch = /(?:class|intf|prog|ddls|adtcore):name="([^"]+)"/.exec(body) ?? /adtcore:name="([^"]+)"/.exec(body);
     const descMatch = /adtcore:description="([^"]+)"/.exec(body);
@@ -1093,7 +1093,7 @@ function hAtcResultDetail({ res, state, path }) {
 </atcresult:resultList>`));
 }
 // --- The route table (dispatch order matters — do not reorder) ---------------
-const CREATE_COLLECTIONS = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|msgclass|packages)$/;
+const CREATE_COLLECTIONS = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|messageclass|msgclass|packages)$/;
 const TRANSPORT_RE = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/;
 const OBJECT_PATH = (ctx) => ctx.path.endsWith('/source/main') ? ctx.path.slice(0, -'/source/main'.length) : ctx.path;
 const ROUTES = [
@@ -1314,6 +1314,7 @@ function typeForCollection(collection) {
         case 'ddic/tabletypes':
             return 'TTYP/DT';
         case 'msgclass':
+        case 'messageclass':
             return 'MSAG/N';
         case 'packages':
             return 'DEVC/K';

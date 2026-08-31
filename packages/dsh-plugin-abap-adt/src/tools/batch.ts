@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { FileSystem } from '@deepseek-ai/dsh-fs';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
 import type { AdtBatchRequestPart, AdtBatchRequestPart as BatchPart } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
 
 /**
@@ -209,7 +209,7 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
     // assembly; generous headroom for large multipart payloads.
     timeoutMs: 180_000,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const raw = Array.isArray(args.requests) ? (args.requests as BatchPart[]) : [];
       if (raw.length === 0) throw new Error('adt_batch: `requests` must contain at least one embedded request');
       const clamp = clampWithNote(raw.length, 1, MAX_BATCH_PARTS, 'requests');
@@ -347,7 +347,7 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
     // file writes; sized for large object sets, degraded per-entry on errors.
     timeoutMs: 600_000,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       // Optional service (audit D1): without dsh-fs the tool degrades with a
       // clear error instead of blocking the whole plugin from loading.
       const fs = ctx.get('fs');

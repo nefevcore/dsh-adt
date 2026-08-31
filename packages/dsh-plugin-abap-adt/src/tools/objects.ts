@@ -10,7 +10,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError, type AdtCreatableObjectType } from '@nefevcore/abap-adt-protocol';
-import {
+import { sessionCwd,
   DESTINATION_PARAM,
   OBJECT_REF_PARAMS,
   PACKAGE_HINT_PARAM,
@@ -94,7 +94,7 @@ export function objectTools(deps: ToolDeps) {
         ),
     },
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const packageName = String(args.packageName ?? '$TMP').toUpperCase();
       // Permission check: package whitelist + transportable-edit rule.
       entry.policy.assertEditAllowed(packageName, 'adt_create_object');
@@ -247,7 +247,7 @@ export function objectTools(deps: ToolDeps) {
         ),
     },
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_delete_object' });
       await assertObjectEditable(entry, ref, {
         toolName: 'adt_delete_object',

@@ -12,7 +12,7 @@
  * locally edited copy after verifying the server still matches).
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text } from './common.js';
 import { typeLabel } from '../resolve.js';
 import { hashSource, saveSnapshot } from '../snapshots.js';
 /** Upper bound for read-card metadata lines; larger sources fall back to the
@@ -128,7 +128,7 @@ export function readTools(deps, ctx) {
         },
         isConcurrencySafe: () => true,
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const ref = await resolveToolObject(entry.client, args, exec.signal);
             const parsed = await entry.client.readSource(ref.uri, { signal: exec.signal });
             const properties = {};

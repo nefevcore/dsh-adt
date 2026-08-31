@@ -12,6 +12,8 @@ import {
   composeLayers,
   loadExternalConfigFile,
   resolveEffectiveConfig,
+  passwordRefNames,
+  resolvePassword,
   type PluginConfig,
 } from '../lib/config.js';
 
@@ -367,5 +369,57 @@ test('resolveEffectiveConfig: destinations union across entry, legacy, settings,
     if (previous === undefined) delete process.env.DSH_HOME;
     else process.env.DSH_HOME = previous;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Password resolution (plaintext > DSH credential store > process env)
+// ---------------------------------------------------------------------------
+
+test('resolvePassword: plaintext config wins over every layer', async () => {
+  const previous = process.env.ADT_DEV_PASSWORD;
+  process.env.ADT_DEV_PASSWORD = 'from-env';
+  try {
+    const password = await resolvePassword({ name: 'dev', password: 'plain' }, async () => 'from-store');
+    assert.equal(password, 'plain');
+  } finally {
+    if (previous === undefined) delete process.env.ADT_DEV_PASSWORD;
+    else process.env.ADT_DEV_PASSWORD = previous;
+  }
+});
+
+test('resolvePassword: the credential service layer beats the raw environment', async () => {
+  const previous = process.env.ADT_DEV_PASSWORD;
+  process.env.ADT_DEV_PASSWORD = 'from-env';
+  try {
+    // The service (backed by ~/.dsh/.credentials.yaml) resolves the reference.
+    const password = await resolvePassword({ name: 'dev' }, async (ref) => (ref === 'ADT_DEV_PASSWORD' ? 'from-store' : undefined));
+    assert.equal(password, 'from-store');
+    // Without a resolver the raw environment applies (lean-profile behavior).
+    assert.equal(await resolvePassword({ name: 'dev' }), 'from-env');
+  } finally {
+    if (previous === undefined) delete process.env.ADT_DEV_PASSWORD;
+    else process.env.ADT_DEV_PASSWORD = previous;
+  }
+});
+
+test('resolvePassword: explicit passwordEnv first, then convention, then ADT_PASSWORD', async () => {
+  const seen: string[] = [];
+  const resolver = async (ref: string) => {
+    seen.push(ref);
+    return undefined;
+  };
+  const previousEnv = process.env.ADT_PASSWORD;
+  process.env.ADT_PASSWORD = 'shared';
+  try {
+    // All refs miss in the store and env until the shared fallback hits.
+    assert.equal(await resolvePassword({ name: 'my sys', passwordEnv: 'ADT_CUSTOM_PASSWORD' }, resolver), 'shared');
+    assert.deepEqual(seen, ['ADT_CUSTOM_PASSWORD', 'ADT_PASSWORD']);
+    // Convention name derivation: spaces and non-alphanumerics collapse.
+    const names = passwordRefNames({ name: 'my sys' });
+    assert.deepEqual(names, ['ADT_MY_SYS_PASSWORD', 'ADT_PASSWORD']);
+  } finally {
+    if (previousEnv === undefined) delete process.env.ADT_PASSWORD;
+    else process.env.ADT_PASSWORD = previousEnv;
   }
 });

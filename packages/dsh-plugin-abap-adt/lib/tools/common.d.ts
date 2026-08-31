@@ -21,6 +21,132 @@ export declare function activationSummary(act: {
     success: boolean;
     message?: string;
 };
+/** One ATC finding as the tools report it (mapped from the protocol shape). */
+export interface AtcFindingOutput {
+    checkTitle: string;
+    severity: string;
+    message: string;
+    objectName: string;
+    uri?: string;
+    line?: number;
+    check?: string;
+}
+/** `findings` array schema shared by the ATC-reporting tools. */
+export declare const ATC_FINDINGS_SCHEMA: {
+    readonly type: "array";
+    readonly required: true;
+    readonly items: {
+        readonly type: "object";
+        readonly additionalProperties: false;
+        readonly properties: {
+            readonly checkTitle: {
+                readonly type: "string";
+                readonly required: true;
+            };
+            readonly severity: {
+                readonly type: "string";
+                readonly required: true;
+            };
+            readonly message: {
+                readonly type: "string";
+                readonly required: true;
+            };
+            readonly objectName: {
+                readonly type: "string";
+                readonly required: true;
+            };
+            readonly uri: {
+                readonly type: "string";
+                readonly description: "URI of the object the `line` refers to (often an include while objectName is the main program).";
+            };
+            readonly line: {
+                readonly type: "integer";
+            };
+            readonly check: {
+                readonly type: "string";
+            };
+        };
+    };
+};
+/** Severity-counts schema shared by the ATC-reporting tools. */
+export declare const ATC_COUNTS_SCHEMA: {
+    readonly type: "object";
+    readonly required: true;
+    readonly additionalProperties: false;
+    readonly properties: {
+        readonly INFO: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+        readonly WARNING: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+        readonly ERROR: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+        readonly CRITICAL: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+        readonly CATASTROPHIC: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+    };
+};
+/** P1–P4 aggregates schema shared by the ATC tools (list/run/result). */
+export declare const ATC_AGGREGATES_SCHEMA: {
+    readonly type: "object";
+    readonly additionalProperties: false;
+    readonly properties: {
+        readonly priority1: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+        readonly priority2: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+        readonly priority3: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+        readonly priority4: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+        readonly failures: {
+            readonly type: "integer";
+            readonly required: true;
+        };
+    };
+};
+/** Map a protocol ATC finding to the tools' output shape. */
+export declare function atcFindingOutput(f: {
+    checkTitle: string;
+    severity: string;
+    message: string;
+    objectName: string;
+    locationUri?: string;
+    uri?: string;
+    line?: number;
+    check?: string;
+}): AtcFindingOutput;
+/**
+ * Render ATC findings, making the include↔line mapping visible: backends
+ * often report findings under the MAIN program name while `line` counts in
+ * the INCLUDE — when the finding's URI names a different object, say so.
+ */
+export declare function renderAtcFindings(findings: AtcFindingOutput[]): string[];
+/** Render the P1–P4 aggregates suffix (empty when no aggregates are present). */
+export declare function atcAggregatesSuffix(aggregates?: {
+    priority1: number;
+    priority2: number;
+    priority3: number;
+    priority4: number;
+}): string;
 /** Attribute the effective transport to its source (user-passed vs lock-assigned). */
 export declare function transportSourceOf(effectiveTransport: string | undefined, userTransport: string | undefined): 'user' | 'auto' | undefined;
 /** Parameter spec for the destination selector used by every tool. */
@@ -123,6 +249,14 @@ export declare const NAME_TYPE_OBJECTS_PARAM: {
 };
 /** Pull the destination param value out of raw args. */
 export declare function destinationOf(args: Record<string, unknown>): string | undefined;
+/**
+ * The session workspace directory of a tool execution
+ * (`exec.agent.session.header.cwd` — the same seam dsh-tool-fs/bash/pwsh
+ * use), falling back to undefined. Workspace-layer destination resolution
+ * (see registry.ts `viewFor`) keys off this, so `adt_*` calls see the
+ * `<cwd>/.dsh-abap-adt/destinations.yaml` of the session that made them.
+ */
+export declare function sessionCwd(exec: unknown): string | undefined;
 /** A raw arg as a non-empty string, else `undefined`. */
 export declare function optStr(value: unknown): string | undefined;
 /** Extract the `objectUri`/`name`/`type` reference args of a tool call. */

@@ -6,7 +6,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
 
 export function whereUsedTools(deps: ToolDeps) {
   const { registry } = deps;
@@ -65,7 +65,7 @@ export function whereUsedTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const ref = await resolveToolObject(entry.client, args, exec.signal);
       try {
         const result = await entry.client.getWhereUsed(ref.uri, { enableAllTypes: args.enableAllTypes === true, signal: exec.signal });

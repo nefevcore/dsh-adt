@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/badge/license-MIT-green)](https://github.com/nefevcore/dsh-adt)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
-Agent-native SAP ABAP access for the [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that registers **35 `adt_*` tools** speaking the ADT REST protocol directly — no SAP libraries, no IDE required (headless). An AI agent gets the full development loop: **search → read → edit → activate → unit test → ATC → transport → execute → error analysis**, plus agent-scale capabilities (protocol-level `$batch`, DDIC structured editors, conflict-checked local snapshots, source export to local `.abap`, offline abaplint, release gates). Releasing a transport is deliberately left to humans — the agent stages everything up to a releasable request.
+Agent-native SAP ABAP access for the [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that registers **37 `adt_*` tools** speaking the ADT REST protocol directly — no SAP libraries, no IDE required (headless). An AI agent gets the full development loop: **search → read → edit → activate → unit test → ATC → transport → execute → error analysis**, plus agent-scale capabilities (protocol-level `$batch`, DDIC structured editors, conflict-checked local snapshots, source export to local `.abap`, offline abaplint, release gates) and conversational destination management (create connections from the local SAP GUI list by just chatting). Releasing a transport is deliberately left to humans — the agent stages everything up to a releasable request.
 
 Looking for more DSH plugins? Browse the [`dsh-plugin`](https://github.com/topics/dsh-plugin) topic on GitHub (this plugin is listed there).
 
@@ -70,27 +70,34 @@ The appended row (for a manual setup):
   name: '@nefevcore/abap-adt-dsh-plugin'
   config:
     demo: true              # built-in mock destination — no SAP system needed
-    # destinations / permission policy belong in settings.yaml `abap-adt:` (see below)
+    # destinations live in the session WORKSPACE file
+    # <workspace>/.dsh-abap-adt/destinations.yaml (see below); global fallbacks
+    # and permission policy in settings.yaml `abap-adt:`
 ```
 
 A ready-to-share manual template lives at [`presets/abap-adt.example/`](../presets/abap-adt.example/README.md) in the repository.
 
 ## Config layering
 
-The composition file (`agent.cordis.yml` / `cordis.patch.yml`) defines the whole toolset and should stay stable; environment-specific settings live in a separate file. Effective values resolve nearest-wins:
+The composition file (`agent.cordis.yml` / `cordis.patch.yml`) defines the whole toolset and should stay stable; environment-specific settings live in separate files. Effective values resolve nearest-wins:
 
 ```
-1. inline config of the plugin row   (agent preset / cordis.patch.yml)
-2. external file — `configFile`, auto-discovered at ${DSH_HOME:-~/.dsh}/abap-adt.yml
-3. SAP_* environment variables       (permission policy only)
-4. built-in defaults                 (demo on, port 8123, no destinations)
+1. inline config of the plugin row        (agent preset / cordis.patch.yml)
+2. legacy file ${DSH_HOME:-~/.dsh}/abap-adt.yml (deprecated, warns)
+3. settings.yaml `abap-adt:` user section (global user layer, hot-applies)
+4. explicit `configFile`                  (team-shared global override)
+5. WORKSPACE file <session cwd>/.dsh-abap-adt/destinations.yaml — nearest layer,
+   resolved per tool call (destinations / defaultDestination / policy keys)
+6. SAP_* environment variables            (permission policy only, when unset above)
 ```
 
-`destinations` merge by `name` (a same-name inline entry replaces the file entry), so a shipped `destinations: []` never masks the file. Typos and malformed YAML in the external file fail loudly with the path; a missing explicitly-configured `configFile` logs a warning and falls back to inline config.
+`destinations` merge by `name` (a same-name entry in a nearer layer replaces the lower one), so a shipped `destinations: []` never masks another layer. Typos and malformed YAML in any file fail loudly with the path; a missing explicitly-configured `configFile` logs a warning and falls back.
 
 ## Connecting real SAP systems
 
-Put destinations and the optional permission policy in `~/.dsh/abap-adt.yml`:
+Preferred: per-workspace config, created conversationally. Just ask the agent — "create the impc connection" — and it will search the **local SAP GUI (SAP Logon) landscape** (`adt_list_gui_connections`), offer the matches for you to pick, then write the destination (`adt_create_destination`, importing client/language/username from the GUI entry and deriving the URL via the SAP port convention `https://<host>:443<nn>`). No GUI installed? The agent asks for `url / client / username` and creates it from explicit fields. Pass the password in the conversation and it is stored in the **DSH credential store** (`~/.dsh/.credentials.yaml`, referenced via `passwordEnv` — never written to destinations.yaml); plaintext in the file only when no credential service is mounted or `passwordInFile: true`.
+
+Or hand-write `<workspace>/.dsh-abap-adt/destinations.yaml`:
 
 ```yaml
 defaultDestination: dev
@@ -119,9 +126,9 @@ destinations:
 
 Inspect the effective policy at runtime with the `adt_permissions` tool.
 
-## Tool family (35 tools)
+## Tool family (37 tools)
 
-System & connections (`adt_list_destinations`, `adt_system_info`, `adt_ping`, `adt_permissions`) · search & browse (`adt_search`, `adt_package_content`, `adt_where_used`) · source (`adt_read_object` with local snapshot, `adt_write_object`, `adt_edit_object`, `adt_push_object`, `adt_create_object`, `adt_delete_object`) · structured editors (`adt_read_structure`, `adt_write_structure` — MSAG/DOMA/DTEL/TTYP) · lifecycle (`adt_activate`, `adt_check`, `adt_lock_info`, `adt_unlock_all`) · testing (`adt_run_unit_tests`, `adt_run_atc`, `adt_list_atc_runs`, `adt_get_atc_result`) · transports (`adt_object_versions`, `adt_list_transports`, `adt_get_transport` — release is intentionally not exposed) · data (`adt_data_preview` with offset/length window) · versions (`adt_version_diff`) · batch/local (`adt_batch`, `adt_release_gate`, `adt_export_objects`, `adt_local_check`) · execution & errors (`adt_execute`, `adt_list_dumps`, `adt_get_dump`).
+System & connections (`adt_list_destinations`, `adt_list_gui_connections`, `adt_create_destination`, `adt_system_info`, `adt_ping`, `adt_permissions`) · search & browse (`adt_search`, `adt_package_content`, `adt_where_used`) · source (`adt_read_object` with local snapshot, `adt_write_object`, `adt_edit_object`, `adt_push_object`, `adt_create_object`, `adt_delete_object`) · structured editors (`adt_read_structure`, `adt_write_structure` — MSAG/DOMA/DTEL/TTYP) · lifecycle (`adt_activate`, `adt_check`, `adt_lock_info`, `adt_unlock_all`) · testing (`adt_run_unit_tests`, `adt_run_atc`, `adt_list_atc_runs`, `adt_get_atc_result`) · transports (`adt_object_versions`, `adt_list_transports`, `adt_get_transport` — release is intentionally not exposed) · data (`adt_data_preview` with offset/length window) · versions (`adt_version_diff`) · batch/local (`adt_batch`, `adt_release_gate`, `adt_export_objects`, `adt_local_check`) · execution & errors (`adt_execute`, `adt_list_dumps`, `adt_get_dump`).
 
 Full documentation: [dsh-adt repository](https://github.com/nefevcore/dsh-adt).
 

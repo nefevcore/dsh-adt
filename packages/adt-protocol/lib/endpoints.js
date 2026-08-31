@@ -113,7 +113,7 @@ export const ENDPOINTS = {
         DOMA: (query) => `${ADT_BASE}/ddic/domains${toQuery(query)}`,
         DTEL: (query) => `${ADT_BASE}/ddic/dataelements${toQuery(query)}`,
         TTYP: (query) => `${ADT_BASE}/ddic/tabletypes${toQuery(query)}`,
-        MSAG: (query) => `${ADT_BASE}/msgclass${toQuery(query)}`,
+        MSAG: (query) => `${ADT_BASE}/messageclass${toQuery(query)}`,
         DEVC: (query) => `${ADT_BASE}/packages${toQuery(query)}`,
     },
     /** Modern deletion service (POST + `del:deletionRequest` body). */

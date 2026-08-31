@@ -1,6 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
 
 export function transportTools(deps: ToolDeps) {
   const { registry } = deps;
@@ -54,7 +54,7 @@ export function transportTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       // The feed reveals transport request numbers (audit P3 information
       // leak): same gate as the rest of the transport tool family.
       entry.policy.assertTransportsEnabled('adt_object_versions');
@@ -167,7 +167,7 @@ export function transportTools(deps: ToolDeps) {
     output: transportOutput,
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       entry.policy.assertTransportsEnabled('adt_list_transports');
       const transports = await entry.client.listTransports({
         allUsers: args.allUsers === true,
@@ -253,7 +253,7 @@ export function transportTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       // Read-only: the transport FAMILY gate still applies, but the request
       // number itself is not policed — only edits (write/activate/release of
       // content) are constrained by allowedTransports.

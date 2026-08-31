@@ -22,7 +22,7 @@ import {
   type AdtStructureChanges,
   type AdtStructureKind,
 } from '@nefevcore/abap-adt-protocol';
-import {
+import { sessionCwd,
   DESTINATION_PARAM,
   OBJECT_REF_PARAMS,
   PACKAGE_HINT_PARAM,
@@ -155,9 +155,20 @@ export function structureTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
-      const ref = await resolveToolObject(entry.client, args, exec.signal);
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const explicit = optStr(args.kind) as AdtStructureKind | undefined;
+      // Resolve with the STRUCTURE KIND as the type hint when the caller gave
+      // no explicit type: same-name DDIC objects commonly exist in several
+      // categories (CHAR10 is BOTH a domain and a data element) and the bare
+      // exact-name search then returns whichever hit is first — reading a
+      // DTEL URI with the DOMA media type fails 406 on real backends.
+      // `kind` is exactly the type code TYPE_MAP knows for these categories.
+      const effectiveType = optStr(args.type) ?? (explicit && KINDS.includes(explicit) ? explicit : undefined);
+      const ref = await resolveToolObject(
+        entry.client,
+        { ...args, ...(effectiveType ? { type: effectiveType } : {}) },
+        exec.signal,
+      );
       const kind = explicit && KINDS.includes(explicit) ? explicit : (ref.type.split('/')[0] as AdtStructureKind);
       if (!KINDS.includes(kind)) {
         throw new Error(
@@ -276,9 +287,16 @@ export function structureTools(deps: ToolDeps) {
     // each with its own deadline) + activation headroom.
     timeoutMs: 180_000,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
-      const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_write_structure' });
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const explicit = optStr(args.kind) as AdtStructureKind | undefined;
+      // Same kind-as-type resolution as adt_read_structure (see there).
+      const effectiveType = optStr(args.type) ?? (explicit && KINDS.includes(explicit) ? explicit : undefined);
+      const ref = await resolveToolObject(
+        entry.client,
+        { ...args, ...(effectiveType ? { type: effectiveType } : {}) },
+        exec.signal,
+        { strict: true, toolName: 'adt_write_structure' },
+      );
       const kind = explicit && KINDS.includes(explicit) ? explicit : (ref.type.split('/')[0] as AdtStructureKind);
       if (!KINDS.includes(kind)) {
         throw new Error(

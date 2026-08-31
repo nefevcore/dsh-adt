@@ -13,7 +13,7 @@
  * switch for read-only destinations).
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, destinationOf, optStr, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, destinationOf, optStr, text, type ToolDeps } from './common.js';
 
 /** Console output beyond this is truncated in the tool output (audit P3:
  * an endless WRITE loop used to flood the whole context). */
@@ -70,7 +70,7 @@ export function executeTools(deps: ToolDeps) {
       // run call, so no multi-round-trip budget is needed.
       timeoutMs: 330_000,
       execute: async (args, exec) => {
-        const entry = registry.require(destinationOf(args));
+        const entry = await registry.require(destinationOf(args), sessionCwd(exec));
         // Policy is read at call time so a settings hot reload applies immediately.
         entry.policy.assertExecutionAllowed('adt_execute');
 

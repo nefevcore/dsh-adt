@@ -12,7 +12,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
 
 /** `YYYYMMDD` / `YYYYMMDDHHMMSS` sanity for the time-range filters. */
 function normalizeStamp(value: string, label: string): string {
@@ -69,7 +69,10 @@ export function dumpTools(deps: ToolDeps) {
       render: (_args, value) => {
         const lines = [`Runtime dumps (${value.count}):`];
         for (const d of value.dumps) {
-          lines.push(`- [${d.title}] ${d.id}${d.updatedAt ? ` @ ${d.updatedAt}` : ''}${d.user ? ` by ${d.user}` : ''}`);
+          // The compound dump id CONTAINS SPACES (timestamp + host + user +
+          // client + sequence). Quote it so the id's boundaries are obvious
+          // and the full key survives copy/paste into adt_get_dump.
+          lines.push(`- [${d.title}] id="${d.id}"${d.updatedAt ? ` @ ${d.updatedAt}` : ''}${d.user ? ` by ${d.user}` : ''}`);
           if (d.category) lines.push(`    ${d.category}`);
         }
         if (value.dumps.length === 0) lines.push('(no dumps match the filters — a clean system or wrong user/range)');
@@ -79,7 +82,7 @@ export function dumpTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const clamp = clampWithNote(Number(args.top ?? 20), 1, 100, 'top');
       const skip = Math.max(Number(args.skip ?? 0) || 0, 0);
       const notes: string[] = [];
@@ -158,10 +161,12 @@ export function dumpTools(deps: ToolDeps) {
           },
           raw: { type: 'string', description: 'Raw body (summary/formatted views; truncated beyond 8k chars).' },
           rawTruncated: { type: 'boolean', description: 'true when the raw view was cut at the 8k-char cap.' },
+          note: { type: 'string', description: 'Provenance note (e.g. formatted-view fallback).' },
         },
       },
       render: (_args, value) => {
         const lines = [`Dump ${value.id}${value.title ? ` — ${value.title}` : ''} (view: ${value.view})`];
+        if (value.note) lines.push(`Note: ${value.note}`);
         if (value.raw !== undefined) {
           lines.push('', value.raw);
           if (value.rawTruncated) lines.push('… (raw view truncated)');
@@ -173,11 +178,26 @@ export function dumpTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const dumpId = String(args.dumpId ?? '').trim();
       if (!dumpId) throw new Error('adt_get_dump: `dumpId` is required (from adt_list_dumps)');
       const view = (optStr(args.view) ?? 'default') as 'default' | 'summary' | 'formatted';
-      const detail = await entry.client.getDump(dumpId, { view, signal: exec.signal });
+      let detail = await entry.client.getDump(dumpId, { view, signal: exec.signal });
+      let note: string | undefined;
+      // Restricted ADT profiles (verified on an S/4HANA sandbox) serve the
+      // default view as a METADATA-ONLY document — root attributes plus a
+      // chapter index; all human-readable analysis lives in /formatted.
+      // Detect that shape and transparently fall back so the caller always
+      // gets the actual error analysis.
+      if (view === 'default' && detail.sections.length === 0 && detail.raw === undefined) {
+        const fallback = await entry.client
+          .getDump(dumpId, { view: 'formatted', signal: exec.signal })
+          .catch(() => undefined);
+        if (fallback) {
+          detail = fallback;
+          note = 'default view carries only metadata on this backend — fell back to the formatted (plain-text) view';
+        }
+      }
       // ST22 raw views can be enormous — cap what enters the context (audit P3).
       const MAX_RAW_CHARS = 8_000;
       const raw = detail.raw;
@@ -189,6 +209,7 @@ export function dumpTools(deps: ToolDeps) {
         sections: detail.sections.map((s) => ({ name: s.name, value: s.value })),
         raw: raw === undefined ? undefined : truncated ? raw.slice(0, MAX_RAW_CHARS) : raw,
         rawTruncated: truncated || undefined,
+        note,
       };
     },
   });

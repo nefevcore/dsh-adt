@@ -9,7 +9,7 @@
  * a handle-less unlock on backends that accept it.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
 import { resolveObjects } from '../resolve.js';
 
 export function lockTools(deps: ToolDeps) {
@@ -51,7 +51,7 @@ export function lockTools(deps: ToolDeps) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const ref = await resolveToolObject(entry.client, args, exec.signal);
       const info = await entry.client.getObjectLock(ref.uri, ref.type, { signal: exec.signal });
       return {
@@ -142,7 +142,7 @@ export function lockTools(deps: ToolDeps) {
       },
     },
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const destination = entry.config.name;
 
       // Candidate URIs: explicit objects + every ledger entry for the destination.

@@ -10,7 +10,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, } from './common.js';
 import { refFromName } from '../resolve.js';
 /** True when the backend answers GET on the object URI (object exists). */
 async function objectExists(client, uri) {
@@ -75,7 +75,7 @@ export function objectTools(deps) {
             ].join('\n')),
         },
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const packageName = String(args.packageName ?? '$TMP').toUpperCase();
             // Permission check: package whitelist + transportable-edit rule.
             entry.policy.assertEditAllowed(packageName, 'adt_create_object');
@@ -221,7 +221,7 @@ export function objectTools(deps) {
                 (value.transport ? ` (recorded in transport ${value.transport})` : '')),
         },
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const ref = await resolveToolObject(entry.client, args, exec.signal, { strict: true, toolName: 'adt_delete_object' });
             await assertObjectEditable(entry, ref, {
                 toolName: 'adt_delete_object',

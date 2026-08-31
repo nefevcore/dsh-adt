@@ -119,7 +119,7 @@ test('M5: the demo destination uses the same credentials as the mock server', as
   let registry: AdtRegistry | undefined;
   try {
     registry = await AdtRegistry.create({ ...builtinDefaults(), demo: true, demoPort: 0 });
-    const entry = registry.require();
+    const entry = await registry.require();
     assert.equal(entry.mock, true);
     const auth = entry.config.auth as { type: string; username?: string; password?: string };
     assert.equal(auth.type, 'basic');

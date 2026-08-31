@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, OBJECTS_PARAM, destinationOf, requireObjectList, text } from './common.js';
+import { sessionCwd, ATC_AGGREGATES_SCHEMA, ATC_COUNTS_SCHEMA, ATC_FINDINGS_SCHEMA, atcAggregatesSuffix, atcFindingOutput, renderAtcFindings, DESTINATION_PARAM, OBJECTS_PARAM, destinationOf, requireObjectList, text, } from './common.js';
 import { resolveObjects } from '../resolve.js';
 export function testingTools(deps) {
     const { registry } = deps;
@@ -69,7 +69,7 @@ export function testingTools(deps) {
         // client deadline (default 60s), this is the total budget + margin.
         timeoutMs: 330_000,
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const refs = await resolveObjects(entry.client, requireObjectList(args, 'adt_run_unit_tests'), exec.signal);
             const result = await entry.client.runUnitTests(refs, { signal: exec.signal });
             return {
@@ -113,71 +113,25 @@ export function testingTools(deps) {
                 additionalProperties: false,
                 properties: {
                     clean: { type: 'boolean', required: true },
-                    findings: {
-                        type: 'array',
-                        required: true,
-                        items: {
-                            type: 'object',
-                            additionalProperties: false,
-                            properties: {
-                                checkTitle: { type: 'string', required: true },
-                                severity: { type: 'string', required: true },
-                                message: { type: 'string', required: true },
-                                objectName: { type: 'string', required: true },
-                                uri: {
-                                    type: 'string',
-                                    description: 'URI of the object the `line` refers to (often an include while objectName is the main program).',
-                                },
-                                line: { type: 'integer' },
-                                check: { type: 'string' },
-                            },
-                        },
-                    },
-                    counts: {
-                        type: 'object',
-                        required: true,
-                        additionalProperties: false,
-                        properties: {
-                            INFO: { type: 'integer', required: true },
-                            WARNING: { type: 'integer', required: true },
-                            ERROR: { type: 'integer', required: true },
-                            CRITICAL: { type: 'integer', required: true },
-                            CATASTROPHIC: { type: 'integer', required: true },
-                        },
-                    },
+                    findings: ATC_FINDINGS_SCHEMA,
+                    counts: ATC_COUNTS_SCHEMA,
                     durationMs: { type: 'integer', required: true },
                     variant: { type: 'string' },
                     displayId: { type: 'string', description: 'Result display id — pass to adt_get_atc_result to re-fetch.' },
                     title: { type: 'string' },
                     checkVariant: { type: 'string' },
-                    aggregates: {
-                        type: 'object',
-                        additionalProperties: false,
-                        properties: {
-                            priority1: { type: 'integer', required: true },
-                            priority2: { type: 'integer', required: true },
-                            priority3: { type: 'integer', required: true },
-                            priority4: { type: 'integer', required: true },
-                            failures: { type: 'integer', required: true },
-                        },
-                    },
+                    aggregates: ATC_AGGREGATES_SCHEMA,
                 },
             },
             render: (_args, value) => {
-                const agg = value.aggregates
-                    ? ` (P1 ${value.aggregates.priority1}, P2 ${value.aggregates.priority2}, P3 ${value.aggregates.priority3}, P4 ${value.aggregates.priority4})`
-                    : '';
                 const lines = [
                     `ATC: ${value.clean ? 'CLEAN' : 'findings found'} — ` +
                         `INFO ${value.counts.INFO}, WARNING ${value.counts.WARNING}, ERROR ${value.counts.ERROR}, ` +
-                        `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC} (${value.durationMs} ms)${agg}` +
+                        `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC} (${value.durationMs} ms)` +
+                        atcAggregatesSuffix(value.aggregates) +
                         `${value.displayId ? `\nResult displayId: ${value.displayId} (use adt_get_atc_result to re-fetch)` : ''}`,
+                    ...renderAtcFindings(value.findings),
                 ];
-                for (const f of value.findings) {
-                    const uriBase = f.uri ? f.uri.replace(/\/source\/main.*$/, '').split('/').pop()?.split('.')[0] : undefined;
-                    const inInclude = uriBase && uriBase.toUpperCase() !== f.objectName.toUpperCase() ? ` (in ${uriBase})` : '';
-                    lines.push(`- [${f.severity}] ${f.objectName}${inInclude}${f.line ? `:${f.line}` : ''} — ${f.checkTitle}: ${f.message}`);
-                }
                 return text(lines.join('\n'));
             },
         },
@@ -185,7 +139,7 @@ export function testingTools(deps) {
         // backends (full variant execution) and poll with the same loop shape.
         timeoutMs: 660_000,
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const refs = await resolveObjects(entry.client, requireObjectList(args, 'adt_run_atc'), exec.signal);
             const result = await entry.client.runAtc(refs, {
                 variant: typeof args.variant === 'string' ? args.variant : undefined,
@@ -193,15 +147,7 @@ export function testingTools(deps) {
             });
             return {
                 clean: result.clean,
-                findings: result.findings.map((f) => ({
-                    checkTitle: f.checkTitle,
-                    severity: f.severity,
-                    message: f.message,
-                    objectName: f.objectName,
-                    uri: f.locationUri || f.uri || undefined,
-                    line: f.line,
-                    check: f.check,
-                })),
+                findings: result.findings.map(atcFindingOutput),
                 counts: result.counts,
                 durationMs: result.durationMs,
                 variant: result.variant,

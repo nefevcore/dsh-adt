@@ -144,7 +144,7 @@ export const ENDPOINTS = {
     DOMA: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/domains${toQuery(query)}`,
     DTEL: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/dataelements${toQuery(query)}`,
     TTYP: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/tabletypes${toQuery(query)}`,
-    MSAG: (query?: AdtQueryParams) => `${ADT_BASE}/msgclass${toQuery(query)}`,
+    MSAG: (query?: AdtQueryParams) => `${ADT_BASE}/messageclass${toQuery(query)}`,
     DEVC: (query?: AdtQueryParams) => `${ADT_BASE}/packages${toQuery(query)}`,
   },
 

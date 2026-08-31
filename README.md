@@ -2,10 +2,10 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-194-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-222-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
-> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **35 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, conflict-checked local snapshots, local export, offline abaplint). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system.
+> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **37 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, conflict-checked local snapshots, local export, offline abaplint) and conversational destination management (create connections from the local SAP GUI list by just chatting). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system.
 
 在 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 上直接访问 SAP ABAP 系统的插件与协议客户端。
 
@@ -35,7 +35,7 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 
 ②生成的预设：复制 `standard` 预设（完整编码代理、不含插件开发工具集）到 `~/.dsh/.agent-presets/abap-adt/`，追加插件行并剔除源里可能携带的 `tool-cordis` / `skill-filesystem` 行；刻意不复制部署默认预设——默认为 `cordis` 时会带入 `tool-cordis`（其 Host Cordis inspect provider 与活动 cordis 会话冲突），需要时 `--from` 可覆盖。支持 `--id/--from/--name/--force/--dry-run`。重启 DSH 后新建会话，在预设 chip 选「ABAP Development」即可。手工建预设的说明见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md)。
 
-DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更走 DSH settings，免重启热生效。连接真实系统的 `destinations` 与权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
+DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更免重启热生效——连接真实系统的 `destinations` 推荐放**工作区配置** `<工作区>/.dsh-abap-adt/destinations.yaml`（对话式创建见下），全局兜底/权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
 ### 从 0.1.0 升级
 
@@ -59,7 +59,8 @@ dsh plugin --profile web exec abap-adt-preset --force
 
 ## 核心能力
 
-- **代理原生工具**：35 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **代理原生工具**：37 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **对话式建连接**：`adt_create_destination` / `adt_list_gui_connections` —— 直接说"帮我建 impc 的连接"，代理搜索本机 SAP GUI 连接列表让你挑（或问你要 url/账号），一条对话写好**工作区配置文件** `.dsh-abap-adt/destinations.yaml`；密码默认存入 DSH 凭证文件 `~/.dsh/.credentials.yaml`（配置只留引用），下一次调用即生效
 - **冲突安全编辑（OCC）**：`adt_read_object` 默认在本地留对象快照（含服务端内容哈希）；`adt_edit_object` 对**你读到的快照**做确定性匹配，上传前在持锁状态下哈希校验服务端未变——他人改动 → `[CONFLICT]` 显式拒绝而非静默错配；也可直接编辑本地快照文件后用 `adt_push_object` 校验上传（pull→edit→push）
 - **错误分析**：`adt_list_dumps` / `adt_get_dump` 直接读取 ABAP 短转储（ST22）做排障闭环
 - **代码执行**：`adt_execute` 运行可执行程序 / `if_oo_adt_classrun` 类并取回控制台输出
@@ -79,37 +80,48 @@ dsh plugin --profile web exec abap-adt-preset --force
 
 > 列出 ADT 目的地 → 搜索 ZCL_DEMO → 读取其源码 → 修改它 → 激活 → 跑它的单元测试和 ATC → 用 adt_package_content 拿到对象清单 → 导出这些对象到本地 → 本地静态检查导出的源码
 
-连真实系统：在 `~/.dsh/settings.yaml` 增加 `abap-adt:` 段（保存即热生效，无需重启）：
+连真实系统（推荐）：**工作区配置 + 对话式创建**。每个项目工作区自带一份 `.dsh-abap-adt/destinations.yaml`（与代码一起进 git/评审），直接对代理说：
+
+> 帮我创建 impc 的连接配置
+
+代理会先调 `adt_list_gui_connections` 搜索**本机 SAP GUI（SAP Logon）**的连接列表——找得到就把匹配项（名称 / SID / 集团 / 推导 URL）列出来让你挑，挑定后 `adt_create_destination` 从 GUI 条目导入（集团/语言/用户自动带出，URL 按 SAP 端口约定 `https://<host>:443<nn>` 推导）；本机没有 GUI 或想手填时，代理会问你要 `url / client / username`，然后用显式字段创建。密码也直接说：默认存进 DSH 凭证文件 `~/.dsh/.credentials.yaml`（引用名 `ADT_<目的地名大写>_PASSWORD` 或 `passwordEnv` 指定，destinations.yaml 只留引用不落明文）；也可以自己维护该凭证文件或环境变量。
+
+手写也行——在工作区根目录建 `.dsh-abap-adt/destinations.yaml`（保存即热生效，无需重启）：
 
 ```yaml
-abap-adt:
-  defaultDestination: dev
-  destinations:
-    - name: dev
-      url: https://sap.example.com:443     # ABAP 前端的 HTTP(S) 地址
-      client: '100'                        # 集团
-      language: EN
-      username: DEVELOPER
-      passwordEnv: ADT_DEV_PASSWORD        # 从环境变量读密码（推荐）
-      strictSSL: false                     # 自签名证书（SAP 内网常见）时必须关
+defaultDestination: dev
+destinations:
+  - name: dev
+    url: https://sap.example.com:44301    # ABAP 前端的 HTTP(S) 地址
+    client: '100'                        # 集团
+    language: EN
+    username: DEVELOPER
+    passwordEnv: ADT_DEV_PASSWORD        # 从环境变量读密码（推荐）
+    strictSSL: false                     # 自签名证书（SAP 内网常见）时必须关
 ```
+
+> 工作区文件是**本会话工作区私有的最近覆盖层**：同名目的地覆盖全局配置，`defaultDestination` / 权限键就近生效。全局共享配置（所有工作区通用的兜底目的地、权限策略）仍走 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
 ### 配置分层（config layering）
 
-配置走 **DSH settings**：插件把自身的配置 schema 注册为 `abap-adt` 命名空间，插件行的内联 config 是 composition base，`~/.dsh/settings.yaml` 的 `abap-adt:` 段是用户层——**保存即热生效**（目的地表与权限策略原地重建，无需重启 DSH）。生效值**就近覆盖**：
+配置分**全局层（DSH settings）**与**工作区层**两段：插件把自身的配置 schema 注册为 `abap-adt` 命名空间，插件行的内联 config 是 composition base，`~/.dsh/settings.yaml` 的 `abap-adt:` 段是用户层——**保存即热生效**（目的地表与权限策略原地重建，无需重启 DSH）。工作区层是**每次工具调用时**按会话工作目录叠加的（预设挂载跨会话共享，所以按调用就近解析）。生效值**就近覆盖**：
 
 ```
 ① schema 默认值                              （demo 开、8123、defaultDestination=demo、无目的地）
 ② 插件行内联 config                          （agent preset / cordis.patch.yml —— composition base）
 ③ 旧版独立文件 ~/.dsh/abap-adt.yml            （已废弃，仅迁移期兼容，出现即告警）
-④ settings.yaml 的 abap-adt: 用户段           （用户覆盖层）
-⑤ 显式 configFile（团队共享，最权威）          （路径可来自 ②-④ 任一层；~ 展开、相对路径锚定 dsh home）
-⑥ SAP_* 环境变量                              （仅权限六开关，且仅在 ①-⑤ 均未设置时生效）
+④ settings.yaml 的 abap-adt: 用户段           （全局用户覆盖层）
+⑤ 显式 configFile（团队共享）                  （路径可来自 ②-④ 任一层；~ 展开、相对路径锚定 dsh home）
+⑥ 工作区文件 <会话工作区>/.dsh-abap-adt/destinations.yaml
+                                             （最近层：同名目的地覆盖以上全部、可设 defaultDestination
+                                              与权限键；按调用热生效，adt_create_destination 写这里）
+⑦ SAP_* 环境变量                              （仅权限六开关，且仅在 ①-⑥ 均未设置时生效）
 ```
 
 - `destinations` 跨层按名字合并：高层的同名条目覆盖低层，新名字追加——随包发布的 `destinations: []` 永远不会挡住其他层
-- settings 段/共享文件写错键名会**明确报错**（含路径与未知键名）；显式指定的 `configFile` 不存在则告警并跳过该层
-- 密码在 schema 中标记为 secret（settings 展示时自动脱敏）；解析优先级 `config.password` > `passwordEnv` 指定变量 > `ADT_<NAME>_PASSWORD` > `ADT_PASSWORD`。**切勿把密码明文写进任何配置。**
+- settings 段/共享文件/工作区文件写错键名会**明确报错**（含路径与未知键名）；显式指定的 `configFile` 不存在则告警并跳过该层
+- 工作区层只认 `destinations` / `defaultDestination` / 权限六开关（`demo`、`demoPort`、`configFile` 属全局层）；文件格式与其他层完全一致，也可含按目的地的 `policy:` 块
+- 密码在 schema 中标记为 secret（settings 展示时自动脱敏）；解析优先级 `config.password` > `passwordEnv` 指定的**凭证引用**（DSH 按层解析：进程环境变量 > `~/.dsh/.credentials.yaml` 凭证文件 > `.env`，每次工具调用实时解析，改完即生效）> `ADT_PASSWORD`。**切勿把密码明文写进任何配置**——对话里直接把密码告诉代理即可：`adt_create_destination` 会把它存进 DSH 凭证文件（`~/.dsh/.credentials.yaml`），destinations.yaml 只留 `passwordEnv` 引用；仅在未挂载凭证服务或显式 `passwordInFile: true` 时才明文落盘（避免提交该文件）
 - 未挂载 settings 服务或 dsh-fs 的精简 profile 自动降级：仅用插件行 config 解析，行为与组合时一致；文件系统能力（源码快照 / export / push / `sourceFile` / 本地检查）缺失时明确报错，其余 `adt_*` 工具不受影响
 
 认证说明：
@@ -120,7 +132,7 @@ abap-adt:
 
 所有会**修改 SAP 系统状态**的工具（`adt_write_object` / `adt_create_object` / `adt_delete_object` / `adt_activate` / `adt_write_structure` / 传输工具族）在执行前都会经过**目标目的地**的权限策略（`src/policy.ts`），不满足即抛 `[POLICY]` 错误并指明具体规则。只读工具（搜索/读取/检查/测试/ATC/导出/查看传输请求/转储分析）不受限制——`allowedTransports` 只约束编辑类操作引用的传输号，读取任意请求详情不受该开关限制。两个高危能力各有独立开关：`adt_execute`（执行任意 ABAP，`allowExecution`）与 `adt_batch` 的写部分（`allowBatchWrites`，默认关）。
 
-六个独立开关支持**全局默认 + 按目的地覆盖**：顶层键是全局默认，每个 destination 可用自己的 `policy:` 块逐键覆盖（如生产系统只读、开发系统放开）。全局键生效值优先级为 **settings 用户段/共享文件 > 插件行内联 config > `SAP_*` 环境变量 > 内置默认值**（详见上方「配置分层」）：
+六个独立开关支持**全局默认 + 按目的地覆盖**：顶层键是全局默认，每个 destination 可用自己的 `policy:` 块逐键覆盖（如生产系统只读、开发系统放开）。全局键生效值优先级为 **工作区文件 > settings 用户段/共享文件 > 插件行内联 config > `SAP_*` 环境变量 > 内置默认值**（详见上方「配置分层」；工作区文件的顶层权限键只作用于该文件中的目的地）：
 
 | 开关 | config 键 | 环境变量 | 默认 | 含义 |
 |---|---|---|---|---|
@@ -177,7 +189,7 @@ abap-adt:
 
 ## 测试
 
-共 **194 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退——源自 impc-dev/D01 实战反馈）。
+共 **222 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**密码分层解析**（明文 > DSH 凭证服务 > 进程环境变量）、**工作区配置层**（叠加合并/默认目的地/权限键/客户端复用/原子写）、**SAP GUI 连接发现**（SAPUILandscape.xml 解析：直连/引用/负载均衡/Include/经典 ini 回退/多词搜索）与 **adt_create_destination 工具流**（GUI 导入/手工创建/覆盖保护/密码入凭证文件或明文回退）、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退——源自 impc-dev/D01 实战反馈）。
 
 ## 路线图（可扩展方向）
 

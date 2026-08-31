@@ -2,12 +2,48 @@ import { AdtClient } from '@nefevcore/abap-adt-protocol';
 import { createMockAdtServer } from '@nefevcore/abap-adt-mock';
 import { resolvePassword } from './config.js';
 import { AdtPolicy } from './policy.js';
+import { WorkspaceConfigStore, upsertDestination } from './workspace.js';
+/** Policy keys a workspace file may set at its top level (defaults for ITS destinations). */
+const POLICY_INPUT_KEYS = [
+    'enableTransports',
+    'allowedTransports',
+    'allowTransportableEdits',
+    'allowedPackages',
+    'allowExecution',
+    'allowBatchWrites',
+];
+/** Small non-crypto hash so passwords never sit in a cache key string. */
+function hashSecret(value) {
+    let hash = 5381;
+    for (let i = 0; i < value.length; i++)
+        hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
+    return hash.toString(36);
+}
+/** Cap for cached workspace-layer clients (per-config-key AdtClient reuse). */
+const CLIENT_CACHE_CAP = 64;
+/** Stable cache key over everything that shapes a built destination entry. */
+function clientCacheKey(dest, inputs, password) {
+    return JSON.stringify({
+        n: dest.name,
+        u: dest.url,
+        c: dest.client,
+        l: dest.language,
+        un: dest.username,
+        pe: dest.passwordEnv,
+        pw: hashSecret(password),
+        ssl: dest.strictSSL,
+        t: dest.timeoutMs,
+        pol: dest.policy,
+        gi: inputs,
+    });
+}
 /**
  * Owns the configured destinations and their live ADT clients. Also starts
  * the in-process mock ADT server when `demo` is enabled, so the whole tool
  * family works out of the box without any SAP system.
  */
 export class AdtRegistry {
+    credentialResolver;
     destinations = new Map();
     /** Effective permission policy (config > SAP_* env > defaults); swapped by reload(). */
     policy;
@@ -17,12 +53,17 @@ export class AdtRegistry {
     mockPort;
     /** Top-level policy inputs (global defaults for every destination). */
     globalPolicyInputs = {};
-    constructor(policy) {
+    /** Workspace file store (mtime-cached, per-tool-call layer). */
+    workspace = new WorkspaceConfigStore();
+    /** Client reuse for workspace-layer destinations, keyed by full config. */
+    clientCache = new Map();
+    constructor(policy, credentialResolver) {
+        this.credentialResolver = credentialResolver;
         this.policy = policy;
     }
     /** Accepts the fully-resolved config from `resolveEffectiveConfig`. */
-    static async create(config) {
-        const registry = new AdtRegistry(AdtPolicy.resolve(config));
+    static async create(config, options = {}) {
+        const registry = new AdtRegistry(AdtPolicy.resolve(config), options.credentialResolver);
         await registry.reload(config);
         return registry;
     }
@@ -60,8 +101,12 @@ export class AdtRegistry {
             if (!entry.mock)
                 this.destinations.delete(name);
         }
+        // Global layers changed: cached workspace entries embed the OLD policy
+        // inputs, so drop both caches (the workspace file reloads by mtime).
+        this.clientCache.clear();
+        this.workspace.clear();
         for (const dest of config.destinations) {
-            this.add(dest);
+            await this.add(dest);
         }
         if (config.defaultDestination) {
             this.defaultName = config.defaultDestination;
@@ -121,8 +166,27 @@ export class AdtRegistry {
             policy: this.policy,
         });
     }
-    add(dest) {
-        const password = resolvePassword(dest);
+    async add(dest) {
+        this.destinations.set(dest.name, await this.buildEntry(dest, this.globalPolicyInputs, false));
+    }
+    /**
+     * Materialize a RegistryDestination from a destination config overlaid on
+     * the given policy inputs. The password resolves PER CALL through the
+     * credential layers (config > DSH credential store/.env > process env — see
+     * resolvePassword), so an edited `~/.dsh/.credentials.yaml` reaches the next
+     * tool call without a restart. When `useCache` is set (workspace-layer
+     * destinations) the entry — including its AdtClient, so CSRF tokens and
+     * session cookies survive across calls — is reused while the resolved
+     * config is unchanged.
+     */
+    async buildEntry(dest, policyInputs, useCache) {
+        const password = await resolvePassword(dest, this.credentialResolver);
+        const cacheKey = useCache ? clientCacheKey(dest, policyInputs, password) : undefined;
+        if (cacheKey !== undefined) {
+            const cached = this.clientCache.get(cacheKey);
+            if (cached)
+                return cached;
+        }
         const adtDest = {
             name: dest.name,
             url: dest.url,
@@ -134,51 +198,130 @@ export class AdtRegistry {
                 ? { type: 'basic', username: dest.username ?? '', password }
                 : { type: 'none' },
         };
-        this.destinations.set(dest.name, {
+        const entry = {
             config: adtDest,
             mock: false,
             client: new AdtClient(adtDest),
             // Global defaults overlaid with the destination's own policy block.
-            policy: AdtPolicy.resolve({ ...this.globalPolicyInputs, ...dest.policy }),
-        });
-    }
-    /** Get a client by destination name; empty/undefined uses the default. */
-    require(name) {
-        // An explicitly-given name MUST exist: silently falling back to the
-        // default destination would point a typo at the wrong SAP system.
-        if (name) {
-            const named = this.destinations.get(name);
-            if (!named) {
-                const availableNames = [...this.destinations.keys()].join(', ') || '(none)';
-                throw new Error(`Unknown ADT destination '${name}'. Configured destinations: ${availableNames}. ` +
-                    'Pass no `destination` to use the default, or fix the name in the tool call / plugin config.');
+            policy: AdtPolicy.resolve({ ...policyInputs, ...dest.policy }),
+        };
+        if (cacheKey !== undefined) {
+            this.clientCache.set(cacheKey, entry);
+            // Insertion-order eviction keeps the cache bounded.
+            while (this.clientCache.size > CLIENT_CACHE_CAP) {
+                this.clientCache.delete(this.clientCache.keys().next().value);
             }
-            return named;
-        }
-        const entry = this.destinations.get(this.defaultName);
-        if (!entry) {
-            const available = [...this.destinations.keys()].join(', ') || '(none)';
-            throw new Error(`No ADT destination '${this.defaultName}' (default). Configured destinations: ${available}. ` +
-                'Add one via the plugin config (cordis.patch.yml) or enable demo mode.');
         }
         return entry;
     }
-    /** Probe every destination; updates cached status. */
-    async pingAll(signal) {
+    /**
+     * Compose the destination view for one caller: global destinations with the
+     * workspace file layered on top (nearest wins — same-name entries replace,
+     * new names append, `defaultDestination` and top-level policy keys
+     * override). `cwd` is the session workspace directory; omit it to see the
+     * shared global state (tests, startup logs).
+     */
+    /**
+     * Compose the destination view for one caller: global destinations with the
+     * workspace file layered on top (nearest wins — same-name entries replace,
+     * new names append, `defaultDestination` and top-level policy keys
+     * override). `cwd` is the session workspace directory; omit it to see the
+     * shared global state (tests, startup logs). Async because workspace
+     * entries resolve their password through the credential service per call.
+     */
+    async viewFor(cwd) {
+        const destinations = new Map(this.destinations);
+        let defaultName = this.defaultName;
+        let workspaceFile;
+        if (cwd) {
+            const loaded = this.workspace.load(cwd);
+            if (loaded) {
+                workspaceFile = loaded.path;
+                const workspaceInputs = { ...this.globalPolicyInputs };
+                const layer = loaded.layer;
+                for (const key of POLICY_INPUT_KEYS) {
+                    const value = layer[key];
+                    if (value !== undefined) {
+                        workspaceInputs[key] = value;
+                    }
+                }
+                for (const dest of loaded.layer.destinations ?? []) {
+                    destinations.set(dest.name, await this.buildEntry(dest, workspaceInputs, true));
+                }
+                if (loaded.layer.defaultDestination)
+                    defaultName = loaded.layer.defaultDestination;
+            }
+        }
+        return { destinations, defaultName, workspaceFile };
+    }
+    /**
+     * Get a client by destination name (workspace-aware); empty/undefined uses
+     * the workspace's default. Pass the session cwd so workspace-file
+     * destinations participate.
+     */
+    async require(name, cwd) {
+        const view = await this.viewFor(cwd);
+        // An explicitly-given name MUST exist: silently falling back to the
+        // default destination would point a typo at the wrong SAP system.
+        if (name) {
+            const named = view.destinations.get(name);
+            if (!named) {
+                const availableNames = [...view.destinations.keys()].join(', ') || '(none)';
+                throw new Error(`Unknown ADT destination '${name}'. Configured destinations: ${availableNames}. ` +
+                    (view.workspaceFile ? `Workspace file: ${view.workspaceFile}. ` : '') +
+                    'Pass no `destination` to use the default, create one with adt_create_destination, ' +
+                    'or fix the name in the tool call / config.');
+            }
+            return named;
+        }
+        const entry = view.destinations.get(view.defaultName);
+        if (!entry) {
+            const available = [...view.destinations.keys()].join(', ') || '(none)';
+            throw new Error(`No ADT destination '${view.defaultName}' (default). Configured destinations: ${available}. ` +
+                (view.workspaceFile ? `Workspace file: ${view.workspaceFile}. ` : '') +
+                'Add one with adt_create_destination, the plugin config (cordis.patch.yml), or enable demo mode.');
+        }
+        return entry;
+    }
+    /** Probe every destination of a view (workspace-aware); updates cached status. */
+    async pingAll(signal, cwd) {
         const results = [];
-        for (const [name, entry] of this.destinations) {
+        const view = await this.viewFor(cwd);
+        for (const [name, entry] of view.destinations) {
             const status = await entry.client.ping({ signal });
             entry.status = { ...status, checkedAt: new Date().toISOString() };
             results.push({ name, mock: entry.mock, ok: status.ok, detail: status.detail ?? '' });
         }
         return results;
     }
-    /** Snapshot for the `adt_permissions` tool: global defaults + per destination. */
-    describePolicies() {
+    /** Snapshot for the `adt_permissions` tool: global defaults + per destination (workspace-aware). */
+    async describePolicies(cwd) {
         const perDestination = {};
-        for (const [name, entry] of this.destinations)
+        for (const [name, entry] of (await this.viewFor(cwd)).destinations) {
             perDestination[name] = entry.policy.describe();
+        }
         return { global: this.policy.describe(), perDestination };
+    }
+    /**
+     * Create or update a destination in the workspace config file of `cwd`
+     * (used by `adt_create_destination`). Refuses to replace a same-name entry
+     * unless `overwrite` is set; `setDefault` also writes `defaultDestination`.
+     * The written layer is validated before the atomic tmp+rename write, and
+     * the workspace cache is refreshed so the very next view reflects it.
+     */
+    saveWorkspaceDestination(cwd, dest, options = {}) {
+        let created = false;
+        const { path, layer } = this.workspace.write(cwd, (current) => {
+            const existing = (current.destinations ?? []).find((entry) => entry.name === dest.name);
+            if (existing && !options.overwrite) {
+                throw new Error(`destination "${dest.name}" already exists in the workspace file (url: ${existing.url}). ` +
+                    'Pass overwrite: true to replace it.');
+            }
+            created = existing === undefined;
+            const upserted = upsertDestination(current, dest);
+            return options.setDefault ? { ...upserted.layer, defaultDestination: dest.name } : upserted.layer;
+        });
+        return { path, created, layer };
     }
     async dispose() {
         if (this.mockServer) {
@@ -186,6 +329,8 @@ export class AdtRegistry {
             this.mockServer = undefined;
         }
         this.destinations.clear();
+        this.clientCache.clear();
+        this.workspace.clear();
     }
 }
 //# sourceMappingURL=registry.js.map

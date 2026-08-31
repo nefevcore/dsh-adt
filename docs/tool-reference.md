@@ -1,19 +1,32 @@
 # adt_* 工具清单 — 入参 / 返回参考
 
-> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **35 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代）。
+> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **37 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代）。
 > 标记约定：🛡 = 经过**目标目的地**的权限策略校验；⏱ = 自定义超时；🔒 = 声明 `isConcurrencySafe`（可并发/只读）。
-> 通用参数 `destination`（string，可省略 = 默认目的地）适用于除 `adt_local_check` / `adt_permissions` / `adt_list_destinations` 外的所有工具，下表不再重复。
+> 通用参数 `destination`（string，可省略 = 默认目的地）适用于除 `adt_local_check` / `adt_permissions` / `adt_list_destinations` / `adt_list_gui_connections` / `adt_create_destination` 外的所有工具，下表不再重复。
 > 通用对象引用三元组：`objectUri`（精确 URI，优先）/ `name` / `type`（短码或 ADT 形式，如 CLAS 或 CLAS/OC）。
 > 钳制原则：所有带上限的参数（maxResults/top/maxObjects…）被钳制时都会在输出 `note` 中说明，绝不静默。
 
 ---
 
-## 1. 系统与连接（4）
+## 1. 系统与连接（6）
 
 ### adt_list_destinations 🔒
-枚举配置的全部 ADT 目的地并逐个 ping。
+枚举配置的全部 ADT 目的地并逐个 ping（含**会话工作区文件** `.dsh-abap-adt/destinations.yaml` 叠加后的完整视图）。
 - **入参**：无。
 - **返回**：`destinations[] { name, mock, ok, detail }`。
+
+### adt_list_gui_connections 🔒
+搜索**本机 SAP GUI（SAP Logon）连接列表**（`SAPUILandscape.xml` / `saplogon.ini`），用于把已有 GUI 连接导入为 ADT 目的地。用户口头要一个连接时先搜这里，把匹配项拿出来让用户挑；多词查询逐词 AND（"impc qas"）。`group` 类条目（消息服务器负载均衡）推不出单机 URL，需用户补 url。
+- **入参**：`query`（可选，空 = 全列）；`limit`（默认 25，钳 1–100）。
+- **返回**：`available, sources[], connections[] { uuid, name, kind(direct|group|reference), systemId?, folder?, client?, user?, language?, host?, sysnr?, router?, adtUrl?, httpUrl?, adtUrlNote? }, truncated?`。无 GUI 时 `available: false` + 提示改走手工字段。
+- ADT URL 推导：SAP 端口约定 `https://<host>:443<nn>` / `http://<host>:80<nn>`（nn = 实例号，来自 GUI 的 `server=host:32nn`）。
+
+### adt_create_destination
+在**会话工作区**写 `.dsh-abap-adt/destinations.yaml` 创建/更新目的地（原子写、写后即热生效——下一次 `adt_*` 调用即可用）。两种模式：`guiUuid` 导入 GUI 连接（client/language/username 自动带出，URL 按端口约定推导，`strictSSL` 默认 false）；或手工传 `name` + `url`。
+**密码**：直接传 `password` —— 默认存入 **DSH 凭证文件** `~/.dsh/.credentials.yaml`（引用名 = `passwordEnv` 或约定 `ADT_<NAME>_PASSWORD`，destinations.yaml 只留引用不落明文）；未挂载凭证服务、或显式 `passwordInFile: true`、或凭证服务拒绝写入（同名环境变量遮蔽）时回退**明文写入文件**并附警告。不传 `password` 时可自行维护该引用（DSH 分层解析：进程环境变量 > 凭证文件 > `.env`，每次调用实时读取）。
+- **入参**：`name?, url?, client?, language?, username?, password?, passwordEnv?, passwordInFile?, strictSSL?, timeoutMs?, guiUuid?, setDefault?, overwrite?, ping?`。
+- **返回**：`file, action(created|updated), destination{}, setAsDefault, passwordStoredIn?(credential-store|file), importedFromGui?, shadowsGlobal, notes[], ping? { ok, detail }, hint`。
+- 同名已存在时需 `overwrite: true`；同名全局配置会被工作区条目就近覆盖（`shadowsGlobal` 提示）。
 
 ### adt_system_info 🔒
 读取目的地系统信息：SID、release、ABAP Cloud 标志、feature flags、广告服务数。

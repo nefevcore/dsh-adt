@@ -14,7 +14,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { JsonValue } from '@deepseek-ai/dsh-tools';
 import type { Context } from '@deepseek-ai/cordis';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
 import { typeLabel } from '../resolve.js';
 import { hashSource, saveSnapshot } from '../snapshots.js';
 
@@ -145,7 +145,7 @@ export function readTools(deps: ToolDeps, ctx?: Context) {
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const entry = registry.require(destinationOf(args));
+      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       const ref = await resolveToolObject(entry.client, args, exec.signal);
       const parsed = await entry.client.readSource(ref.uri, { signal: exec.signal });
       const properties: Record<string, string> = {};

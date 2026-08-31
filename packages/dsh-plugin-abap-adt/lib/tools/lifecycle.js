@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, OBJECTS_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, requireObjectList, text, } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECTS_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, requireObjectList, text, } from './common.js';
 import { resolveObjects, typeLabel } from '../resolve.js';
 export function lifecycleTools(deps) {
     const { registry } = deps;
@@ -76,7 +76,7 @@ export function lifecycleTools(deps) {
         },
         output: activationOutput,
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const checkOnly = args.checkOnly === true;
             const inputs = requireObjectList(args, 'adt_activate');
             // A real activation is a mutation → strict resolution (a near-miss name
@@ -187,7 +187,7 @@ export function lifecycleTools(deps) {
         },
         isConcurrencySafe: () => true,
         execute: async (args, exec) => {
-            const entry = registry.require(destinationOf(args));
+            const entry = await registry.require(destinationOf(args), sessionCwd(exec));
             const inputs = requireObjectList(args, 'adt_check');
             const refs = await resolveObjects(entry.client, inputs, exec.signal);
             // The checkrun response carries no per-object attribution, so multi-

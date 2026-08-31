@@ -13,7 +13,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, optStr, resolveToolObject, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, optStr, resolveToolObject, text } from './common.js';
 /**
  * Line diff. Uses common prefix/suffix trimming with the middle emitted as a
  * remove block then an add block — no DP table, so it is O(n) memory and time.
@@ -161,7 +161,7 @@ export function versionTools(deps) {
             },
             isConcurrencySafe: () => true,
             execute: async (args, exec) => {
-                const entry = registry.require(destinationOf(args));
+                const entry = await registry.require(destinationOf(args), sessionCwd(exec));
                 const ref = await resolveToolObject(entry.client, args, exec.signal);
                 let versions;
                 try {

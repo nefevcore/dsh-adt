@@ -1,12 +1,13 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { DESTINATION_PARAM, destinationOf, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, destinationOf, text } from './common.js';
 export function systemTools(deps) {
     const { registry } = deps;
     return [
         defineTool({
             name: 'adt_list_destinations',
             description: 'List the configured ABAP ADT destinations and their connectivity status. ' +
-                'Use this first to discover which SAP systems are available and reachable.',
+                'Use this first to discover which SAP systems are available and reachable. ' +
+                'Destinations come from the session workspace file (.dsh-abap-adt/destinations.yaml) layered over the global config.',
             parameters: {},
             output: {
                 schema: {
@@ -35,7 +36,7 @@ export function systemTools(deps) {
             },
             isConcurrencySafe: () => true,
             execute: async (_args, exec) => {
-                const results = await registry.pingAll(exec.signal);
+                const results = await registry.pingAll(exec.signal, sessionCwd(exec));
                 return { destinations: results };
             },
         }),
@@ -72,7 +73,7 @@ export function systemTools(deps) {
             },
             isConcurrencySafe: () => true,
             execute: async (args, exec) => {
-                const entry = registry.require(destinationOf(args));
+                const entry = await registry.require(destinationOf(args), sessionCwd(exec));
                 return entry.client.systemInfo({ signal: exec.signal });
             },
         }),
@@ -96,8 +97,9 @@ export function systemTools(deps) {
             },
             isConcurrencySafe: () => true,
             execute: async (args, exec) => {
-                const name = destinationOf(args) ?? registry.defaultName;
-                const entry = registry.require(name);
+                const cwd = sessionCwd(exec);
+                const name = destinationOf(args) ?? (await registry.viewFor(cwd)).defaultName;
+                const entry = await registry.require(name, cwd);
                 const status = await entry.client.ping({ signal: exec.signal });
                 return { destination: name, ok: status.ok, detail: status.detail ?? '' };
             },

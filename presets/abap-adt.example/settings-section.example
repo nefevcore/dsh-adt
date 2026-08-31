@@ -1,13 +1,20 @@
 # abap-adt 的 settings 用户段 —— 把本段合并进 ~/.dsh/settings.yaml 后按需修改。
 # 保存即热生效（目的地表与权限策略原地重建，无需重启 DSH）。
 #
-# 解析优先级（就近覆盖）：本段（settings 用户层）> 插件行内联 config
-# （预设/patch 的 composition base）> schema 默认值；权限六开关在本段与
-# 内联均未设置时看 SAP_* 环境变量。destinations 跨层按名字合并，
-# 本段的同名条目覆盖内联，新名字追加。
+# 💡 连接真实系统的 destinations 推荐**按项目**放工作区文件
+#   <工作区>/.dsh-abap-adt/destinations.yaml（与会话工作目录绑定、可进 git；
+#   也可以直接在对话里让代理调 adt_create_destination 创建——能从本机
+#   SAP GUI 连接列表导入）。本段适合放**全局兜底**的目的地与权限策略。
 #
-# ⚠ 密码不要明文写进任何配置：用 passwordEnv 指到环境变量
-#   （缺省约定 ADT_<目的地名大写>_PASSWORD，或统一 ADT_PASSWORD）。
+# 解析优先级（就近覆盖）：工作区文件 > 本段（settings 用户层）> 插件行内联
+# config（预设/patch 的 composition base）> schema 默认值；权限六开关在以上
+# 均未设置时看 SAP_* 环境变量。destinations 跨层按名字合并，
+# 高层的同名条目覆盖低层，新名字追加。
+#
+# ⚠ 密码不要明文写进任何配置：用 passwordEnv 指到**凭证引用**（DSH 分层解析：
+#   进程环境变量 > ~/.dsh/.credentials.yaml 凭证文件 > .env，每次调用实时读取）。
+#   缺省约定 ADT_<目的地名大写>_PASSWORD；对话里让代理调 adt_create_destination
+#   并直接给密码即可——工具会把它存进凭证文件，配置里只留引用。
 #   PowerShell:  setx ADT_DEV_PASSWORD '...'   （新开终端生效）
 
 abap-adt:
