@@ -4,7 +4,7 @@ import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, te
  * generic card rather than persisting a huge copy of the search result. */
 const SEARCH_META_MAX_ENTRIES = 500;
 /** Project an adt_search value into search-card metadata (see presentation.d.ts). */
-export function searchPresentationMeta(value) {
+function searchPresentationMeta(value) {
     // (returned as JsonValue at the presentationMeta seam below)
     const total = Math.max(value.count, value.objects.length + value.sources.length);
     const retained = value.objects.length + value.sources.length;

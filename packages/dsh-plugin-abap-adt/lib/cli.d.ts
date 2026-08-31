@@ -39,7 +39,7 @@ export declare function stripPresetRows(composition: string, ids: string[]): {
  */
 export declare function findDshPresetRoot(cwd: string): string | undefined;
 /** Parse the minimal flag set this CLI supports. */
-export interface CliArgs {
+interface CliArgs {
     id: string;
     from?: string;
     name: string;
@@ -49,4 +49,5 @@ export interface CliArgs {
 }
 export declare function parseArgs(argv: string[]): CliArgs;
 export declare function main(argv: string[]): number;
+export {};
 //# sourceMappingURL=cli.d.ts.map

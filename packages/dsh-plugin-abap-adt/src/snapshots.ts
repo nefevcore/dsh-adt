@@ -49,7 +49,7 @@ export class SnapshotConflictError extends Error {
   }
 }
 
-export interface SnapshotSidecar {
+interface SnapshotSidecar {
   destination: string;
   uri: string;
   name: string;
@@ -59,7 +59,7 @@ export interface SnapshotSidecar {
   fetchedAt: string;
 }
 
-export interface ObjectSnapshot {
+interface ObjectSnapshot {
   /** The snapshot file content (= fetch-time server source, unless edited locally). */
   source: string;
   sidecar: SnapshotSidecar;
@@ -96,7 +96,7 @@ function fileStem(ref: { name: string; type: string }): string {
   return `${ref.name.toLowerCase()}.${short}.abap`;
 }
 
-export function snapshotPaths(destination: string, ref: { name: string; type: string }): { file: string; sidecar: string } {
+function snapshotPaths(destination: string, ref: { name: string; type: string }): { file: string; sidecar: string } {
   const file = `.adt-snapshots/${destination}/${fileStem(ref)}`;
   return { file, sidecar: `${file}.json` };
 }

@@ -2,7 +2,7 @@
  * Plugin configuration schema (schemastery) and the DSH-settings layering
  * pipeline.
  *
- *  * The plugin registers its Config schema as the `abap-adt` settings namespace
+ * The plugin registers its Config schema as the `abap-adt` settings namespace
  * via `installSettingsSection` (see index.ts), so the composition entry (the
  * plugin row's `config:` block) becomes the namespace `base` and the user's
  * `~/.dsh/settings.yaml` `abap-adt:` section becomes the user layer. The
@@ -31,26 +31,8 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { parse } from 'yaml';
-
-/**
- * Plugin configuration schema (schemastery), validated by the Cordis loader.
- *
- * Config resolution layers, nearest wins:
- *
- *   1. inline config — the plugin row's `config:` block (agent preset's
- *      `agent.cordis.yml` or the profile's `cordis.patch.yml`)
- *   2. external file — `configFile`; auto-discovered at
- *      `${DSH_HOME:-~/.dsh}/abap-adt.yml` when not set explicitly. Keeps
- *      system/permission settings out of the composition file.
- *   3. environment — `SAP_*` policy variables (see policy.ts)
- *   4. built-in defaults (`builtinDefaults` below)
- *
- * Top-level defaults are intentionally NOT declared in the schema: a schema
- * default is applied by the loader before the plugin sees the config, which
- * would make "unset" indistinguishable from "explicitly set to the default"
- * and silently defeat layer 2. `resolveEffectiveConfig` applies defaults
- * after merging instead.
- */
+import { POLICY_KEYS } from './policy.js';
+import type { PolicyKey } from './policy.js';
 
 /**
  * Per-destination permission-policy override (all keys optional; each
@@ -140,7 +122,7 @@ export interface EffectiveConfig {
 }
 
 /** Default external config file name inside the dsh home directory. */
-export const DEFAULT_CONFIG_FILE = 'abap-adt.yml';
+const DEFAULT_CONFIG_FILE = 'abap-adt.yml';
 
 /**
  * Workspace-scoped config: every session has a working directory (its
@@ -150,9 +132,9 @@ export const DEFAULT_CONFIG_FILE = 'abap-adt.yml';
  * layer: it overrides the settings user section for `destinations` (merged by
  * name, workspace wins), `defaultDestination`, and permission-policy keys.
  */
-export const WORKSPACE_CONFIG_DIR = '.dsh-abap-adt';
+const WORKSPACE_CONFIG_DIR = '.dsh-abap-adt';
 /** Candidate file names inside the workspace config dir, first hit wins. */
-export const WORKSPACE_CONFIG_FILES = ['destinations.yaml', 'destinations.yml'] as const;
+const WORKSPACE_CONFIG_FILES = ['destinations.yaml', 'destinations.yml'] as const;
 
 /**
  * Resolve the workspace config file candidates for a workspace root
@@ -181,28 +163,9 @@ export function builtinDefaults(): EffectiveConfig {
   };
 }
 
-type ScalarKey =
-  | 'demo'
-  | 'demoPort'
-  | 'defaultDestination'
-  | 'enableTransports'
-  | 'allowedTransports'
-  | 'allowTransportableEdits'
-  | 'allowedPackages'
-  | 'allowExecution'
-  | 'allowBatchWrites';
+type ScalarKey = 'demo' | 'demoPort' | 'defaultDestination' | PolicyKey;
 
-const SCALAR_KEYS: readonly ScalarKey[] = [
-  'demo',
-  'demoPort',
-  'defaultDestination',
-  'enableTransports',
-  'allowedTransports',
-  'allowTransportableEdits',
-  'allowedPackages',
-  'allowExecution',
-  'allowBatchWrites',
-];
+const SCALAR_KEYS: readonly ScalarKey[] = ['demo', 'demoPort', 'defaultDestination', ...POLICY_KEYS];
 
 const KNOWN_TOP_LEVEL_KEYS = new Set<string>([...SCALAR_KEYS, 'destinations', 'configFile']);
 const KNOWN_DESTINATION_KEYS = new Set<string>([
@@ -217,14 +180,7 @@ const KNOWN_DESTINATION_KEYS = new Set<string>([
   'timeoutMs',
   'policy',
 ]);
-const KNOWN_POLICY_KEYS = new Set<string>([
-  'enableTransports',
-  'allowedTransports',
-  'allowTransportableEdits',
-  'allowedPackages',
-  'allowExecution',
-  'allowBatchWrites',
-]);
+const KNOWN_POLICY_KEYS = new Set<string>(POLICY_KEYS);
 
 /** The dsh home directory: `${DSH_HOME}` or `~/.dsh`. */
 export function dshHome(): string {
@@ -363,7 +319,7 @@ export function parseExternalConfigText(raw: string, path: string): Partial<Plug
 }
 
 /** Inputs to {@link resolveEffectiveConfig}. */
-export interface EffectiveSource {
+interface EffectiveSource {
   /** Composition entry: the plugin row's `config:` block (namespace `base`). */
   entry: PluginConfig;
   /**

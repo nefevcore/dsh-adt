@@ -147,8 +147,8 @@ export async function runLocalCheck(dir, options, fs) {
     const all = registry.findIssues();
     const counts = { Error: 0, Warning: 0, Info: 0 };
     for (const issue of all) {
-        const severity = issue.getSeverity();
-        counts[severity] = (counts[severity] ?? 0) + 1;
+        const sev = issue.getSeverity();
+        counts[sev] = (counts[sev] ?? 0) + 1;
     }
     const allowed = severity === 'Error'
         ? new Set(['Error'])

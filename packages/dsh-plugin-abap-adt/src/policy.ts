@@ -64,7 +64,7 @@ export const POLICY_ENV = {
 } as const;
 
 /** Built-in defaults: permissive for edits/execution, strict for batch writes. */
-export const POLICY_DEFAULTS = {
+const POLICY_DEFAULTS = {
   enableTransports: true,
   allowedTransports: '*',
   allowTransportableEdits: true,
@@ -72,6 +72,12 @@ export const POLICY_DEFAULTS = {
   allowExecution: true,
   allowBatchWrites: false,
 } as const;
+
+/**
+ * The six policy knob keys — the canonical list config.ts (known-key
+ * validation) and registry.ts (workspace-layer overlay) derive theirs from.
+ */
+export const POLICY_KEYS = Object.keys(POLICY_DEFAULTS) as PolicyKey[];
 
 /** Raw (pre-resolution) policy values from the plugin config. */
 export interface PolicyInputs {
@@ -84,7 +90,7 @@ export interface PolicyInputs {
 }
 
 export type PolicyKey = keyof PolicyInputs;
-export type PolicySource = 'config' | 'env' | 'default';
+type PolicySource = 'config' | 'env' | 'default';
 
 /** Thrown when a policy rule denies an operation. */
 export class AdtPolicyError extends Error {
@@ -110,7 +116,7 @@ export function parsePatterns(list: string | undefined): string[] {
 }
 
 /** Convert a simple glob (`*`, `?`) into a case-insensitive RegExp. */
-export function globToRegExp(pattern: string): RegExp {
+function globToRegExp(pattern: string): RegExp {
   let re = '';
   for (const ch of pattern) {
     if (ch === '*') re += '.*';

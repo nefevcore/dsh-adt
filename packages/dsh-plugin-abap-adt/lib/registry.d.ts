@@ -24,7 +24,7 @@ export interface RegistryDestination {
  * resolves at tool-call time through the session cwd, never on the registry
  * itself.
  */
-export interface RegistryView {
+interface RegistryView {
     destinations: Map<string, RegistryDestination>;
     /** Destination used when a tool call omits `destination` (workspace-aware). */
     defaultName: string;
@@ -32,7 +32,7 @@ export interface RegistryView {
     workspaceFile?: string;
 }
 /** Async password resolution seam (see config.ts resolvePassword). */
-export type CredentialResolver = (ref: string) => Promise<string | undefined>;
+type CredentialResolver = (ref: string) => Promise<string | undefined>;
 /**
  * Owns the configured destinations and their live ADT clients. Also starts
  * the in-process mock ADT server when `demo` is enabled, so the whole tool
@@ -83,13 +83,6 @@ export declare class AdtRegistry {
      * workspace file layered on top (nearest wins — same-name entries replace,
      * new names append, `defaultDestination` and top-level policy keys
      * override). `cwd` is the session workspace directory; omit it to see the
-     * shared global state (tests, startup logs).
-     */
-    /**
-     * Compose the destination view for one caller: global destinations with the
-     * workspace file layered on top (nearest wins — same-name entries replace,
-     * new names append, `defaultDestination` and top-level policy keys
-     * override). `cwd` is the session workspace directory; omit it to see the
      * shared global state (tests, startup logs). Async because workspace
      * entries resolve their password through the credential service per call.
      */
@@ -129,4 +122,5 @@ export declare class AdtRegistry {
     };
     dispose(): Promise<void>;
 }
+export {};
 //# sourceMappingURL=registry.d.ts.map

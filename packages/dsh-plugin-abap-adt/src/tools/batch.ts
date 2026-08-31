@@ -2,7 +2,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { Context } from '@deepseek-ai/cordis';
 import type { FileSystem } from '@deepseek-ai/dsh-fs';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import type { AdtBatchRequestPart, AdtBatchRequestPart as BatchPart } from '@nefevcore/abap-adt-protocol';
+import type { AdtBatchRequestPart } from '@nefevcore/abap-adt-protocol';
 import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
 
@@ -75,7 +75,7 @@ function pathVariants(path: string): string[] {
   return variants;
 }
 
-function validateBatchPart(part: BatchPart, index: number, allowWrites: boolean, toolName: string): void {
+function validateBatchPart(part: AdtBatchRequestPart, index: number, allowWrites: boolean, toolName: string): void {
   const method = part.method ?? 'GET';
   if (method !== 'GET' && method !== 'POST' && method !== 'PUT') {
     throw new Error(`${toolName}: requests[${index}] method must be GET, POST or PUT (got '${method}')`);
@@ -210,7 +210,7 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
     timeoutMs: 180_000,
     execute: async (args, exec) => {
       const entry = await registry.require(destinationOf(args), sessionCwd(exec));
-      const raw = Array.isArray(args.requests) ? (args.requests as BatchPart[]) : [];
+      const raw = Array.isArray(args.requests) ? (args.requests as AdtBatchRequestPart[]) : [];
       if (raw.length === 0) throw new Error('adt_batch: `requests` must contain at least one embedded request');
       const clamp = clampWithNote(raw.length, 1, MAX_BATCH_PARTS, 'requests');
       const parts = raw.slice(0, clamp.value);

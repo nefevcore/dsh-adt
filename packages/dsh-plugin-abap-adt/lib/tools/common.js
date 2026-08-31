@@ -12,13 +12,6 @@ export function assertExplicitTransport(policy, transport, toolName, objectName)
     policy.assertTransportsEnabled(toolName);
     policy.assertTransportAllowed(transport, objectName ? `${toolName} (${objectName})` : toolName);
 }
-/** Shared activation summary for the write-family tools. */
-export function activationSummary(act) {
-    return {
-        success: act.success,
-        message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ' ' + i.message : ''}`).join('; ') || undefined,
-    };
-}
 /** `findings` array schema shared by the ATC-reporting tools. */
 export const ATC_FINDINGS_SCHEMA = {
     type: 'array',
@@ -94,10 +87,6 @@ export function atcAggregatesSuffix(aggregates) {
     return aggregates
         ? ` (P1 ${aggregates.priority1}, P2 ${aggregates.priority2}, P3 ${aggregates.priority3}, P4 ${aggregates.priority4})`
         : '';
-}
-/** Attribute the effective transport to its source (user-passed vs lock-assigned). */
-export function transportSourceOf(effectiveTransport, userTransport) {
-    return effectiveTransport ? (userTransport ? 'user' : 'auto') : undefined;
 }
 /** Parameter spec for the destination selector used by every tool. */
 export const DESTINATION_PARAM = {

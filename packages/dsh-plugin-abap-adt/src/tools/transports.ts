@@ -2,6 +2,19 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
 import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
 
+/** Transport item (contained object) schema shared by adt_list_transports and adt_get_transport. */
+const TRANSPORT_ITEM_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+
+  properties: {
+    name: { type: 'string', required: true },
+    type: { type: 'string', required: true },
+    action: { type: 'string', required: true },
+    description: { type: 'string' },
+  },
+} as const;
+
 export function transportTools(deps: ToolDeps) {
   const { registry } = deps;
 
@@ -110,17 +123,7 @@ export function transportTools(deps: ToolDeps) {
               target: { type: 'string' },
               items: {
                 type: 'array',
-                items: {
-                  type: 'object',
-                  additionalProperties: false,
-
-                  properties: {
-                    name: { type: 'string', required: true },
-                    type: { type: 'string', required: true },
-                    action: { type: 'string', required: true },
-                    description: { type: 'string' },
-                  },
-                },
+                items: TRANSPORT_ITEM_SCHEMA,
               },
             },
           },
@@ -228,17 +231,7 @@ export function transportTools(deps: ToolDeps) {
           items: {
             type: 'array',
             required: true,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-
-              properties: {
-                name: { type: 'string', required: true },
-                type: { type: 'string', required: true },
-                action: { type: 'string', required: true },
-                description: { type: 'string' },
-              },
-            },
+            items: TRANSPORT_ITEM_SCHEMA,
           },
         },
       },

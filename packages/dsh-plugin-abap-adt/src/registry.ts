@@ -2,7 +2,8 @@ import { AdtClient, type AdtDestination } from '@nefevcore/abap-adt-protocol';
 import { createMockAdtServer } from '@nefevcore/abap-adt-mock';
 import type { DestinationConfig, EffectiveConfig, PluginConfig } from './config.js';
 import { resolvePassword } from './config.js';
-import { AdtPolicy } from './policy.js';
+import { AdtPolicy, POLICY_KEYS } from './policy.js';
+import type { PolicyInputs, PolicyKey } from './policy.js';
 import { WorkspaceConfigStore, upsertDestination } from './workspace.js';
 
 export interface RegistryDestination {
@@ -25,23 +26,13 @@ export interface RegistryDestination {
  * resolves at tool-call time through the session cwd, never on the registry
  * itself.
  */
-export interface RegistryView {
+interface RegistryView {
   destinations: Map<string, RegistryDestination>;
   /** Destination used when a tool call omits `destination` (workspace-aware). */
   defaultName: string;
   /** Workspace config file that contributed to this view, when one exists. */
   workspaceFile?: string;
 }
-
-/** Policy keys a workspace file may set at its top level (defaults for ITS destinations). */
-const POLICY_INPUT_KEYS = [
-  'enableTransports',
-  'allowedTransports',
-  'allowTransportableEdits',
-  'allowedPackages',
-  'allowExecution',
-  'allowBatchWrites',
-] as const;
 
 /** Small non-crypto hash so passwords never sit in a cache key string. */
 function hashSecret(value: string): string {
@@ -54,12 +45,12 @@ function hashSecret(value: string): string {
 const CLIENT_CACHE_CAP = 64;
 
 /** Async password resolution seam (see config.ts resolvePassword). */
-export type CredentialResolver = (ref: string) => Promise<string | undefined>;
+type CredentialResolver = (ref: string) => Promise<string | undefined>;
 
 /** Stable cache key over everything that shapes a built destination entry. */
 function clientCacheKey(
   dest: DestinationConfig,
-  inputs: import('./policy.js').PolicyInputs,
+  inputs: PolicyInputs,
   password: string,
 ): string {
   return JSON.stringify({
@@ -91,7 +82,7 @@ export class AdtRegistry {
   private mockServer?: Awaited<ReturnType<typeof createMockAdtServer>>;
   private mockPort?: number;
   /** Top-level policy inputs (global defaults for every destination). */
-  private globalPolicyInputs: import('./policy.js').PolicyInputs = {};
+  private globalPolicyInputs: PolicyInputs = {};
   /** Workspace file store (mtime-cached, per-tool-call layer). */
   private readonly workspace = new WorkspaceConfigStore();
   /** Client reuse for workspace-layer destinations, keyed by full config. */
@@ -230,7 +221,7 @@ export class AdtRegistry {
    */
   private async buildEntry(
     dest: DestinationConfig,
-    policyInputs: import('./policy.js').PolicyInputs,
+    policyInputs: PolicyInputs,
     useCache: boolean,
   ): Promise<RegistryDestination> {
     const password = await resolvePassword(dest, this.credentialResolver);
@@ -272,13 +263,6 @@ export class AdtRegistry {
    * workspace file layered on top (nearest wins — same-name entries replace,
    * new names append, `defaultDestination` and top-level policy keys
    * override). `cwd` is the session workspace directory; omit it to see the
-   * shared global state (tests, startup logs).
-   */
-  /**
-   * Compose the destination view for one caller: global destinations with the
-   * workspace file layered on top (nearest wins — same-name entries replace,
-   * new names append, `defaultDestination` and top-level policy keys
-   * override). `cwd` is the session workspace directory; omit it to see the
    * shared global state (tests, startup logs). Async because workspace
    * entries resolve their password through the credential service per call.
    */
@@ -290,11 +274,11 @@ export class AdtRegistry {
       const loaded = this.workspace.load(cwd);
       if (loaded) {
         workspaceFile = loaded.path;
-        const workspaceInputs: import('./policy.js').PolicyInputs = { ...this.globalPolicyInputs };
+        const workspaceInputs: PolicyInputs = { ...this.globalPolicyInputs };
         const layer = loaded.layer as Partial<
-          Record<(typeof POLICY_INPUT_KEYS)[number], boolean | string>
+          Record<PolicyKey, boolean | string>
         >;
-        for (const key of POLICY_INPUT_KEYS) {
+        for (const key of POLICY_KEYS) {
           const value = layer[key];
           if (value !== undefined) {
             (workspaceInputs as Record<string, unknown>)[key] = value;
@@ -391,8 +375,8 @@ export class AdtRegistry {
             'Pass overwrite: true to replace it.',
         );
       }
-      created = existing === undefined;
       const upserted = upsertDestination(current, dest);
+      created = upserted.created;
       return options.setDefault ? { ...upserted.layer, defaultDestination: dest.name } : upserted.layer;
     });
     return { path, created, layer };

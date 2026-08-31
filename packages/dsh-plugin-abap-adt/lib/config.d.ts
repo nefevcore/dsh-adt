@@ -2,7 +2,7 @@
  * Plugin configuration schema (schemastery) and the DSH-settings layering
  * pipeline.
  *
- *  * The plugin registers its Config schema as the `abap-adt` settings namespace
+ * The plugin registers its Config schema as the `abap-adt` settings namespace
  * via `installSettingsSection` (see index.ts), so the composition entry (the
  * plugin row's `config:` block) becomes the namespace `base` and the user's
  * `~/.dsh/settings.yaml` `abap-adt:` section becomes the user layer. The
@@ -270,19 +270,6 @@ export interface EffectiveConfig {
     /** Path of the external file that contributed config (for the startup log). */
     configFileUsed?: string;
 }
-/** Default external config file name inside the dsh home directory. */
-export declare const DEFAULT_CONFIG_FILE = "abap-adt.yml";
-/**
- * Workspace-scoped config: every session has a working directory (its
- * "workspace", `exec.agent.session.header.cwd`), and destinations configured
- * there are private to that workspace — e.g.
- * `<workspace>/.dsh-abap-adt/destinations.yaml`. This is the nearest config
- * layer: it overrides the settings user section for `destinations` (merged by
- * name, workspace wins), `defaultDestination`, and permission-policy keys.
- */
-export declare const WORKSPACE_CONFIG_DIR = ".dsh-abap-adt";
-/** Candidate file names inside the workspace config dir, first hit wins. */
-export declare const WORKSPACE_CONFIG_FILES: readonly ["destinations.yaml", "destinations.yml"];
 /**
  * Resolve the workspace config file candidates for a workspace root
  * (`<cwd>/.dsh-abap-adt/destinations.yaml`, then `.yml`).
@@ -332,7 +319,7 @@ export declare function loadExternalConfigFile(path: string): Promise<Partial<Pl
 /** Parse + validate config file text (shared by async and sync loaders). */
 export declare function parseExternalConfigText(raw: string, path: string): Partial<PluginConfig>;
 /** Inputs to {@link resolveEffectiveConfig}. */
-export interface EffectiveSource {
+interface EffectiveSource {
     /** Composition entry: the plugin row's `config:` block (namespace `base`). */
     entry: PluginConfig;
     /**

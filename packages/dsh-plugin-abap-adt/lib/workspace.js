@@ -18,13 +18,13 @@ import { dirname, join } from 'node:path';
 import { stringify } from 'yaml';
 import { parseExternalConfigText, validateExternalConfig, workspaceConfigCandidates, } from './config.js';
 /** Header comment written above managed workspace config files. */
-export const WORKSPACE_FILE_HEADER = '# abap-adt workspace destinations — created by adt_create_destination.\n' +
+const WORKSPACE_FILE_HEADER = '# abap-adt workspace destinations — created by adt_create_destination.\n' +
     '# Manual edits are welcome; changes hot-apply on the next adt_* tool call.\n' +
     '# Layering: this file overrides ~/.dsh/settings.yaml `abap-adt:` (nearest wins).\n';
 /**
  * mtime+size-cached synchronous loader/writer for workspace config files.
- * One instance lives on the AdtRegistry; all methods are synchronous because
- * tool-call destination resolution must stay synchronous (`require()`).
+ * One instance lives on the AdtRegistry; the FILE layer stays synchronous so
+ * `viewFor`/`require` only ever await password resolution, never file I/O.
  */
 export class WorkspaceConfigStore {
     cache = new Map();
@@ -60,7 +60,7 @@ export class WorkspaceConfigStore {
         }
         const cached = this.cache.get(path);
         if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
-            return cached.layer === undefined ? undefined : { path, layer: cached.layer };
+            return { path, layer: cached.layer };
         }
         const layer = parseExternalConfigText(readFileSync(path, 'utf8'), path);
         this.cache.set(path, { mtimeMs: stats.mtimeMs, size: stats.size, layer });
@@ -89,8 +89,9 @@ export class WorkspaceConfigStore {
         }
         const next = mutate(JSON.parse(JSON.stringify(current)));
         // Fail fast on an invalid result (same validator as every read path).
-        const validated = validateExternalConfig(toPlainConfig(next), path);
-        const body = stringify(toPlainConfig(next), { lineWidth: 0 });
+        const plain = toPlainConfig(next);
+        const validated = validateExternalConfig(plain, path);
+        const body = stringify(plain, { lineWidth: 0 });
         mkdirSync(dirname(path), { recursive: true });
         const tmp = join(dirname(path), `.${Math.random().toString(36).slice(2)}.tmp`);
         writeFileSync(tmp, WORKSPACE_FILE_HEADER + body, 'utf8');

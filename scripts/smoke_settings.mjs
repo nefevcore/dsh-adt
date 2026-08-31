@@ -15,7 +15,6 @@ import { Context, Service } from '@deepseek-ai/cordis';
 // the real user home while this smoke runs.
 const SMOKE_HOME = mkdtempSync(join(tmpdir(), 'dsh-smoke-home-'));
 process.env.DSH_HOME = SMOKE_HOME;
-process.env.DSH_HOME ||= SMOKE_HOME;
 import { SettingsProvider } from '@deepseek-ai/dsh-settings';
 
 /** Minimal fs service stand-in (the plugin injects 'fs'; tools that need it

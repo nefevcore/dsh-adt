@@ -7,7 +7,7 @@ import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, te
 const SEARCH_META_MAX_ENTRIES = 500;
 
 /** Project an adt_search value into search-card metadata (see presentation.d.ts). */
-export function searchPresentationMeta(value: {
+function searchPresentationMeta(value: {
   query: string;
   count: number;
   objects: Array<{ objectName: string; type: string; uri: string }>;

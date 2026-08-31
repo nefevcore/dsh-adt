@@ -32,7 +32,7 @@ export interface SapGuiConnection {
     source: string;
 }
 /** Aggregate discovery result. */
-export interface SapGuiLandscape {
+interface SapGuiLandscape {
     /** Files actually read (absolute paths). */
     sources: string[];
     connections: SapGuiConnection[];
@@ -67,4 +67,5 @@ export declare function discoverSapGuiLandscape(): SapGuiLandscape;
  * returns everything.
  */
 export declare function searchSapGuiConnections(connections: SapGuiConnection[], query?: string): SapGuiConnection[];
+export {};
 //# sourceMappingURL=sapgui.d.ts.map

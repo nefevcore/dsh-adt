@@ -1,5 +1,5 @@
 /** A POSIX environment-variable name (CredentialRef grammar). */
-export const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** Whether a raw string could name a credential reference at all. */
 export function isCredentialRefName(value) {
     return CREDENTIAL_REF_PATTERN.test(value);

@@ -37,6 +37,14 @@ import type {
   AdtStructureKind,
 } from './types.js';
 
+/** DTEL label keys → named wire elements (the S/4 label shape; see parseStructure's DTEL case). */
+const DTEL_LABEL_ELEMENTS: Record<string, string> = {
+  shortText: 'shortFieldLabel',
+  mediumText: 'mediumFieldLabel',
+  longText: 'longFieldLabel',
+  heading: 'headingFieldLabel',
+};
+
 /** Negotiation media type per structured kind (Accept + PUT Content-Type). */
 export function structureMediaType(kind: AdtStructureKind): string {
   switch (kind) {
@@ -130,13 +138,7 @@ export function parseStructure(xml: string, kind: AdtStructureKind): AdtStructur
       //   a) named elements  <dtel:shortFieldLabel>/<mediumFieldLabel>/
       //      <longFieldLabel>/<headingFieldLabel> (S/4 sandbox verified);
       //   b) typed elements  <dtel:label type="…">…
-      const namedLabels: Array<[string, string]> = [
-        ['shortText', 'shortFieldLabel'],
-        ['mediumText', 'mediumFieldLabel'],
-        ['longText', 'longFieldLabel'],
-        ['heading', 'headingFieldLabel'],
-      ];
-      for (const [key, localName] of namedLabels) {
+      for (const [key, localName] of Object.entries(DTEL_LABEL_ELEMENTS)) {
         const value = childText(elementRoot, localName);
         if (value) labels[key] = value;
       }
@@ -256,7 +258,6 @@ function elementRange(xml: string, localName: string): { start: number; end: num
     return { start: open.index, end: open.index + open[0].length, openTag: open[0] };
   }
   const closeRe = new RegExp(`</(?:[\\w.-]+:)?${needle}\\s*>`);
-  closeRe.lastIndex = open.index + open[0].length;
   const rest = xml.slice(open.index + open[0].length);
   const close = closeRe.exec(rest);
   if (!close) return undefined;
@@ -441,13 +442,7 @@ export function patchStructureXml(xml: string, kind: AdtStructureKind, changes: 
  *  named elements (<dtel:shortFieldLabel>…, S/4 sandbox) and typed elements
  *  (<dtel:label type="…">…). The named form wins when present. */
 function patchLabel(xml: string, type: string, value: string): string {
-  const named: Record<string, string> = {
-    shortText: 'shortFieldLabel',
-    mediumText: 'mediumFieldLabel',
-    longText: 'longFieldLabel',
-    heading: 'headingFieldLabel',
-  };
-  const namedLocal = named[type];
+  const namedLocal = DTEL_LABEL_ELEMENTS[type];
   if (namedLocal && elementRange(xml, namedLocal)) {
     return patchElementText(xml, null, namedLocal, value);
   }

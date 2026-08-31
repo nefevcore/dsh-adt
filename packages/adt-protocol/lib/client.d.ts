@@ -167,10 +167,12 @@ export declare class AdtClient {
         signal?: AbortSignal;
     }): Promise<void>;
     /**
-     * Unlock with the given handle; when that fails (or no handle is known),
-     * retry WITHOUT a handle. Some backends release the lock on a bare
-     * `_action=UNLOCK` (same user), which lets `unlock_all` clean residual
-     * locks whose handle was never returned (e.g. create-time auto locks).
+     * Unlock with the given handle; when that fails with anything but 403 (or
+     * no handle is known), retry WITHOUT a handle — some backends release the
+     * lock on a bare `_action=UNLOCK` (same user), which lets `unlock_all`
+     * clean residual locks whose handle was never returned (e.g. create-time
+     * auto locks). A 403 (lock held by another user) is final and reported
+     * as-is: a handle-less unlock cannot succeed there either.
      */
     unlockBestEffort(objectUri: string, handle?: string, options?: {
         signal?: AbortSignal;
@@ -357,6 +359,8 @@ export declare class AdtClient {
         view?: 'default' | 'summary' | 'formatted';
         signal?: AbortSignal;
     }): Promise<AdtDumpDetail>;
+    /** Shared console-run round trip of runProgram/runClass (stateful, 300s). */
+    private runConsole;
     /**
      * Run an ABAP executable program (console output comes back as text).
      * Equivalent to F8 in ADT: the program runs synchronously in the session.

@@ -16,77 +16,77 @@ export function whereUsedTools(deps: ToolDeps) {
       description:
         'Where-used / impact analysis: find objects that reference or depend on the given ABAP object. ' +
         'Run before changing an object to understand the blast radius. Read-only.',
-    parameters: {
-      ...OBJECT_REF_PARAMS,
-      enableAllTypes: {
-        type: 'boolean',
-        description: 'Expand the search to all object types (Eclipse "select all"). Default false (SAP default scope); can be much slower.',
+      parameters: {
+        ...OBJECT_REF_PARAMS,
+        enableAllTypes: {
+          type: 'boolean',
+          description: 'Expand the search to all object types (Eclipse "select all"). Default false (SAP default scope); can be much slower.',
+        },
+        ...DESTINATION_PARAM,
       },
-      ...DESTINATION_PARAM,
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
 
-        properties: {
-          objectUri: { type: 'string', required: true },
-          totalReferences: { type: 'integer', required: true },
-          note: { type: 'string' },
-          references: {
-            type: 'array',
-            required: true,
-            items: {
-              type: 'object',
-              additionalProperties: false,
+          properties: {
+            objectUri: { type: 'string', required: true },
+            totalReferences: { type: 'integer', required: true },
+            note: { type: 'string' },
+            references: {
+              type: 'array',
+              required: true,
+              items: {
+                type: 'object',
+                additionalProperties: false,
 
-              properties: {
-                name: { type: 'string', required: true },
-                type: { type: 'string', required: true },
-                uri: { type: 'string', required: true },
-                packageName: { type: 'string' },
-                responsible: { type: 'string' },
-                usageInformation: { type: 'string' },
+                properties: {
+                  name: { type: 'string', required: true },
+                  type: { type: 'string', required: true },
+                  uri: { type: 'string', required: true },
+                  packageName: { type: 'string' },
+                  responsible: { type: 'string' },
+                  usageInformation: { type: 'string' },
+                },
               },
             },
           },
         },
+        render: (_args, value) => {
+          const lines = [
+            `Where-used of ${value.objectUri}: ${value.totalReferences} reference(s)`,
+            ...(value.note ? [`Note: ${value.note}`] : []),
+            ...value.references.map(
+              (r) => `- ${r.name} (${r.type}) ${r.packageName ? `in ${r.packageName}` : ''}${r.usageInformation ? ` — ${r.usageInformation}` : ''}`,
+            ),
+          ];
+          return text(lines.join('\n'));
+        },
       },
-      render: (_args, value) => {
-        const lines = [
-          `Where-used of ${value.objectUri}: ${value.totalReferences} reference(s)`,
-          ...(value.note ? [`Note: ${value.note}`] : []),
-          ...value.references.map(
-            (r) => `- ${r.name} (${r.type}) ${r.packageName ? `in ${r.packageName}` : ''}${r.usageInformation ? ` — ${r.usageInformation}` : ''}`,
-          ),
-        ];
-        return text(lines.join('\n'));
-      },
-    },
-    isConcurrencySafe: () => true,
-    execute: async (args, exec) => {
-      const entry = await registry.require(destinationOf(args), sessionCwd(exec));
-      const ref = await resolveToolObject(entry.client, args, exec.signal);
-      try {
-        const result = await entry.client.getWhereUsed(ref.uri, { enableAllTypes: args.enableAllTypes === true, signal: exec.signal });
-        return {
-          objectUri: ref.uri,
-          totalReferences: result.totalReferences,
-          references: result.references,
-        };
-      } catch (error) {
-        if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+      isConcurrencySafe: () => true,
+      execute: async (args, exec) => {
+        const entry = await registry.require(destinationOf(args), sessionCwd(exec));
+        const ref = await resolveToolObject(entry.client, args, exec.signal);
+        try {
+          const result = await entry.client.getWhereUsed(ref.uri, { enableAllTypes: args.enableAllTypes === true, signal: exec.signal });
           return {
             objectUri: ref.uri,
-            totalReferences: 0,
-            references: [],
-            note: `where-used (usageReferences) is not available on this backend (HTTP ${error.status}); ` +
-              'analyse dependencies via adt_search / adt_package_content instead',
+            totalReferences: result.totalReferences,
+            references: result.references,
           };
+        } catch (error) {
+          if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+            return {
+              objectUri: ref.uri,
+              totalReferences: 0,
+              references: [],
+              note: `where-used (usageReferences) is not available on this backend (HTTP ${error.status}); ` +
+                'analyse dependencies via adt_search / adt_package_content instead',
+            };
+          }
+          throw error;
         }
-        throw error;
-      }
-    },
+      },
     }),
   ];
 }

@@ -790,7 +790,7 @@ function transportNumberFor(requested: string): string {
 }
 
 function hTransportRelease({ res, path, opts }: RequestCtx): void {
-  const transportMatch = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/.exec(path);
+  const transportMatch = TRANSPORT_RE.exec(path);
   const number = transportNumberFor(decodeURIComponent(transportMatch![1]!));
   res.setHeader('Content-Type', 'application/vnd.sap.adt.transportorganizer.v1+xml');
   res.end(
@@ -801,7 +801,7 @@ function hTransportRelease({ res, path, opts }: RequestCtx): void {
 }
 
 function hTransportDetail({ res, state, path, opts }: RequestCtx): void {
-  const transportMatch = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/.exec(path);
+  const transportMatch = TRANSPORT_RE.exec(path);
   const number = transportNumberFor(decodeURIComponent(transportMatch![1]!));
   res.setHeader('Content-Type', 'application/vnd.sap.adt.transportorganizer.v1+xml');
   const items = state.objects
@@ -822,7 +822,7 @@ function hTransportDetail({ res, state, path, opts }: RequestCtx): void {
 
 // ---- Object creation (type-specific collections) ----
 async function hCreateObject({ res, req, state, url, path }: RequestCtx): Promise<void> {
-  const createMatch = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|messageclass|msgclass|packages)$/.exec(path);
+  const createMatch = CREATE_COLLECTIONS.exec(path);
   const body = await readBody(req);
   const nameMatch = /(?:class|intf|prog|ddls|adtcore):name="([^"]+)"/.exec(body) ?? /adtcore:name="([^"]+)"/.exec(body);
   const descMatch = /adtcore:description="([^"]+)"/.exec(body);
@@ -939,8 +939,7 @@ function hDeleteObject({ res, state, path }: RequestCtx): void {
 
 // ---- Object read (base URI or /source/main) ----
 function hObjectGet({ res, req, state, url, path }: RequestCtx): void {
-  const sourcePath = path.endsWith('/source/main') ? path.slice(0, -'/source/main'.length) : path;
-  const srcObj = findObject(state, sourcePath);
+  const srcObj = findObject(state, objectPath(path));
   if (!srcObj) return; // unreachable: match verified the object exists
   if (path.endsWith('/source/main')) {
     const version = url.searchParams.get('version');
@@ -969,8 +968,7 @@ function hObjectGet({ res, req, state, url, path }: RequestCtx): void {
 
 // ---- Object write (/source/main PUT) ----
 async function hSourcePut({ res, req, state, url, path }: RequestCtx): Promise<void> {
-  const sourcePath = path.slice(0, -'/source/main'.length);
-  const srcObj = findObject(state, sourcePath);
+  const srcObj = findObject(state, objectPath(path));
   if (!srcObj) return; // unreachable: match verified the object exists
   const body = await readBody(req);
   const codeMatch = /<[a-z]+:code[^>]*>([\s\S]*?)<\/[a-z]+:code>/.exec(body);
@@ -1325,8 +1323,9 @@ function hAtcResultDetail({ res, state, path }: RequestCtx): void {
 
 const CREATE_COLLECTIONS = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|messageclass|msgclass|packages)$/;
 const TRANSPORT_RE = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/;
-const OBJECT_PATH = (ctx: RequestCtx): string =>
-  ctx.path.endsWith('/source/main') ? ctx.path.slice(0, -'/source/main'.length) : ctx.path;
+/** Object base URI: strips a trailing `/source/main` (source-form URIs). */
+const objectPath = (path: string): string =>
+  path.endsWith('/source/main') ? path.slice(0, -'/source/main'.length) : path;
 
 const ROUTES: Route[] = [
   // Discovery / search / where-used
@@ -1387,11 +1386,11 @@ const ROUTES: Route[] = [
     handler: hDeleteObject,
   },
   // Object read (base URI or /source/main) and source write
-  { method: 'GET', match: (c) => findObject(c.state, OBJECT_PATH(c)) !== undefined, handler: hObjectGet },
+  { method: 'GET', match: (c) => findObject(c.state, objectPath(c.path)) !== undefined, handler: hObjectGet },
   {
     method: 'PUT',
     csrf: true,
-    match: (c) => c.path.endsWith('/source/main') && findObject(c.state, OBJECT_PATH(c)) !== undefined,
+    match: (c) => c.path.endsWith('/source/main') && findObject(c.state, objectPath(c.path)) !== undefined,
     handler: hSourcePut,
   },
   // Activation / check

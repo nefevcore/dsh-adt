@@ -66,9 +66,9 @@ export function gateTools(deps) {
                     return text(lines.join('\n'));
                 },
             },
-            // 1200s = activate + unit + ATC sequential budget (their individual
+            // 1200s = syntax + unit + ATC sequential budget (their individual
             // caps are 330s/660s; the gate re-uses the client per-call deadlines
-            // and adds headroom for activation and summary rendering).
+            // and adds headroom for summary rendering).
             timeoutMs: 1_200_000,
             execute: async (args, exec) => {
                 const entry = await registry.require(destinationOf(args), sessionCwd(exec));

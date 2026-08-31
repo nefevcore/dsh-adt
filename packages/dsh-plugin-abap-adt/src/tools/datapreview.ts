@@ -22,6 +22,31 @@ const KIND_TO_MODE: Record<string, 'ddic' | 'cds'> = {
   DDLS: 'cds',
 };
 
+/**
+ * Shared row-window resolution of the entity and sql paths: clamp `length`
+ * (1–500, `top` as the deprecated alias), resolve the client-side `offset`,
+ * compute the fetch top, and record the clamp/offset notes in order.
+ */
+function resolveRowWindow(
+  args: Record<string, unknown>,
+  notes: string[],
+): { offset: number; fetchTop: number; length: number } {
+  const requested = typeof args.length === 'number' ? args.length : typeof args.top === 'number' ? args.top : 100;
+  const clamp = clampWithNote(requested, 1, 500, 'length');
+  const offset = Math.max(Number(args.offset ?? 0) || 0, 0);
+  const fetchTop = Math.min(offset + clamp.value, 500);
+  if (clamp.note) notes.push(clamp.note);
+  if (offset > 0) notes.push(`offset ${offset} applied (client-side paging within the ${fetchTop}-row cap)`);
+  return { offset, fetchTop, length: clamp.value };
+}
+
+/** Slice the fetched rows to the window and note whether more are available. */
+function pageRows<T>(rows: T[], offset: number, length: number, notes: string[]): T[] {
+  const window = rows.slice(offset, offset + length);
+  if (offset + length < rows.length) notes.push(`more rows available: raise offset to ${offset + length}`);
+  return window;
+}
+
 export function dataPreviewTools(deps: ToolDeps) {
   const { registry } = deps;
   return [
@@ -147,23 +172,15 @@ export function dataPreviewTools(deps: ToolDeps) {
                 `Got: ${sql.trim().slice(0, 60)}${sql.trim().length > 60 ? '…' : ''}`,
             );
           }
-          const length = typeof args.length === 'number' ? args.length : typeof args.top === 'number' ? args.top : 100;
-          const clamp = clampWithNote(length, 1, 500, 'length');
-          const offset = Math.max(Number(args.offset ?? 0) || 0, 0);
           // Fetch offset+length rows (within the cap) and slice, so the SQL
           // path honors the same offset/length row-range as entity previews.
-          const fetchTop = Math.min(offset + clamp.value, 500);
-          if (clamp.note) notes.push(clamp.note);
-          if (offset > 0) notes.push(`offset ${offset} applied (client-side paging within the ${fetchTop}-row cap)`);
-          const result = await run(() => entry.client.runSqlQuery(sql, { top: fetchTop, signal: exec.signal }));
-          const rows = result.rows.slice(offset, offset + clamp.value);
-          if (offset + clamp.value < result.rows.length) {
-            notes.push(`more rows available: raise offset to ${offset + clamp.value}`);
-          }
+          const paging = resolveRowWindow(args, notes);
+          const result = await run(() => entry.client.runSqlQuery(sql, { top: paging.fetchTop, signal: exec.signal }));
+          const rows = pageRows(result.rows, paging.offset, paging.length, notes);
           return {
             source: 'sql',
             name: result.name,
-            offset,
+            offset: paging.offset,
             totalRows: result.totalRows,
             note: notes.length ? notes.join('; ') : undefined,
             queryExecutionTime: result.queryExecutionTime,
@@ -180,27 +197,18 @@ export function dataPreviewTools(deps: ToolDeps) {
         if (!mode) {
           throw new Error(`adt_data_preview: unsupported kind '${kindCode}' (expected TABL, VIEW, STRU or DDLS)`);
         }
-        const requestedLength = typeof args.length === 'number' ? args.length : typeof args.top === 'number' ? args.top : 100;
-        const clamp = clampWithNote(requestedLength, 1, 500, 'length');
-        const offset = Math.max(Number(args.offset ?? 0) || 0, 0);
         if (typeof args.length === 'number' && typeof args.top === 'number' && args.length !== args.top) {
           notes.push('both `length` and `top` given; `length` wins (`top` is a deprecated alias)');
         }
         // offset is client-side paging: fetch offset+top rows (within the cap)
         // and slice, mirroring adt_search.
-        const fetchTop = Math.min(offset + clamp.value, 500);
-        if (clamp.note) notes.push(clamp.note);
-        if (offset > 0) notes.push(`offset ${offset} applied (client-side paging within the ${fetchTop}-row cap)`);
-
-        const result = await run(() => entry.client.dataPreview(name, mode, { top: fetchTop, signal: exec.signal }));
-        const rows = result.rows.slice(offset, offset + clamp.value);
-        if (offset + clamp.value < result.rows.length) {
-          notes.push(`more rows available: raise offset to ${offset + clamp.value}`);
-        }
+        const paging = resolveRowWindow(args, notes);
+        const result = await run(() => entry.client.dataPreview(name, mode, { top: paging.fetchTop, signal: exec.signal }));
+        const rows = pageRows(result.rows, paging.offset, paging.length, notes);
         return {
           source: mode === 'cds' ? 'DDLS' : kindCode,
           name,
-          offset,
+          offset: paging.offset,
           totalRows: result.totalRows,
           note: notes.length ? notes.join('; ') : undefined,
           queryExecutionTime: result.queryExecutionTime,

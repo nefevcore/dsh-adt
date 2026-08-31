@@ -17,7 +17,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 
 /** Minimal surface of the host credential service the plugin consumes. */
-export interface CredentialsService {
+interface CredentialsService {
   /** Resolve one reference (env-var name) to its current value, if set. */
   resolve(ref: string): Promise<{ value: string; source?: string } | undefined>;
   /** Presence/writability facts for one reference — never the value. */
@@ -27,7 +27,7 @@ export interface CredentialsService {
 }
 
 /** A POSIX environment-variable name (CredentialRef grammar). */
-export const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Whether a raw string could name a credential reference at all. */
 export function isCredentialRefName(value: string): boolean {

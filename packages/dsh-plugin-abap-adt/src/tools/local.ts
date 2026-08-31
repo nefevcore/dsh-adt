@@ -200,8 +200,8 @@ export async function runLocalCheck(
 
   const counts: Record<CheckSeverity, number> = { Error: 0, Warning: 0, Info: 0 };
   for (const issue of all) {
-    const severity = issue.getSeverity() as CheckSeverity;
-    counts[severity] = (counts[severity] ?? 0) + 1;
+    const sev = issue.getSeverity() as CheckSeverity;
+    counts[sev] = (counts[sev] ?? 0) + 1;
   }
 
   const allowed =

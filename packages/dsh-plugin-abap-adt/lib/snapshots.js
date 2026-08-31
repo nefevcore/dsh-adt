@@ -71,7 +71,7 @@ function fileStem(ref) {
     const short = (ref.type.split('/')[0] ?? 'obj').toLowerCase();
     return `${ref.name.toLowerCase()}.${short}.abap`;
 }
-export function snapshotPaths(destination, ref) {
+function snapshotPaths(destination, ref) {
     const file = `.adt-snapshots/${destination}/${fileStem(ref)}`;
     return { file, sidecar: `${file}.json` };
 }

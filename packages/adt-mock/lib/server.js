@@ -631,13 +631,13 @@ function transportNumberFor(requested) {
     return requested.toUpperCase() === 'S4HK900003' ? 'S4HK900001' : requested;
 }
 function hTransportRelease({ res, path, opts }) {
-    const transportMatch = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/.exec(path);
+    const transportMatch = TRANSPORT_RE.exec(path);
     const number = transportNumberFor(decodeURIComponent(transportMatch[1]));
     res.setHeader('Content-Type', 'application/vnd.sap.adt.transportorganizer.v1+xml');
     res.end(adtXml(`<trs:request xmlns:trs="http://www.sap.com/adt/cts" trs:number="${number}" trs:description="Released by mock" trs:status="R" trs:type="K" trs:user="DEMO" trs:system="${opts.systemId}" trs:client="000" trs:target="QAS"/>`));
 }
 function hTransportDetail({ res, state, path, opts }) {
-    const transportMatch = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/.exec(path);
+    const transportMatch = TRANSPORT_RE.exec(path);
     const number = transportNumberFor(decodeURIComponent(transportMatch[1]));
     res.setHeader('Content-Type', 'application/vnd.sap.adt.transportorganizer.v1+xml');
     const items = state.objects
@@ -650,7 +650,7 @@ function hTransportDetail({ res, state, path, opts }) {
 }
 // ---- Object creation (type-specific collections) ----
 async function hCreateObject({ res, req, state, url, path }) {
-    const createMatch = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|messageclass|msgclass|packages)$/.exec(path);
+    const createMatch = CREATE_COLLECTIONS.exec(path);
     const body = await readBody(req);
     const nameMatch = /(?:class|intf|prog|ddls|adtcore):name="([^"]+)"/.exec(body) ?? /adtcore:name="([^"]+)"/.exec(body);
     const descMatch = /adtcore:description="([^"]+)"/.exec(body);
@@ -763,8 +763,7 @@ function hDeleteObject({ res, state, path }) {
 }
 // ---- Object read (base URI or /source/main) ----
 function hObjectGet({ res, req, state, url, path }) {
-    const sourcePath = path.endsWith('/source/main') ? path.slice(0, -'/source/main'.length) : path;
-    const srcObj = findObject(state, sourcePath);
+    const srcObj = findObject(state, objectPath(path));
     if (!srcObj)
         return; // unreachable: match verified the object exists
     if (path.endsWith('/source/main')) {
@@ -792,8 +791,7 @@ function hObjectGet({ res, req, state, url, path }) {
 }
 // ---- Object write (/source/main PUT) ----
 async function hSourcePut({ res, req, state, url, path }) {
-    const sourcePath = path.slice(0, -'/source/main'.length);
-    const srcObj = findObject(state, sourcePath);
+    const srcObj = findObject(state, objectPath(path));
     if (!srcObj)
         return; // unreachable: match verified the object exists
     const body = await readBody(req);
@@ -1095,7 +1093,8 @@ function hAtcResultDetail({ res, state, path }) {
 // --- The route table (dispatch order matters — do not reorder) ---------------
 const CREATE_COLLECTIONS = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|messageclass|msgclass|packages)$/;
 const TRANSPORT_RE = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/;
-const OBJECT_PATH = (ctx) => ctx.path.endsWith('/source/main') ? ctx.path.slice(0, -'/source/main'.length) : ctx.path;
+/** Object base URI: strips a trailing `/source/main` (source-form URIs). */
+const objectPath = (path) => path.endsWith('/source/main') ? path.slice(0, -'/source/main'.length) : path;
 const ROUTES = [
     // Discovery / search / where-used
     { method: 'GET', match: (c) => c.path === '/core/discovery' || c.path === '/discovery', handler: hDiscovery },
@@ -1155,11 +1154,11 @@ const ROUTES = [
         handler: hDeleteObject,
     },
     // Object read (base URI or /source/main) and source write
-    { method: 'GET', match: (c) => findObject(c.state, OBJECT_PATH(c)) !== undefined, handler: hObjectGet },
+    { method: 'GET', match: (c) => findObject(c.state, objectPath(c.path)) !== undefined, handler: hObjectGet },
     {
         method: 'PUT',
         csrf: true,
-        match: (c) => c.path.endsWith('/source/main') && findObject(c.state, OBJECT_PATH(c)) !== undefined,
+        match: (c) => c.path.endsWith('/source/main') && findObject(c.state, objectPath(c.path)) !== undefined,
         handler: hSourcePut,
     },
     // Activation / check

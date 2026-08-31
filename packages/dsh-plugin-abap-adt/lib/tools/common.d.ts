@@ -9,18 +9,6 @@ import type { AdtPolicy } from '../policy.js';
  * included in the denial context to identify the object involved.
  */
 export declare function assertExplicitTransport(policy: AdtPolicy, transport: string | undefined, toolName: string, objectName?: string): void;
-/** Shared activation summary for the write-family tools. */
-export declare function activationSummary(act: {
-    success: boolean;
-    items: Array<{
-        name: string;
-        status: string;
-        message?: string;
-    }>;
-}): {
-    success: boolean;
-    message?: string;
-};
 /** One ATC finding as the tools report it (mapped from the protocol shape). */
 export interface AtcFindingOutput {
     checkTitle: string;
@@ -147,8 +135,6 @@ export declare function atcAggregatesSuffix(aggregates?: {
     priority3: number;
     priority4: number;
 }): string;
-/** Attribute the effective transport to its source (user-passed vs lock-assigned). */
-export declare function transportSourceOf(effectiveTransport: string | undefined, userTransport: string | undefined): 'user' | 'auto' | undefined;
 /** Parameter spec for the destination selector used by every tool. */
 export declare const DESTINATION_PARAM: {
     readonly destination: {

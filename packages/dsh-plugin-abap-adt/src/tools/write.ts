@@ -27,14 +27,12 @@ import { sessionCwd,
   DESTINATION_PARAM,
   OBJECT_REF_PARAMS,
   PACKAGE_HINT_PARAM,
-  activationSummary,
   assertExplicitTransport,
   assertObjectEditable,
   destinationOf,
   optStr,
   resolveToolObject,
   text,
-  transportSourceOf,
   type ToolDeps,
 } from './common.js';
 
@@ -163,6 +161,53 @@ function writeStatusSuffix(value: WriteStatus): string {
   );
 }
 
+/** Activation summary of the write-family pipeline (single flat message). */
+function activationSummary(act: {
+  success: boolean;
+  items: Array<{ name: string; status: string; message?: string }>;
+}): { success: boolean; message?: string } {
+  return {
+    success: act.success,
+    message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ' ' + i.message : ''}`).join('; ') || undefined,
+  };
+}
+
+/** Attribute the effective transport to its source (user-passed vs lock-assigned). */
+function transportSourceOf(
+  effectiveTransport: string | undefined,
+  userTransport: string | undefined,
+): 'user' | 'auto' | undefined {
+  return effectiveTransport ? (userTransport ? 'user' : 'auto') : undefined;
+}
+
+/**
+ * Epilogue shared by the write-family tools: persistence verification (see
+ * {@link verifyPersisted}) + snapshot refresh from the same read-back, then
+ * the WRITE_STATUS_SCHEMA value fields. The fs guard keeps non-fs profiles
+ * working (push rejects earlier without fs anyway).
+ */
+async function postWriteStatus(
+  ctx: Context,
+  entry: RegistryDestination,
+  ref: AdtObjectRef,
+  outcome: WriteStatus & { written?: string },
+  signal?: AbortSignal,
+): Promise<WriteStatus> {
+  const persistCheck = await verifyPersisted(entry.client, ref, outcome.written ?? '', signal);
+  if (ctx.get('fs') && persistCheck.readBackSource !== undefined) {
+    await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
+  }
+  return {
+    unlocked: outcome.unlocked,
+    activated: outcome.activated || undefined,
+    persisted: persistCheck.persisted,
+    warning: persistCheck.warning,
+    transport: outcome.transport,
+    transportSource: outcome.transportSource,
+    activation: outcome.activation,
+  };
+}
+
 /**
  * The LOCKED-WRITE PIPELINE shared by adt_write_object / adt_edit_object /
  * adt_push_object: lock → ledger.register → transport re-check (the
@@ -272,7 +317,7 @@ function defaultEndFor(startText: string): string | undefined {
  * full-line comment; `"` starts a tail comment unless it sits inside a
  * single-quoted string literal ('' is an escaped quote inside literals).
  */
-export function stripAbapComment(line: string): string {
+function stripAbapComment(line: string): string {
   if (line.trimStart().startsWith('*')) return '';
   let inString = false;
   for (let i = 0; i < line.length; i++) {
@@ -813,24 +858,15 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           return src;
         },
       });
-      // Post-write persistence verification + snapshot refresh from the same
-      // read-back (OCC base = real server state, not what we SENT — backends
-      // may normalize). See verifyPersisted for why the extra GET is worth it.
-      const persistCheck = await verifyPersisted(entry.client, ref, outcome.written ?? '', exec.signal);
-      if (ctx.get('fs') && persistCheck.readBackSource !== undefined) {
-        await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
-      }
+      // Shared epilogue: persistence verification + snapshot refresh + the
+      // status tail (OCC base = real server state, not what we SENT —
+      // backends may normalize). See verifyPersisted for why the extra GET
+      // is worth it.
       return {
         uri: ref.uri,
         name: ref.name,
         updated: true,
-        unlocked: outcome.unlocked,
-        activated: outcome.activated || undefined,
-        persisted: persistCheck.persisted,
-        warning: persistCheck.warning,
-        transport: outcome.transport,
-        transportSource: outcome.transportSource,
-        activation: outcome.activation,
+        ...(await postWriteStatus(ctx, entry, ref, outcome, exec.signal)),
       };
     },
   });
@@ -1038,13 +1074,6 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           return replaced.full;
         },
       });
-      // Post-write persistence verification + snapshot refresh from the same
-      // read-back (OCC base = real server state). See verifyPersisted for why
-      // the extra GET is worth it.
-      const persistCheck = await verifyPersisted(entry.client, ref, outcome.written ?? '', exec.signal);
-      if (ctx.get('fs') && persistCheck.readBackSource !== undefined) {
-        await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
-      }
       // In oldText mode report the first/last quoted line as the block labels.
       const oldQuoteLines = oldText !== undefined ? oldText.replace(/\r\n/g, '\n').split('\n') : undefined;
       const startLabel = oldQuoteLines ? (oldQuoteLines[0] ?? '').trim() : startText;
@@ -1061,13 +1090,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         newLines: replaced?.newLines ?? 0,
         matchMode: replaced?.matchMode ?? 'text',
         occurrence: replaced?.occurrence,
-        unlocked: outcome.unlocked,
-        activated: outcome.activated || undefined,
-        persisted: persistCheck.persisted,
-        warning: persistCheck.warning,
-        transport: outcome.transport,
-        transportSource: outcome.transportSource,
-        activation: outcome.activation,
+        ...(await postWriteStatus(ctx, entry, ref, outcome, exec.signal)),
       };
     },
   });
@@ -1193,25 +1216,15 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
           return localSource;
         },
       });
-      // Post-write persistence verification + snapshot refresh from the same
-      // read-back (new OCC base = real server state).
-      const persistCheck = await verifyPersisted(entry.client, ref, outcome.written ?? '', exec.signal);
-      if (persistCheck.readBackSource !== undefined) {
-        await saveSnapshot(ctx, entry.config.name, ref, persistCheck.readBackSource).catch(() => undefined);
-      }
+      // Shared epilogue (new OCC base = real server state); fs is guaranteed
+      // here (checked at the top of the tool).
       return {
         uri: ref.uri,
         name: ref.name,
         pushed: true,
         verified,
         localCopy,
-        unlocked: outcome.unlocked,
-        activated: outcome.activated || undefined,
-        persisted: persistCheck.persisted,
-        warning: persistCheck.warning,
-        transport: outcome.transport,
-        transportSource: outcome.transportSource,
-        activation: outcome.activation,
+        ...(await postWriteStatus(ctx, entry, ref, outcome, exec.signal)),
       };
     },
   });

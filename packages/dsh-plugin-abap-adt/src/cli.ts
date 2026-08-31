@@ -165,7 +165,7 @@ function isDirectory(path: string): boolean {
 }
 
 /** Parse the minimal flag set this CLI supports. */
-export interface CliArgs {
+interface CliArgs {
   id: string;
   from?: string;
   name: string;

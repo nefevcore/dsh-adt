@@ -79,7 +79,6 @@ class XmlParser {
           }
           this.pos++;
         }
-        if (this.pos > this.input.length) throw new Error('XML: unterminated DOCTYPE');
       } else {
         break;
       }

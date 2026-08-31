@@ -18,8 +18,25 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError, } from '@nefevcore/abap-adt-protocol';
-import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, objectRefArgs, optStr, resolveToolObject, text, } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, } from './common.js';
 const KINDS = ['MSAG', 'DOMA', 'DTEL', 'TTYP'];
+/** `kind` parameter spec shared by both structure tools. */
+const KIND_PARAM = {
+    type: 'string',
+    enum: KINDS,
+    description: 'Structured editor kind (default: derived from the object type code).',
+};
+/** Structure-data property schema shared by both structure tools' outputs. */
+const STRUCTURE_DATA_PROPERTIES = {
+    kind: { type: 'string', required: true },
+    name: { type: 'string', required: true },
+    description: { type: 'string' },
+    packageName: { type: 'string' },
+    messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    properties: { type: 'object', additionalProperties: true },
+    fixedValues: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    labels: { type: 'object', additionalProperties: true },
+};
 const KIND_DESCRIPTIONS = {
     MSAG: 'messages: [{number, text, selfExplanatory}] — full replacement list (absent numbers are deleted)',
     DOMA: 'properties {datatype,length,decimals,conversionExit,signExists,lowercase,valueTable} + fixedValues: [{low,high,description}] (full replacement)',
@@ -97,11 +114,7 @@ export function structureTools(deps) {
             'Read-only.',
         parameters: {
             ...OBJECT_REF_PARAMS,
-            kind: {
-                type: 'string',
-                enum: KINDS,
-                description: 'Structured editor kind (default: derived from the object type code).',
-            },
+            kind: KIND_PARAM,
             ...DESTINATION_PARAM,
         },
         output: {
@@ -109,14 +122,7 @@ export function structureTools(deps) {
                 type: 'object',
                 additionalProperties: false,
                 properties: {
-                    kind: { type: 'string', required: true },
-                    name: { type: 'string', required: true },
-                    description: { type: 'string' },
-                    packageName: { type: 'string' },
-                    messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
-                    properties: { type: 'object', additionalProperties: true },
-                    fixedValues: { type: 'array', items: { type: 'object', additionalProperties: true } },
-                    labels: { type: 'object', additionalProperties: true },
+                    ...STRUCTURE_DATA_PROPERTIES,
                 },
             },
             render: (_args, value) => text(renderStructure(value).join('\n')),
@@ -162,11 +168,7 @@ export function structureTools(deps) {
             `DTEL: ${KIND_DESCRIPTIONS.DTEL}; TTYP: ${KIND_DESCRIPTIONS.TTYP}.`,
         parameters: {
             ...OBJECT_REF_PARAMS,
-            kind: {
-                type: 'string',
-                enum: KINDS,
-                description: 'Structured editor kind (default: derived from the object type code).',
-            },
+            kind: KIND_PARAM,
             description: { type: 'string', description: 'New short description (all kinds).' },
             messages: {
                 type: 'array',
@@ -223,14 +225,7 @@ export function structureTools(deps) {
                         additionalProperties: false,
                         description: 'Effective structure after the write.',
                         properties: {
-                            kind: { type: 'string', required: true },
-                            name: { type: 'string', required: true },
-                            description: { type: 'string' },
-                            packageName: { type: 'string' },
-                            messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
-                            properties: { type: 'object', additionalProperties: true },
-                            fixedValues: { type: 'array', items: { type: 'object', additionalProperties: true } },
-                            labels: { type: 'object', additionalProperties: true },
+                            ...STRUCTURE_DATA_PROPERTIES,
                         },
                     },
                 },

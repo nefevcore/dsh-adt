@@ -22,7 +22,7 @@ import { copyFileSync, readFileSync, renameSync, writeFileSync, mkdirSync, exist
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-export interface LockEntry {
+interface LockEntry {
   /** Unique id of the entry. */
   id: string;
   /** Destination name the lock was acquired on. */
@@ -42,7 +42,7 @@ export interface LockEntry {
 }
 
 /** Resolve the ledger file path inside the DSH storages area (never throws). */
-export function ledgerFilePath(): string {
+function ledgerFilePath(): string {
   try {
     const base = process.env.DSH_HOME || join(homedir(), '.dsh');
     return join(base, 'storages', 'abap-adt-locks.json');

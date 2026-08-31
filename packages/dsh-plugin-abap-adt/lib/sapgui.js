@@ -201,13 +201,16 @@ function parseLandscapeXml(xml, source) {
     }
     return { connections, includes };
 }
+/** The per-user SAP GUI common directory (`%APPDATA%\SAP\Common`). */
+function sapCommonDir() {
+    return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'SAP', 'Common');
+}
 /** Candidate landscape files (before existence checks). */
 function landscapeCandidates() {
     const override = process.env.ADT_SAPGUI_LANDSCAPE;
     if (override)
         return override.split(delimiter).filter((p) => p.length > 0);
-    const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
-    const common = join(appData, 'SAP', 'Common');
+    const common = sapCommonDir();
     const files = [join(common, 'SAPUILandscape.xml')];
     // Admin-managed global landscape stands alone when the user file is absent.
     const global = join(common, 'SAPUILandscapeGlobal.xml');
@@ -288,7 +291,7 @@ function appendClassicIni(connections, sources) {
     const override = process.env.ADT_SAPGUI_LANDSCAPE;
     const iniPath = override
         ? undefined // explicit override replaces the whole discovery
-        : join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'SAP', 'Common', 'saplogon.ini');
+        : join(sapCommonDir(), 'saplogon.ini');
     if (iniPath === undefined || !existsSync(iniPath))
         return;
     let ini;

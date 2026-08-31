@@ -1,17 +1,8 @@
 import { AdtClient } from '@nefevcore/abap-adt-protocol';
 import { createMockAdtServer } from '@nefevcore/abap-adt-mock';
 import { resolvePassword } from './config.js';
-import { AdtPolicy } from './policy.js';
+import { AdtPolicy, POLICY_KEYS } from './policy.js';
 import { WorkspaceConfigStore, upsertDestination } from './workspace.js';
-/** Policy keys a workspace file may set at its top level (defaults for ITS destinations). */
-const POLICY_INPUT_KEYS = [
-    'enableTransports',
-    'allowedTransports',
-    'allowTransportableEdits',
-    'allowedPackages',
-    'allowExecution',
-    'allowBatchWrites',
-];
 /** Small non-crypto hash so passwords never sit in a cache key string. */
 function hashSecret(value) {
     let hash = 5381;
@@ -219,13 +210,6 @@ export class AdtRegistry {
      * workspace file layered on top (nearest wins — same-name entries replace,
      * new names append, `defaultDestination` and top-level policy keys
      * override). `cwd` is the session workspace directory; omit it to see the
-     * shared global state (tests, startup logs).
-     */
-    /**
-     * Compose the destination view for one caller: global destinations with the
-     * workspace file layered on top (nearest wins — same-name entries replace,
-     * new names append, `defaultDestination` and top-level policy keys
-     * override). `cwd` is the session workspace directory; omit it to see the
      * shared global state (tests, startup logs). Async because workspace
      * entries resolve their password through the credential service per call.
      */
@@ -239,7 +223,7 @@ export class AdtRegistry {
                 workspaceFile = loaded.path;
                 const workspaceInputs = { ...this.globalPolicyInputs };
                 const layer = loaded.layer;
-                for (const key of POLICY_INPUT_KEYS) {
+                for (const key of POLICY_KEYS) {
                     const value = layer[key];
                     if (value !== undefined) {
                         workspaceInputs[key] = value;
@@ -317,8 +301,8 @@ export class AdtRegistry {
                 throw new Error(`destination "${dest.name}" already exists in the workspace file (url: ${existing.url}). ` +
                     'Pass overwrite: true to replace it.');
             }
-            created = existing === undefined;
             const upserted = upsertDestination(current, dest);
+            created = upserted.created;
             return options.setDefault ? { ...upserted.layer, defaultDestination: dest.name } : upserted.layer;
         });
         return { path, created, layer };

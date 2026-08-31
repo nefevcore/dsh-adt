@@ -61,7 +61,7 @@ export declare const POLICY_ENV: {
     readonly allowBatchWrites: "SAP_ALLOW_BATCH_WRITES";
 };
 /** Built-in defaults: permissive for edits/execution, strict for batch writes. */
-export declare const POLICY_DEFAULTS: {
+declare const POLICY_DEFAULTS: {
     readonly enableTransports: true;
     readonly allowedTransports: "*";
     readonly allowTransportableEdits: true;
@@ -69,6 +69,11 @@ export declare const POLICY_DEFAULTS: {
     readonly allowExecution: true;
     readonly allowBatchWrites: false;
 };
+/**
+ * The six policy knob keys — the canonical list config.ts (known-key
+ * validation) and registry.ts (workspace-layer overlay) derive theirs from.
+ */
+export declare const POLICY_KEYS: PolicyKey[];
 /** Raw (pre-resolution) policy values from the plugin config. */
 export interface PolicyInputs {
     enableTransports?: boolean;
@@ -79,7 +84,7 @@ export interface PolicyInputs {
     allowBatchWrites?: boolean;
 }
 export type PolicyKey = keyof PolicyInputs;
-export type PolicySource = 'config' | 'env' | 'default';
+type PolicySource = 'config' | 'env' | 'default';
 /** Thrown when a policy rule denies an operation. */
 export declare class AdtPolicyError extends Error {
     /** The knob that blocked the operation (matches PolicyKey). */
@@ -88,8 +93,6 @@ export declare class AdtPolicyError extends Error {
 }
 /** Split a comma-separated glob list; empty/omitted means "allow all" (`*`). */
 export declare function parsePatterns(list: string | undefined): string[];
-/** Convert a simple glob (`*`, `?`) into a case-insensitive RegExp. */
-export declare function globToRegExp(pattern: string): RegExp;
 /** Does `value` match any of the glob patterns? */
 export declare function matchesAny(patterns: string[], value: string): boolean;
 /** `$TMP` is the SAP local-objects package (no transport). */
@@ -146,4 +149,5 @@ export declare class AdtPolicy {
         defaults: typeof POLICY_DEFAULTS;
     };
 }
+export {};
 //# sourceMappingURL=policy.d.ts.map

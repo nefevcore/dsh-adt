@@ -29,7 +29,6 @@ import { sessionCwd,
   assertExplicitTransport,
   assertObjectEditable,
   destinationOf,
-  objectRefArgs,
   optStr,
   resolveToolObject,
   text,
@@ -37,6 +36,25 @@ import { sessionCwd,
 } from './common.js';
 
 const KINDS: AdtStructureKind[] = ['MSAG', 'DOMA', 'DTEL', 'TTYP'];
+
+/** `kind` parameter spec shared by both structure tools. */
+const KIND_PARAM = {
+  type: 'string',
+  enum: KINDS,
+  description: 'Structured editor kind (default: derived from the object type code).',
+} as const;
+
+/** Structure-data property schema shared by both structure tools' outputs. */
+const STRUCTURE_DATA_PROPERTIES = {
+  kind: { type: 'string', required: true },
+  name: { type: 'string', required: true },
+  description: { type: 'string' },
+  packageName: { type: 'string' },
+  messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  properties: { type: 'object', additionalProperties: true },
+  fixedValues: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  labels: { type: 'object', additionalProperties: true },
+} as const;
 
 const KIND_DESCRIPTIONS: Record<AdtStructureKind, string> = {
   MSAG: 'messages: [{number, text, selfExplanatory}] — full replacement list (absent numbers are deleted)',
@@ -128,11 +146,7 @@ export function structureTools(deps: ToolDeps) {
       'Read-only.',
     parameters: {
       ...OBJECT_REF_PARAMS,
-      kind: {
-        type: 'string',
-        enum: KINDS,
-        description: 'Structured editor kind (default: derived from the object type code).',
-      },
+      kind: KIND_PARAM,
       ...DESTINATION_PARAM,
     },
     output: {
@@ -141,14 +155,7 @@ export function structureTools(deps: ToolDeps) {
         additionalProperties: false,
 
         properties: {
-          kind: { type: 'string', required: true },
-          name: { type: 'string', required: true },
-          description: { type: 'string' },
-          packageName: { type: 'string' },
-          messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
-          properties: { type: 'object', additionalProperties: true },
-          fixedValues: { type: 'array', items: { type: 'object', additionalProperties: true } },
-          labels: { type: 'object', additionalProperties: true },
+          ...STRUCTURE_DATA_PROPERTIES,
         },
       },
       render: (_args, value) => text(renderStructure(value as never).join('\n')),
@@ -203,11 +210,7 @@ export function structureTools(deps: ToolDeps) {
       `DTEL: ${KIND_DESCRIPTIONS.DTEL}; TTYP: ${KIND_DESCRIPTIONS.TTYP}.`,
     parameters: {
       ...OBJECT_REF_PARAMS,
-      kind: {
-        type: 'string',
-        enum: KINDS,
-        description: 'Structured editor kind (default: derived from the object type code).',
-      },
+      kind: KIND_PARAM,
       description: { type: 'string', description: 'New short description (all kinds).' },
       messages: {
         type: 'array',
@@ -268,14 +271,7 @@ export function structureTools(deps: ToolDeps) {
 
             description: 'Effective structure after the write.',
             properties: {
-              kind: { type: 'string', required: true },
-              name: { type: 'string', required: true },
-              description: { type: 'string' },
-              packageName: { type: 'string' },
-              messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
-              properties: { type: 'object', additionalProperties: true },
-              fixedValues: { type: 'array', items: { type: 'object', additionalProperties: true } },
-              labels: { type: 'object', additionalProperties: true },
+              ...STRUCTURE_DATA_PROPERTIES,
             },
           },
         },

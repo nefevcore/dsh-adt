@@ -61,7 +61,7 @@ export const POLICY_ENV = {
     allowBatchWrites: 'SAP_ALLOW_BATCH_WRITES',
 };
 /** Built-in defaults: permissive for edits/execution, strict for batch writes. */
-export const POLICY_DEFAULTS = {
+const POLICY_DEFAULTS = {
     enableTransports: true,
     allowedTransports: '*',
     allowTransportableEdits: true,
@@ -69,6 +69,11 @@ export const POLICY_DEFAULTS = {
     allowExecution: true,
     allowBatchWrites: false,
 };
+/**
+ * The six policy knob keys — the canonical list config.ts (known-key
+ * validation) and registry.ts (workspace-layer overlay) derive theirs from.
+ */
+export const POLICY_KEYS = Object.keys(POLICY_DEFAULTS);
 /** Thrown when a policy rule denies an operation. */
 export class AdtPolicyError extends Error {
     /** The knob that blocked the operation (matches PolicyKey). */
@@ -92,7 +97,7 @@ export function parsePatterns(list) {
         .filter((part) => part.length > 0);
 }
 /** Convert a simple glob (`*`, `?`) into a case-insensitive RegExp. */
-export function globToRegExp(pattern) {
+function globToRegExp(pattern) {
     let re = '';
     for (const ch of pattern) {
         if (ch === '*')

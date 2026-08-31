@@ -126,6 +126,14 @@ function objectBaseUri(objectUri) {
     const uri = normalizeUri(objectUri);
     return uri.endsWith('/source/main') ? uri.slice(0, -'/source/main'.length) : uri;
 }
+/**
+ * Swap the message-class URI prefix to its alternate spelling: modern
+ * profiles serve `/messageclass/`, older ones (and the bundled mock) only
+ * `/msgclass/`. readStructure/writeStructure retry with this on 404.
+ */
+function msagAltUri(uri) {
+    return uri.includes('/messageclass/') ? uri.replace('/messageclass/', '/msgclass/') : uri.replace('/msgclass/', '/messageclass/');
+}
 export class AdtClient {
     destination;
     cookies = new Map();
@@ -483,7 +491,7 @@ export class AdtClient {
             features['SAP_BASIS_RELEASE'] ||
             features['SAP_SYSTEM_RELEASE_ID'] ||
             '';
-        const abapCloud = Object.keys(features).some((k) => k.toLowerCase().includes('cloud')) || features['ABAP_CLOUD'] === 'true';
+        const abapCloud = Object.keys(features).some((k) => k.toLowerCase().includes('cloud'));
         return {
             destination: this.destination.name,
             systemId,
@@ -511,6 +519,14 @@ export class AdtClient {
      */
     async search(query, options = {}) {
         const operation = options.operation ?? 'quickSearch';
+        // Options forwarded unchanged by both quickSearch retries below.
+        const quickRetry = {
+            maxResults: options.maxResults,
+            objectType: options.objectType,
+            packageName: options.packageName,
+            operation: 'quickSearch',
+            signal: options.signal,
+        };
         const params = this.baseQuery({
             operation,
             query,
@@ -529,13 +545,7 @@ export class AdtClient {
             // exact token and returns zero hits (e.g. 'ZCL_MCP_TOOL' → 0, while
             // 'ZCL_MCP_TOOL*' → hits). Retry with a trailing '*' and say so.
             if (parsed.count === 0 && !/[*?]/.test(query)) {
-                const wildcard = await this.search(`${query}*`, {
-                    maxResults: options.maxResults,
-                    objectType: options.objectType,
-                    packageName: options.packageName,
-                    operation: 'quickSearch',
-                    signal: options.signal,
-                });
+                const wildcard = await this.search(`${query}*`, quickRetry);
                 if (wildcard.count > 0) {
                     wildcard.note = `'${query}' matched nothing; retried as '${query}*' — this backend requires a wildcard for name search`;
                 }
@@ -552,13 +562,7 @@ export class AdtClient {
             if (error instanceof AdtError &&
                 (error.status === 500 || error.status === 400 || error.status === 404 || error.status === 405) &&
                 operation !== 'quickSearch') {
-                const fallback = await this.search(query, {
-                    maxResults: options.maxResults,
-                    objectType: options.objectType,
-                    packageName: options.packageName,
-                    operation: 'quickSearch',
-                    signal: options.signal,
-                });
+                const fallback = await this.search(query, quickRetry);
                 fallback.note = `search operation '${operation}' unsupported by this backend; results from quickSearch`;
                 return fallback;
             }
@@ -683,10 +687,12 @@ export class AdtClient {
         });
     }
     /**
-     * Unlock with the given handle; when that fails (or no handle is known),
-     * retry WITHOUT a handle. Some backends release the lock on a bare
-     * `_action=UNLOCK` (same user), which lets `unlock_all` clean residual
-     * locks whose handle was never returned (e.g. create-time auto locks).
+     * Unlock with the given handle; when that fails with anything but 403 (or
+     * no handle is known), retry WITHOUT a handle — some backends release the
+     * lock on a bare `_action=UNLOCK` (same user), which lets `unlock_all`
+     * clean residual locks whose handle was never returned (e.g. create-time
+     * auto locks). A 403 (lock held by another user) is final and reported
+     * as-is: a handle-less unlock cannot succeed there either.
      */
     async unlockBestEffort(objectUri, handle, options = {}) {
         const uri = objectBaseUri(objectUri);
@@ -1521,23 +1527,27 @@ export class AdtClient {
     // ---------------------------------------------------------------------------
     // Program / class execution
     // ---------------------------------------------------------------------------
-    /**
-     * Run an ABAP executable program (console output comes back as text).
-     * Equivalent to F8 in ADT: the program runs synchronously in the session.
-     */
-    async runProgram(programName, options = {}) {
-        const name = programName.trim().toUpperCase();
+    /** Shared console-run round trip of runProgram/runClass (stateful, 300s). */
+    async runConsole(kind, rawName, endpoint, options) {
+        const name = rawName.trim().toUpperCase();
         if (!name)
-            throw new AdtError('ADT: program name is required');
+            throw new AdtError(`ADT: ${kind === 'PROG' ? 'program' : 'class'} name is required`);
         const res = await this.request({
             method: 'POST',
-            path: `${ENDPOINTS.programRun(name)}${toQuery(this.baseQuery())}`,
+            path: `${endpoint(name)}${toQuery(this.baseQuery())}`,
             accept: 'text/plain, application/xml',
             stateful: true,
             timeoutMs: 300_000,
             signal: options.signal,
         });
-        return { kind: 'PROG', name, output: res.text, status: res.status };
+        return { kind, name, output: res.text, status: res.status };
+    }
+    /**
+     * Run an ABAP executable program (console output comes back as text).
+     * Equivalent to F8 in ADT: the program runs synchronously in the session.
+     */
+    async runProgram(programName, options = {}) {
+        return this.runConsole('PROG', programName, ENDPOINTS.programRun, options);
     }
     /**
      * Run a class that implements `if_oo_adt_classrun` — its `main( )` executes
@@ -1545,18 +1555,7 @@ export class AdtClient {
      * pattern for "run logic and capture output without building a program".
      */
     async runClass(className, options = {}) {
-        const name = className.trim().toUpperCase();
-        if (!name)
-            throw new AdtError('ADT: class name is required');
-        const res = await this.request({
-            method: 'POST',
-            path: `${ENDPOINTS.classRun(name)}${toQuery(this.baseQuery())}`,
-            accept: 'text/plain, application/xml',
-            stateful: true,
-            timeoutMs: 300_000,
-            signal: options.signal,
-        });
-        return { kind: 'CLAS', name, output: res.text, status: res.status };
+        return this.runConsole('CLAS', className, ENDPOINTS.classRun, options);
     }
     // ---------------------------------------------------------------------------
     // Protocol-level $batch
@@ -1631,7 +1630,7 @@ export class AdtClient {
                 error.status === 404 &&
                 kind === 'MSAG' &&
                 /\/(messageclass|msgclass)\//.test(uri)) {
-                const alt = uri.includes('/messageclass/') ? uri.replace('/messageclass/', '/msgclass/') : uri.replace('/msgclass/', '/messageclass/');
+                const alt = msagAltUri(uri);
                 xml = await get(alt);
             }
             else {
@@ -1661,9 +1660,7 @@ export class AdtClient {
                 error.status === 404 &&
                 kind === 'MSAG' &&
                 /\/(messageclass|msgclass)\//.test(uri)) {
-                uri = uri.includes('/messageclass/')
-                    ? uri.replace('/messageclass/', '/msgclass/')
-                    : uri.replace('/msgclass/', '/messageclass/');
+                uri = msagAltUri(uri);
                 lock = await this.lock(uri, { signal: options.signal });
             }
             else {
@@ -1805,10 +1802,14 @@ function buildCheckRunRequest(objects) {
 ${refs}
 </chkrun:checkObjectList>`;
 }
-function buildUnitRunRequest(objects) {
-    const sets = objects
+/** OSL flat object sets shared by the ABAP Unit and ATC run requests. */
+function oslSets(objects) {
+    return objects
         .map((o) => `    <osl:set xsi:type="osl:flatObjectSet"><osl:object name="${escapeXml(o.name)}" type="${escapeXml(o.type.split('/')[0] ?? 'CLAS')}"/></osl:set>`)
         .join('\n');
+}
+function buildUnitRunRequest(objects) {
+    const sets = oslSets(objects);
     return `<?xml version="1.0" encoding="UTF-8"?>
 <aunit:run title="DSH Agent Run" context="DSH"
            xmlns:aunit="http://www.sap.com/adt/api/aunit"
@@ -1852,9 +1853,7 @@ ${refs}
 </aunit:runConfiguration>`;
 }
 function buildAtcRunRequest(objects, variant) {
-    const sets = objects
-        .map((o) => `    <osl:set xsi:type="osl:flatObjectSet"><osl:object name="${escapeXml(o.name)}" type="${escapeXml(o.type.split('/')[0] ?? 'CLAS')}"/></osl:set>`)
-        .join('\n');
+    const sets = oslSets(objects);
     return `<?xml version="1.0" encoding="UTF-8"?>
 <atc:runparameters xmlns:atc="http://www.sap.com/adt/atc"
                    xmlns:osl="http://www.sap.com/api/osl"
@@ -2622,7 +2621,7 @@ const EMPTY_ATC_COUNTS = {
     CRITICAL: 0,
     CATASTROPHIC: 0,
 };
-function parseAtcResult(xml, variant) {
+function parseAtcResult(xml) {
     const root = parseXml(xml);
     const findings = [];
     const counts = { ...EMPTY_ATC_COUNTS };
@@ -2656,7 +2655,7 @@ function parseAtcResult(xml, variant) {
         findings,
         counts,
         durationMs: 0,
-        variant,
+        variant: undefined,
     };
 }
 /**
@@ -2667,7 +2666,8 @@ function parseAtcResult(xml, variant) {
 function parseAtcResultList(xml) {
     const root = parseXml(xml);
     const runs = [];
-    const emptyAggregates = () => ({ priority1: 0, priority2: 0, priority3: 0, priority4: 0, failures: 0 });
+    // Real backends put the id in child elements, older mocks in attributes —
+    // both shapes resolve in one pass (childText first, attribute fallback).
     for (const el of children(root, 'result')) {
         const displayId = childText(el, 'displayId') ?? attr(el, 'displayId') ?? attr(el, 'id');
         if (!displayId)
@@ -2699,23 +2699,6 @@ function parseAtcResultList(xml) {
                 }
                 : undefined,
             attributes,
-        });
-    }
-    // Attribute-shaped entries (older mocks / minimal backends).
-    for (const el of children(root, 'result')) {
-        if (runs.some((r) => r.displayId === (attr(el, 'displayId') ?? attr(el, 'id'))))
-            continue;
-        const displayId = attr(el, 'displayId') ?? attr(el, 'id');
-        if (!displayId)
-            continue;
-        runs.push({
-            displayId,
-            createdBy: attr(el, 'createdBy') ?? attr(el, 'user'),
-            createdAt: attr(el, 'createdAt'),
-            status: attr(el, 'status') ?? attr(el, 'state'),
-            kind: attr(el, 'centralResult') ? 'central' : undefined,
-            aggregates: undefined,
-            attributes: {},
         });
     }
     // Atom feed entries carry the id in a child <id>/<link>.
@@ -2924,15 +2907,16 @@ function findRequestElement(root) {
  * Collect the `abap_object` entries that belong to a request element. Real
  * single-request responses nest them under `<tm:all_objects>` while the tree
  * format lists them directly; task blocks repeat their parent request's
- * objects and are skipped to avoid duplicates.
+ * objects and are skipped to avoid duplicates. (Node names are local names —
+ * xml.ts strips the prefix when parsing, see collectTransportRequests.)
  */
 function collectAbapObjects(requestEl) {
     const found = [];
     const visit = (node) => {
         for (const child of node.children) {
-            if (child.name === 'task' || child.name.endsWith(':task'))
+            if (child.name === 'task')
                 continue;
-            if (child.name === 'abap_object' || child.name.endsWith(':abap_object'))
+            if (child.name === 'abap_object')
                 found.push(child);
             visit(child);
         }

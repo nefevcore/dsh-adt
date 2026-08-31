@@ -60,7 +60,7 @@ export function refFromName(name: string, type?: string): AdtObjectRef {
 /**
  * Options controlling how a model-supplied reference is resolved.
  */
-export interface ResolveOptions {
+interface ResolveOptions {
   maxResults?: number;
   signal?: AbortSignal;
   /**

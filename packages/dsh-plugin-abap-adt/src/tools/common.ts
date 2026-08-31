@@ -22,17 +22,6 @@ export function assertExplicitTransport(
   policy.assertTransportAllowed(transport, objectName ? `${toolName} (${objectName})` : toolName);
 }
 
-/** Shared activation summary for the write-family tools. */
-export function activationSummary(act: {
-  success: boolean;
-  items: Array<{ name: string; status: string; message?: string }>;
-}): { success: boolean; message?: string } {
-  return {
-    success: act.success,
-    message: act.items.map((i) => `${i.name}: ${i.status}${i.message ? ' ' + i.message : ''}`).join('; ') || undefined,
-  };
-}
-
 // --- ATC result fragments (adt_run_atc / adt_get_atc_result / adt_list_atc_runs) ---
 
 /** One ATC finding as the tools report it (mapped from the protocol shape). */
@@ -136,14 +125,6 @@ export function atcAggregatesSuffix(aggregates?: { priority1: number; priority2:
   return aggregates
     ? ` (P1 ${aggregates.priority1}, P2 ${aggregates.priority2}, P3 ${aggregates.priority3}, P4 ${aggregates.priority4})`
     : '';
-}
-
-/** Attribute the effective transport to its source (user-passed vs lock-assigned). */
-export function transportSourceOf(
-  effectiveTransport: string | undefined,
-  userTransport: string | undefined,
-): 'user' | 'auto' | undefined {
-  return effectiveTransport ? (userTransport ? 'user' : 'auto') : undefined;
 }
 
 /** Parameter spec for the destination selector used by every tool. */

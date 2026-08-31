@@ -1,15 +1,13 @@
 import { type DestinationConfig, type PluginConfig } from './config.js';
 /** One loaded workspace file: its absolute path and the validated layer. */
-export interface WorkspaceLayer {
+interface WorkspaceLayer {
     path: string;
     layer: Partial<PluginConfig>;
 }
-/** Header comment written above managed workspace config files. */
-export declare const WORKSPACE_FILE_HEADER: string;
 /**
  * mtime+size-cached synchronous loader/writer for workspace config files.
- * One instance lives on the AdtRegistry; all methods are synchronous because
- * tool-call destination resolution must stay synchronous (`require()`).
+ * One instance lives on the AdtRegistry; the FILE layer stays synchronous so
+ * `viewFor`/`require` only ever await password resolution, never file I/O.
  */
 export declare class WorkspaceConfigStore {
     private cache;
@@ -46,4 +44,5 @@ export declare function upsertDestination(layer: Partial<PluginConfig>, dest: De
 };
 /** Suggested destination name for a GUI connection label: "IMPC S4 DEV 100" -> "impc-s4-dev-100". */
 export declare function destinationNameFromLabel(label: string): string;
+export {};
 //# sourceMappingURL=workspace.d.ts.map

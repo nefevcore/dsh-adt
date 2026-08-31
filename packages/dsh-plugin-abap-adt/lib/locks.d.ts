@@ -1,4 +1,4 @@
-export interface LockEntry {
+interface LockEntry {
     /** Unique id of the entry. */
     id: string;
     /** Destination name the lock was acquired on. */
@@ -16,8 +16,6 @@ export interface LockEntry {
     /** Why the handle may be missing (e.g. 'create auto-lock'). */
     note?: string;
 }
-/** Resolve the ledger file path inside the DSH storages area (never throws). */
-export declare function ledgerFilePath(): string;
 export declare class LockLedger {
     private entries;
     private readonly file;
@@ -33,4 +31,5 @@ export declare class LockLedger {
     /** The recorded handle for one object (undefined when unknown). */
     handleFor(destination: string, uri: string): string | undefined;
 }
+export {};
 //# sourceMappingURL=locks.d.ts.map

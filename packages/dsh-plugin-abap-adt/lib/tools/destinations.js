@@ -64,8 +64,9 @@ function connectionView(c) {
         adtUrlNote: c.adtUrlNote,
     };
 }
-/** String arg or undefined. */
-function argStr(value) {
+/** String arg TRIMMED to a non-empty value, else `undefined` (unlike common
+ *  `optStr`, which does not trim — destinations are user-typed free text). */
+function trimmedArgStr(value) {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 export function destinationTools(deps, ctx) {
@@ -140,7 +141,7 @@ export function destinationTools(deps, ctx) {
                     };
                 }
                 const limit = Math.min(Math.max(Number(args.limit ?? 25) || 25, 1), 100);
-                const matches = searchSapGuiConnections(landscape.connections, argStr(args.query));
+                const matches = searchSapGuiConnections(landscape.connections, trimmedArgStr(args.query));
                 return {
                     available: true,
                     sources: landscape.sources,
@@ -270,17 +271,17 @@ export function destinationTools(deps, ctx) {
             },
             isConcurrencySafe: () => false,
             execute: async (args, exec) => {
-                const password = argStr(args.password);
+                const password = trimmedArgStr(args.password);
                 const passwordInFile = args.passwordInFile === true;
                 const cwd = sessionCwd(exec) ?? nodeCwd();
-                const guiUuid = argStr(args.guiUuid);
+                const guiUuid = trimmedArgStr(args.guiUuid);
                 const notes = [];
                 let importedFromGui;
-                let name = argStr(args.name);
-                let url = argStr(args.url);
-                let client = argStr(args.client);
-                let language = argStr(args.language);
-                let username = argStr(args.username);
+                let name = trimmedArgStr(args.name);
+                let url = trimmedArgStr(args.url);
+                let client = trimmedArgStr(args.client);
+                let language = trimmedArgStr(args.language);
+                let username = trimmedArgStr(args.username);
                 let strictSSL = typeof args.strictSSL === 'boolean' ? args.strictSSL : undefined;
                 if (guiUuid !== undefined) {
                     const landscape = discoverSapGuiLandscape();
@@ -333,8 +334,9 @@ export function destinationTools(deps, ctx) {
                     destOut.language = language;
                 if (username !== undefined)
                     destOut.username = username;
-                if (argStr(args.passwordEnv) !== undefined)
-                    destOut.passwordEnv = argStr(args.passwordEnv);
+                const passwordEnv = trimmedArgStr(args.passwordEnv);
+                if (passwordEnv !== undefined)
+                    destOut.passwordEnv = passwordEnv;
                 if (strictSSL !== undefined)
                     destOut.strictSSL = strictSSL;
                 if (typeof args.timeoutMs === 'number')

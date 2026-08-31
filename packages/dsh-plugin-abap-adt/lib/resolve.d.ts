@@ -18,7 +18,7 @@ export declare function refFromName(name: string, type?: string): AdtObjectRef;
 /**
  * Options controlling how a model-supplied reference is resolved.
  */
-export interface ResolveOptions {
+interface ResolveOptions {
     maxResults?: number;
     signal?: AbortSignal;
     /**
@@ -72,4 +72,5 @@ export declare function resolveObjects(client: AdtClient, inputs: Array<{
 export declare function resolvePackageName(client: AdtClient, ref: AdtObjectRef, hint?: string, signal?: AbortSignal): Promise<string | undefined>;
 /** Human-readable label for an object type code (best effort). */
 export declare function typeLabel(type: string): string;
+export {};
 //# sourceMappingURL=resolve.d.ts.map

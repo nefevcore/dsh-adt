@@ -22,7 +22,7 @@ import { copyFileSync, readFileSync, renameSync, writeFileSync, mkdirSync, exist
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 /** Resolve the ledger file path inside the DSH storages area (never throws). */
-export function ledgerFilePath() {
+function ledgerFilePath() {
     try {
         const base = process.env.DSH_HOME || join(homedir(), '.dsh');
         return join(base, 'storages', 'abap-adt-locks.json');

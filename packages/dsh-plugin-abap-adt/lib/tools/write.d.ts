@@ -1,11 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type ToolDeps } from './common.js';
-/**
- * Strip ABAP comments from a line for marker matching: `*` at line start is a
- * full-line comment; `"` starts a tail comment unless it sits inside a
- * single-quoted string literal ('' is an escaped quote inside literals).
- */
-export declare function stripAbapComment(line: string): string;
 export interface ReplaceBlockOptions {
     /** 1-based index among the start marker's matches (for duplicate lines). */
     occurrence?: number;

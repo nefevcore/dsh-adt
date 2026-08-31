@@ -1,1 +1,1 @@
-{"version":3,"file":"destinations.d.ts","sourceRoot":"","sources":["../../src/tools/destinations.ts"],"names":[],"mappings":"AAkBA,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,qBAAqB,CAAC;AAUnD,OAAO,EAAoB,KAAK,QAAQ,EAAE,MAAM,aAAa,CAAC;AAoD9D,wBAAgB,gBAAgB,CAAC,IAAI,EAAE,QAAQ,EAAE,GAAG,EAAE,OAAO,qDAuY5D"}
+{"version":3,"file":"destinations.d.ts","sourceRoot":"","sources":["../../src/tools/destinations.ts"],"names":[],"mappings":"AAkBA,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,qBAAqB,CAAC;AAUnD,OAAO,EAAoB,KAAK,QAAQ,EAAE,MAAM,aAAa,CAAC;AAqD9D,wBAAgB,gBAAgB,CAAC,IAAI,EAAE,QAAQ,EAAE,GAAG,EAAE,OAAO,qDAwY5D"}

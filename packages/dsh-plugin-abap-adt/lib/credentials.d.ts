@@ -16,7 +16,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 /** Minimal surface of the host credential service the plugin consumes. */
-export interface CredentialsService {
+interface CredentialsService {
     /** Resolve one reference (env-var name) to its current value, if set. */
     resolve(ref: string): Promise<{
         value: string;
@@ -30,8 +30,6 @@ export interface CredentialsService {
     /** Durably store one value in the provider-managed writable source. */
     set?(ref: string, value: string): Promise<void>;
 }
-/** A POSIX environment-variable name (CredentialRef grammar). */
-export declare const CREDENTIAL_REF_PATTERN: RegExp;
 /** Whether a raw string could name a credential reference at all. */
 export declare function isCredentialRefName(value: string): boolean;
 /**
@@ -45,4 +43,5 @@ export declare function credentialsOf(ctx: Context): CredentialsService | undefi
  * process.env in config.ts when it is not).
  */
 export declare function credentialResolverOf(ctx: Context): (ref: string) => Promise<string | undefined>;
+export {};
 //# sourceMappingURL=credentials.d.ts.map

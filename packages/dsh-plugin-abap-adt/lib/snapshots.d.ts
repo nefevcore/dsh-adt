@@ -7,7 +7,7 @@ export declare class SnapshotConflictError extends Error {
     readonly toolName: string;
     constructor(objectName: string, snapshotPath: string, fetchedAt: string | undefined, toolName: string);
 }
-export interface SnapshotSidecar {
+interface SnapshotSidecar {
     destination: string;
     uri: string;
     name: string;
@@ -16,7 +16,7 @@ export interface SnapshotSidecar {
     baseHash: string;
     fetchedAt: string;
 }
-export interface ObjectSnapshot {
+interface ObjectSnapshot {
     /** The snapshot file content (= fetch-time server source, unless edited locally). */
     source: string;
     sidecar: SnapshotSidecar;
@@ -34,13 +34,6 @@ export declare function hashSource(source: string): string;
  * over our write.
  */
 export declare function sourcesEquivalent(written: string, readBack: string): boolean;
-export declare function snapshotPaths(destination: string, ref: {
-    name: string;
-    type: string;
-}): {
-    file: string;
-    sidecar: string;
-};
 /** Load the tracked snapshot for an object; undefined when absent/corrupt/no fs. */
 export declare function loadSnapshot(ctx: Context, destination: string, ref: {
     name: string;
@@ -53,4 +46,5 @@ export declare function saveSnapshot(ctx: Context, destination: string, ref: {
     type: string;
     uri: string;
 }, source: string): Promise<string>;
+export {};
 //# sourceMappingURL=snapshots.d.ts.map
