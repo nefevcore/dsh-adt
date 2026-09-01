@@ -14,7 +14,7 @@
  * ```
  *
  * Namespaces are ignored structurally (local names only); attributes keep
- * their full prefixed names so callers can match `{http://...}name` or `name`.
+ * their full prefixed names so callers can match `name` or `prefix:name`.
  */
 
 export interface XmlNode {
@@ -235,14 +235,14 @@ export function parseXml(input: string): XmlNode {
   return new XmlParser(input).parse();
 }
 
-/** First child with the given local name (namespace prefix ignored). */
+/** First child with the given local name (parser output has no prefixes). */
 export function child(node: XmlNode, name: string): XmlNode | undefined {
-  return node.children.find((c) => c.name === name || c.name.endsWith(`:${name}`));
+  return node.children.find((c) => c.name === name);
 }
 
 /** All children with the given local name. */
 export function children(node: XmlNode, name: string): XmlNode[] {
-  return node.children.filter((c) => c.name === name || c.name.endsWith(`:${name}`));
+  return node.children.filter((c) => c.name === name);
 }
 
 /** Text content of the first child with the given local name, trimmed. */

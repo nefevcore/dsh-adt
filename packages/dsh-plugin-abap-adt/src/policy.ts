@@ -63,8 +63,12 @@ export const POLICY_ENV = {
   allowBatchWrites: 'SAP_ALLOW_BATCH_WRITES',
 } as const;
 
-/** Built-in defaults: permissive for edits/execution, strict for batch writes. */
-const POLICY_DEFAULTS = {
+/**
+ * Built-in defaults: permissive for edits/execution, strict for batch writes.
+ * Exported for the workspace file renderer, which shows them as the commented
+ * template values of the policy keys.
+ */
+export const POLICY_DEFAULTS = {
   enableTransports: true,
   allowedTransports: '*',
   allowTransportableEdits: true,

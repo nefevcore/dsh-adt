@@ -1,18 +1,18 @@
 import { createMockAdtServer } from './server.js';
 const port = Number(process.env.ADT_MOCK_PORT ?? 8123);
+const host = process.env.ADT_MOCK_HOST ?? '127.0.0.1';
 // CORS is ON by default so a local page can drive the demo; set
 // ADT_MOCK_CORS=0 to serve without permissive CORS headers (see
 // MockAdtOptions.cors for the security note).
 const server = createMockAdtServer({
     port,
-    host: process.env.ADT_MOCK_HOST ?? '127.0.0.1',
+    host,
     username: process.env.ADT_MOCK_USER,
     password: process.env.ADT_MOCK_PASSWORD,
     cors: process.env.ADT_MOCK_CORS !== '0',
 });
 try {
     const actualPort = await server.listen();
-    const host = process.env.ADT_MOCK_HOST ?? '127.0.0.1';
     console.log(`Mock ADT server listening on http://${host}:${actualPort}/sap/bc/adt`);
     console.log(`Base URL for the plugin destination: http://${host}:${actualPort}`);
     console.log('Press Ctrl+C to stop.');

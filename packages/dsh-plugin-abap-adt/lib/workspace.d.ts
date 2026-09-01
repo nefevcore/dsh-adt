@@ -24,8 +24,10 @@ export declare class WorkspaceConfigStore {
     clear(): void;
     /**
      * Atomically write a workspace layer for a cwd. `mutate` receives the
-     * CURRENT validated layer (or `{}` for a fresh file) and returns the next
-     * one; the write is tmp+rename so a crash can never tear the file.
+     * CURRENT raw layer (or `{}` for a fresh file — no schema defaults minted,
+     * so unset options stay unset) and returns the next one; the write is
+     * tmp+rename so a crash can never tear the file. The rendered body lists
+     * every unset option as a commented template (see renderWorkspaceConfig).
      * Returns the written path and the persisted layer.
      */
     write(cwd: string, mutate: (current: Partial<PluginConfig>) => Partial<PluginConfig>): {

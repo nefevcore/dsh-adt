@@ -5,8 +5,7 @@
  * of a raw 404/405.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, isAdtServiceUnavailable, resolveToolObject, text } from './common.js';
 export function whereUsedTools(deps) {
     const { registry } = deps;
     return [
@@ -70,7 +69,7 @@ export function whereUsedTools(deps) {
                     };
                 }
                 catch (error) {
-                    if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                    if (isAdtServiceUnavailable(error)) {
                         return {
                             objectUri: ref.uri,
                             totalReferences: 0,

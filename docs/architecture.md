@@ -1,27 +1,37 @@
 # 架构
 
+![整体架构](architecture-diagram.svg)
+
+> 高分辨率矢量图见 [`architecture-diagram.svg`](architecture-diagram.svg)（浏览器 / 编辑器直接打开）；下图是同一结构的 Mermaid 概览，便于在 GitHub 内联渲染与维护。
+
+```mermaid
+flowchart TB
+  subgraph DSH["DeepSeek Harness · Cordis 运行时（web profile）"]
+    AG["AI 代理会话<br/>预设 abap-adt「ABAP Development」"]
+    subgraph PLG["@nefevcore/abap-adt-dsh-plugin"]
+      CFG["配置分层 config.ts<br/>① schema 默认 → ② 内联 config → ⑦ SAP_* env<br/>→ ③ 旧文件 → ④ settings → ⑤ configFile → ⑥ 工作区文件"]
+      REG["AdtRegistry registry.ts<br/>destinations ×N · viewFor(cwd) · clientCache ≤64"]
+      POL["AdtPolicy 权限门禁 policy.ts<br/>六开关 · fail-closed · [POLICY]"]
+      SNAP["snapshots.ts OCC 快照 · locks.ts 锁账本<br/>credentials.ts 密码分层 · sapgui.ts 连接发现"]
+      TOOLS["37 × adt_* 工具（22 个文件按职责分组）"]
+    end
+  end
+  subgraph PROTO["@nefevcore/abap-adt-protocol"]
+    AC["AdtClient<br/>Basic + CSRF · LOCK→PUT→UNLOCK · 激活<br/>ABAP Unit / ATC 轮询 · $batch · DDIC XML"]
+  end
+  MOCK["@nefevcore/abap-adt-mock<br/>进程内 Mock ADT 服务器 127.0.0.1:8123"]
+  SAP["SAP ABAP 前端服务器<br/>/sap/bc/adt/*（ADT REST · HTTPS）"]
+
+  AG -->|"模型工具调用 adt_*"| TOOLS
+  CFG -->|"resolveEffectiveConfig · 热生效 reload()"| REG
+  TOOLS -->|"deps = { registry, ledger }"| REG
+  TOOLS -.->|"写前检查 / OCC 校验"| POL
+  REG -->|"每目的地一个 AdtClient"| AC
+  AC -->|"HTTP（demo 目的地）"| MOCK
+  AC -->|"HTTPS · Basic + CSRF"| SAP
 ```
-┌────────────────────────────────────────────────────────────┐
-│  DeepSeek Harness (dsh web profile)                        │
-│                                                            │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ @nefevcore/abap-adt-dsh-plugin (Cordis 插件)                    │  │
-│  │  ├─ Config (schemastery) + AdtPolicy 权限策略          │  │
-│  │  ├─ AdtRegistry ── 多目的地注册表                     │  │
-│  │  │   ├─ demo → 进程内 Mock ADT 服务器 (node:http)    │  │
-│  │  │   └─ dev/prod → AdtClient ×N                      │  │
-│  │  └─ ctx.tools.register(37 × adt_* 工具)              │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                           │                                │
-│                    adt_* 工具调用                           │
-└───────────────────────────┼────────────────────────────────┘
-                            │ HTTPS / HTTP
-                            ▼
-              ┌───────────────────────────┐
-              │  SAP ABAP 前端服务器       │
-              │  /sap/bc/adt/* (ADT REST) │
-              └───────────────────────────┘
-```
+
+> 按「建请求 → 建 DDIC → 写码 → 激活 → 测试 → 释放」开发流程组织的全工具映射图见 [`dev-workflow.md`](dev-workflow.md) / [`dev-workflow.svg`](dev-workflow.svg)。
 
 ## 分层
 
@@ -44,7 +54,7 @@
 ## 关键设计决策
 
 1. **直接实现协议，而非桥接任何 IDE**：不依赖 IDE 或 SAP 闭源库，可 headless 运行，天然支持批量与自动化
-2. **零配置 demo**：插件内置 mock 服务器，开箱即用；真实系统通过 `destinations` 配置接入（走 DSH settings：schema 注册为 `abap-adt` 命名空间，插件行 config 为 composition base，`~/.dsh/settings.yaml` 的 `abap-adt:` 段为用户层且**热生效**；显式 `configFile` 为团队共享的最权威层；分层就近覆盖：settings 用户段 > 内联 config > 旧版独立文件（已废弃）> schema 默认值，权限六开关另有 `SAP_*` 环境变量兜底；`destinations` 跨层按名字合并）。**工作区层**（`<会话 cwd>/.dsh-abap-adt/destinations.yaml`）是最近的覆盖层：预设的挂载是跨会话共享的 standing mount，所以工作区文件在**每次工具调用时**按 `exec.agent.session.header.cwd` 叠加解析（`registry.viewFor`，mtime+size 缓存 + AdtClient 复用），同名目的地/defaultDestination/权限键就近生效；`adt_create_destination` 原子写入该文件（并支持从本机 SAP GUI 的 `SAPUILandscape.xml` 导入连接）
+2. **零配置 demo**：插件内置 mock 服务器，开箱即用；真实系统通过 `destinations` 配置接入（走 DSH settings：schema 注册为 `abap-adt` 命名空间，插件行 config 为 composition base，`~/.dsh/settings.yaml` 的 `abap-adt:` 段为用户层且**热生效**；显式 `configFile` 为团队共享的最权威层；分层就近覆盖：settings 用户段 > 内联 config > 旧版独立文件（已废弃）> schema 默认值，权限六开关另有 `SAP_*` 环境变量兜底；`destinations` 跨层按名字合并）。**工作区层**（`<会话 cwd>/.dsh-abap-adt/destinations.yaml`）是最近的覆盖层：预设的挂载是跨会话共享的 standing mount，所以工作区文件在**每次工具调用时**按 `exec.agent.session.header.cwd` 叠加解析（`registry.viewFor`，mtime+size 缓存 + AdtClient 复用），同名目的地/defaultDestination/权限键就近生效；`adt_create_destination` 原子写入该文件（并支持从本机 SAP GUI 的 `SAPUILandscape.xml` 导入连接；端口约定推导的 URL 视为**未验证猜测**——工具默认无凭证探测候选组合 `443<nn>`/`443`/`80<nn>`/`80` 并采用真正应答者，无可用端点时**拒绝创建**（`force` 可强制保存并标记 unverified；`ping: true` 则保存前带凭证 ping，连接级失败同样拒绝、HTTP 级失败仅警告），saprouter 条目明确标注 HTTP 无法走 GUI 的路由器、引导索要 web dispatcher url——企业 saprouter 的 ACL 通常只放行 DIAG/NI 模式，HTTP 隧道实践上不可用，已实测验证后移除内置 NI 隧道）；文件按自文档格式渲染——已设键为真实行、其余可配置项以注释模板（含默认值与用途）随文件写回，便于手工维护，写入走 RAW 解析所以不会把 schema 默认值物化进文件）
 3. **异步 run 流程**：ABAP Unit / ATC 都是"提交 → 轮询 → 取结果"，客户端完整实现轮询循环与超时
 4. **协议正确性优先**：错误处理覆盖 ADT 特有语义（激活错误在 200 body、exc:exception 错误体、403 CSRF/锁冲突区分、412 ETag）
 5. **沙箱感知**：导出工具走可选的 `ctx.get('fs')` 服务，遵守 DSH 文件沙箱策略（无该服务的精简 profile 上优雅降级，不影响其余工具）

@@ -12,8 +12,7 @@
  * (ids from adt_object_versions / the `versions` array of this output).
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, optStr, resolveToolObject, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, VERSION_FEED_META_PROPERTIES, destinationOf, isAdtServiceUnavailable, optStr, resolveToolObject, text } from './common.js';
 /**
  * Line diff. Uses common prefix/suffix trimming with the middle emitted as a
  * remove block then an add block — no DP table, so it is O(n) memory and time.
@@ -135,11 +134,7 @@ export function versionTools(deps) {
                                 type: 'object',
                                 additionalProperties: false,
                                 properties: {
-                                    versionId: { type: 'string', required: true },
-                                    author: { type: 'string' },
-                                    updatedAt: { type: 'string' },
-                                    title: { type: 'string' },
-                                    transportRequest: { type: 'string' },
+                                    ...VERSION_FEED_META_PROPERTIES,
                                     contentUri: { type: 'string' },
                                 },
                             },
@@ -168,7 +163,7 @@ export function versionTools(deps) {
                     versions = await entry.client.getVersions(ref.uri, { signal: exec.signal });
                 }
                 catch (error) {
-                    if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                    if (isAdtServiceUnavailable(error)) {
                         throw new Error(`Version history is not available for ${ref.name} on this backend (HTTP ${error.status}); ` +
                             'cannot compute a version diff. Export the source (adt_export_objects) and diff locally instead.');
                     }

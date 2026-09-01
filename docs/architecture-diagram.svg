@@ -1,0 +1,307 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 2020" font-family="Segoe UI, 'Microsoft YaHei', 'PingFang SC', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#334155"/>
+    </marker>
+    <marker id="arrd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#64748b"/>
+    </marker>
+    <marker id="arrm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#b45309"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="2020" fill="#f8fafc"/>
+
+  <!-- ============ 标题 ============ -->
+  <text x="800" y="52" text-anchor="middle" font-size="26" font-weight="bold" fill="#0f172a">dsh-abap-adt · ADT 插件架构图</text>
+  <text x="800" y="78" text-anchor="middle" font-size="13" fill="#64748b">@nefevcore/abap-adt-dsh-plugin —— 直接实现 SAP ADT REST 协议的 DeepSeek Harness（Cordis）插件 · 37 个 adt_* 工具 · 3 个 npm 包</text>
+
+  <!-- ============ A. DSH 宿主 ============ -->
+  <rect x="40" y="100" width="1520" height="170" rx="12" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5"/>
+  <text x="60" y="128" font-size="15" font-weight="bold" fill="#3730a3">DeepSeek Harness（Node.js · Cordis 运行时 · web profile）</text>
+
+  <rect x="70" y="145" width="640" height="105" rx="8" fill="#ffffff" stroke="#a5b4fc"/>
+  <text x="90" y="170" font-size="13.5" font-weight="bold" fill="#1e293b">AI 代理会话（LLM · 预设 abap-adt「ABAP Development」）</text>
+  <text x="90" y="192" font-size="11.5" fill="#334155">· 预设 = standard 预设整份拷贝 + 插件行（presets/abap-adt.example）</text>
+  <text x="90" y="210" font-size="11.5" fill="#334155">· 自主编排：search → read → edit → activate → test → transport 全链路</text>
+  <text x="90" y="228" font-size="11.5" fill="#334155">· 生态协同：workflow / subagent / dsh-schedule（夜间 ATC 巡检）</text>
+
+  <rect x="740" y="145" width="790" height="105" rx="8" fill="#ffffff" stroke="#a5b4fc"/>
+  <text x="760" y="170" font-size="13.5" font-weight="bold" fill="#1e293b">插件消费的宿主服务（Cordis ctx）</text>
+  <text x="760" y="192" font-size="11.5" fill="#334155">· ctx.tools ▸ 硬依赖 inject（注册 37 工具）</text>
+  <text x="760" y="210" font-size="11.5" fill="#334155">· ctx.get('fs') ▸ 可选 · 快照/导出/推送/本地检查</text>
+  <text x="760" y="228" font-size="11.5" fill="#334155">· ctx.get('credentials') ▸ 可选 · 密码分层解析</text>
+  <text x="1165" y="192" font-size="11.5" fill="#334155">· settings ▸ installSettingsSection('abap-adt')</text>
+  <text x="1165" y="210" font-size="11.5" fill="#334155">　 · 保存即热生效 → rebuild() → registry.reload()</text>
+  <text x="1165" y="228" font-size="11.5" fill="#334155">· ctx.logger ▸ 日志（未挂载时降级 console）</text>
+
+  <path d="M 180 250 L 180 296" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="192" y="280" font-size="11" fill="#334155">模型工具调用 adt_*</text>
+
+  <path d="M 1000 250 L 1000 285 L 260 285 L 260 341" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#arrd)"/>
+  <text x="620" y="279" text-anchor="middle" font-size="10.5" fill="#64748b">settings 变更 → onChange → rebuild()（热生效）</text>
+
+  <!-- ============ B. 插件 ============ -->
+  <rect x="40" y="300" width="1520" height="740" rx="12" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="60" y="328" font-size="15" font-weight="bold" fill="#1d4ed8">@nefevcore/abap-adt-dsh-plugin（Cordis 插件 · src/index.ts apply(ctx, config)）</text>
+  <text x="1540" y="328" text-anchor="end" font-size="10.5" fill="#64748b">不声明 dsh.bundle · 仅该预设的会话加载</text>
+
+  <!-- B-左：配置分层 -->
+  <rect x="60" y="345" width="390" height="295" rx="8" fill="#ffffff" stroke="#93c5fd"/>
+  <text x="80" y="368" font-size="12.5" font-weight="bold" fill="#1e3a8a">配置分层 config.ts（就近覆盖）</text>
+  <rect x="80" y="378" width="350" height="24" rx="4" fill="#bfdbfe" stroke="#3b82f6"/>
+  <text x="255" y="394" text-anchor="middle" font-size="11" fill="#1e3a8a">⑥ 工作区 .dsh-abap-adt/destinations.yaml</text>
+  <rect x="80" y="406" width="350" height="24" rx="4" fill="#dbeafe" stroke="#60a5fa"/>
+  <text x="255" y="422" text-anchor="middle" font-size="11" fill="#1e3a8a">⑤ configFile 团队共享（显式指定）</text>
+  <rect x="80" y="434" width="350" height="24" rx="4" fill="#dbeafe" stroke="#60a5fa"/>
+  <text x="255" y="450" text-anchor="middle" font-size="11" fill="#1e3a8a">④ settings.yaml 的 abap-adt: 用户段</text>
+  <rect x="80" y="462" width="350" height="24" rx="4" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="255" y="478" text-anchor="middle" font-size="11" fill="#92400e">③ 旧版 ~/.dsh/abap-adt.yml（废弃）</text>
+  <rect x="80" y="490" width="350" height="24" rx="4" fill="#dbeafe" stroke="#60a5fa"/>
+  <text x="255" y="506" text-anchor="middle" font-size="11" fill="#1e3a8a">② 预设插件行内联 config（base）</text>
+  <rect x="80" y="518" width="350" height="24" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="255" y="534" text-anchor="middle" font-size="11" fill="#475569">⑦ SAP_* 环境变量（仅权限六开关）</text>
+  <rect x="80" y="546" width="350" height="24" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="255" y="562" text-anchor="middle" font-size="11" fill="#475569">① schema 默认值（demo · 8123）</text>
+  <text x="424" y="394" font-size="9" fill="#1d4ed8">最近</text>
+  <text x="424" y="562" font-size="9" fill="#64748b">最低</text>
+  <rect x="90" y="582" width="340" height="30" rx="6" fill="#93c5fd" stroke="#3b82f6"/>
+  <text x="260" y="601" text-anchor="middle" font-size="11" font-weight="bold" fill="#0c2d6b">resolveEffectiveConfig → EffectiveConfig</text>
+
+  <path d="M 450 512 L 496 512" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="473" y="486" text-anchor="middle" font-size="9.5" fill="#475569">Effective</text>
+  <text x="473" y="497" text-anchor="middle" font-size="9.5" fill="#475569">Config</text>
+
+  <!-- B-中：AdtRegistry -->
+  <rect x="500" y="345" width="510" height="295" rx="8" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="520" y="368" font-size="12.5" font-weight="bold" fill="#1e3a8a">AdtRegistry（registry.ts）— 目的地注册表</text>
+  <text x="520" y="392" font-size="11.5" fill="#334155">· destinations: Map&lt;名, {config · AdtClient · AdtPolicy · status}&gt;</text>
+  <text x="520" y="411" font-size="11.5" fill="#334155">· demo 条目 → 进程内 Mock（demo:true 启停 · 端口占用随机重听）</text>
+  <text x="520" y="430" font-size="11.5" fill="#334155">· viewFor(cwd)：按会话 cwd 叠加⑥层（mtime+size 缓存）</text>
+  <text x="520" y="449" font-size="11.5" fill="#334155">· require(name?, cwd)：未知名字显式报错（绝不静默落默认）</text>
+  <text x="520" y="468" font-size="11.5" fill="#334155">· clientCache ≤64：同配置复用 AdtClient（会话/CSRF 保留）</text>
+  <text x="520" y="487" font-size="11.5" fill="#334155">· reload(config)：热变更原地重建 · 对象身份稳定</text>
+  <text x="520" y="506" font-size="11.5" fill="#334155">· pingAll / pingUnsaved / describePolicies</text>
+  <text x="520" y="525" font-size="11.5" fill="#334155">· saveWorkspaceDestination：⑥层原子写（tmp+rename）</text>
+  <rect x="520" y="540" width="470" height="80" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="535" y="560" font-size="11" font-weight="bold" fill="#475569">RegistryDestination</text>
+  <text x="535" y="577" font-size="10" fill="#475569" font-family="Consolas, monospace">{ url · client · language · auth(basic) }</text>
+  <text x="535" y="593" font-size="10" fill="#475569">policy = 全局默认 ⊕ 目的地 policy: 块（逐键覆盖）</text>
+  <text x="535" y="609" font-size="10" fill="#475569">status：最近 ping 缓存</text>
+
+  <!-- B-右：横切组件 -->
+  <rect x="1030" y="345" width="510" height="295" rx="8" fill="#ffffff" stroke="#93c5fd"/>
+  <text x="1050" y="368" font-size="12.5" font-weight="bold" fill="#1e3a8a">横切组件（src/*.ts · 工具共享）</text>
+  <rect x="1050" y="378" width="470" height="26" rx="5" fill="#fee2e2" stroke="#f87171"/>
+  <text x="1060" y="395" font-size="10.5" fill="#7f1d1d">policy.ts 权限门禁 · 六开关 · fail-closed · [POLICY]</text>
+  <rect x="1050" y="408" width="470" height="26" rx="5" fill="#dcfce7" stroke="#4ade80"/>
+  <text x="1060" y="425" font-size="10.5" fill="#14532d">snapshots.ts OCC 快照 · baseHash → [CONFLICT]</text>
+  <rect x="1050" y="438" width="470" height="26" rx="5" fill="#dcfce7" stroke="#4ade80"/>
+  <text x="1060" y="455" font-size="10.5" fill="#14532d">locks.ts 持久锁账本 · adt_unlock_all 清残留锁</text>
+  <rect x="1050" y="468" width="470" height="26" rx="5" fill="#fef9c3" stroke="#facc15"/>
+  <text x="1060" y="485" font-size="10.5" fill="#713f12">credentials.ts 密码分层 · config &gt; 凭证服务 &gt; env</text>
+  <rect x="1050" y="498" width="470" height="26" rx="5" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="1060" y="515" font-size="10.5" fill="#334155">workspace.ts ⑥层读写 · 自文档注释模板</text>
+  <rect x="1050" y="528" width="470" height="26" rx="5" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="1060" y="545" font-size="10.5" fill="#334155">sapgui.ts SAP GUI 连接发现（SAPUILandscape.xml）</text>
+  <rect x="1050" y="558" width="470" height="26" rx="5" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="1060" y="575" font-size="10.5" fill="#334155">probe.ts 无凭证端口探测 443&lt;nn&gt;/443/80&lt;nn&gt;/80</text>
+  <rect x="1050" y="588" width="470" height="26" rx="5" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="1060" y="605" font-size="10.5" fill="#334155">resolve.ts 对象名→URI 精确解析（拼错报错列候选）</text>
+
+  <path d="M 755 640 L 755 651" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="763" y="650" font-size="9.5" fill="#475569">deps = { registry, ledger }</text>
+
+  <!-- B-下：37 工具 -->
+  <rect x="60" y="655" width="1480" height="358" rx="8" fill="#ffffff" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="80" y="678" font-size="12.5" font-weight="bold" fill="#1e3a8a">37 × adt_* 工具（@deepseek-ai/dsh-tools defineTool · ctx.tools.register · 输出 deepCompact 净化）</text>
+  <text x="1520" y="678" text-anchor="end" font-size="10" fill="#64748b">22 个源文件按职责分组</text>
+
+  <rect x="80" y="690" width="350" height="142" rx="8" fill="#e0e7ff" stroke="#6366f1"/>
+  <text x="94" y="709" font-size="11.5" font-weight="bold" fill="#3730a3">目的地 · 系统 · 策略</text>
+  <text x="416" y="709" text-anchor="end" font-size="10" font-weight="bold" fill="#6366f1">6</text>
+  <text x="94" y="728" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_list_destinations</text>
+  <text x="94" y="743.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_system_info</text>
+  <text x="94" y="759" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_ping</text>
+  <text x="94" y="774.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_permissions</text>
+  <text x="94" y="790" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_list_gui_connections</text>
+  <text x="94" y="805.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_create_destination</text>
+  <text x="94" y="824" font-size="9.5" fill="#6366f1">从本机 SAP GUI 导入 / 对话式建连接</text>
+
+  <rect x="455" y="690" width="350" height="142" rx="8" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="469" y="709" font-size="11.5" font-weight="bold" fill="#075985">搜索 · 读取</text>
+  <text x="791" y="709" text-anchor="end" font-size="10" font-weight="bold" fill="#0284c7">3</text>
+  <text x="469" y="728" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_search</text>
+  <text x="469" y="743.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_read_object</text>
+  <text x="469" y="759" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_read_structure</text>
+  <text x="469" y="780" font-size="9.5" fill="#0284c7">read 默认留 OCC 快照（.adt-snapshots）</text>
+  <text x="469" y="795" font-size="9.5" fill="#0284c7">structure：MSAG/DOMA/DTEL/TTYP</text>
+
+  <rect x="830" y="690" width="350" height="142" rx="8" fill="#ffe4e6" stroke="#e11d48"/>
+  <text x="844" y="709" font-size="11.5" font-weight="bold" fill="#9f1239">编辑 · 写入（过 policy 门禁）</text>
+  <text x="1166" y="709" text-anchor="end" font-size="10" font-weight="bold" fill="#e11d48">6</text>
+  <text x="844" y="728" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_write_object</text>
+  <text x="844" y="743.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_edit_object</text>
+  <text x="844" y="759" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_push_object</text>
+  <text x="844" y="774.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_create_object</text>
+  <text x="844" y="790" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_delete_object</text>
+  <text x="844" y="805.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_write_structure</text>
+  <text x="844" y="824" font-size="9.5" fill="#be123c">OCC：baseHash 冲突即 [CONFLICT] · 传输号受控</text>
+
+  <rect x="1205" y="690" width="350" height="142" rx="8" fill="#fef3c7" stroke="#d97706"/>
+  <text x="1219" y="709" font-size="11.5" font-weight="bold" fill="#92400e">生命周期 · 锁</text>
+  <text x="1541" y="709" text-anchor="end" font-size="10" font-weight="bold" fill="#d97706">4</text>
+  <text x="1219" y="728" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_activate</text>
+  <text x="1219" y="743.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_check</text>
+  <text x="1219" y="759" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_lock_info</text>
+  <text x="1219" y="774.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_unlock_all</text>
+  <text x="1219" y="795" font-size="9.5" fill="#b45309">激活错误在 HTTP 200 body（chkl:messages）</text>
+
+  <rect x="80" y="842" width="350" height="142" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="94" y="861" font-size="11.5" font-weight="bold" fill="#14532d">质量门禁</text>
+  <text x="416" y="861" text-anchor="end" font-size="10" font-weight="bold" fill="#16a34a">6</text>
+  <text x="94" y="880" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_run_unit_tests</text>
+  <text x="94" y="895.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_run_atc</text>
+  <text x="94" y="911" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_list_atc_runs</text>
+  <text x="94" y="926.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_get_atc_result</text>
+  <text x="94" y="942" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_release_gate</text>
+  <text x="94" y="957.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_local_check</text>
+  <text x="94" y="976" font-size="9.5" fill="#15803d">gate：语法+Unit+ATC 一次跑完 → go/no-go</text>
+
+  <rect x="455" y="842" width="350" height="142" rx="8" fill="#ede9fe" stroke="#7c3aed"/>
+  <text x="469" y="861" font-size="11.5" font-weight="bold" fill="#4c1d95">传输 · 包 · 版本</text>
+  <text x="791" y="861" text-anchor="end" font-size="10" font-weight="bold" fill="#7c3aed">5</text>
+  <text x="469" y="880" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_list_transports</text>
+  <text x="469" y="895.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_get_transport</text>
+  <text x="469" y="911" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_object_versions</text>
+  <text x="469" y="926.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_version_diff</text>
+  <text x="469" y="942" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_package_content</text>
+  <text x="469" y="961" font-size="9.5" fill="#6d28d9">release（释放传输）刻意不设工具 — 人工决策</text>
+
+  <rect x="830" y="842" width="350" height="142" rx="8" fill="#ffedd5" stroke="#ea580c"/>
+  <text x="844" y="861" font-size="11.5" font-weight="bold" fill="#7c2d12">代理尺度</text>
+  <text x="1166" y="861" text-anchor="end" font-size="10" font-weight="bold" fill="#ea580c">3</text>
+  <text x="844" y="880" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_batch</text>
+  <text x="844" y="895.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_export_objects</text>
+  <text x="844" y="911" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_execute</text>
+  <text x="844" y="932" font-size="9.5" fill="#c2410c">$batch 默认只读扇出（allowBatchWrites 才开写）</text>
+  <text x="844" y="947" font-size="9.5" fill="#c2410c">execute 受 allowExecution 总闸</text>
+  <text x="844" y="962" font-size="9.5" fill="#c2410c">export 落盘 .abap → git 化/离线评审</text>
+
+  <rect x="1205" y="842" width="350" height="142" rx="8" fill="#cffafe" stroke="#0891b2"/>
+  <text x="1219" y="861" font-size="11.5" font-weight="bold" fill="#155e75">分析 · 诊断</text>
+  <text x="1541" y="861" text-anchor="end" font-size="10" font-weight="bold" fill="#0891b2">4</text>
+  <text x="1219" y="880" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_where_used</text>
+  <text x="1219" y="895.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_data_preview</text>
+  <text x="1219" y="911" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_list_dumps</text>
+  <text x="1219" y="926.5" font-size="10" fill="#1e293b" font-family="Consolas, monospace">adt_get_dump</text>
+  <text x="1219" y="947" font-size="9.5" fill="#0e7490">ST22 短转储排障 · CDS/SQL 数据预览</text>
+
+  <text x="80" y="1004" font-size="10.5" font-style="italic" fill="#64748b">写类工具的传输号（含 lock 时自动分配的 CORRNR）必须命中 allowedTransports 白名单，否则回滚（解锁）并拒绝。</text>
+  <text x="1540" y="1032" text-anchor="end" font-size="10" fill="#64748b">disposer：disposed 标记 → 排空 rebuild 链 → registry.dispose()（关 Mock · 清客户端）</text>
+
+  <path d="M 800 1040 L 800 1071" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="810" y="1062" font-size="11" fill="#334155">每个目的地一个 AdtClient</text>
+
+  <!-- ============ C. 协议客户端 ============ -->
+  <rect x="40" y="1075" width="1520" height="330" rx="12" fill="#f0fdfa" stroke="#0d9488" stroke-width="1.5"/>
+  <text x="60" y="1103" font-size="15" font-weight="bold" fill="#0f766e">@nefevcore/abap-adt-protocol — ADT REST 协议客户端（运行时零依赖）</text>
+  <text x="1540" y="1103" text-anchor="end" font-size="10.5" fill="#64748b">undici ^7 仅 strictSSL:false 时动态 import</text>
+
+  <rect x="60" y="1120" width="900" height="265" rx="8" fill="#ffffff" stroke="#5eead4"/>
+  <text x="80" y="1143" font-size="12.5" font-weight="bold" fill="#134e4a">AdtClient（client.ts）— 单目的地会话</text>
+  <text x="80" y="1166" font-size="11" fill="#334155">· 认证：Basic + CSRF 握手（GET core/discovery · x-csrf-token: fetch）· 401/403 重置重试一次</text>
+  <text x="80" y="1184" font-size="11" fill="#334155">· 会话：cookie 自动管理 · sap-usercontext 覆盖 client · sap-adt-connection-id · stateful 写链头</text>
+  <text x="80" y="1202" font-size="11" fill="#334155">· 写链：POST ?_action=LOCK（LOCK_HANDLE / CORRNR）→ PUT /source/main → UNLOCK</text>
+  <text x="80" y="1220" font-size="11" fill="#334155">· 激活：repository/activation（错误在 HTTP 200 body 的 chkl:messages）· checkruns 语法检查</text>
+  <text x="80" y="1238" font-size="11" fill="#334155">· 异步 run：ABAP Unit / ATC —— 提交 → 轮询 → JUnit / checkstyle XML 解析</text>
+  <text x="80" y="1256" font-size="11" fill="#334155">· 搜索 informationsystem/search · 包内容 nodestructure · where-used · 版本历史/源码</text>
+  <text x="80" y="1274" font-size="11" fill="#334155">· 创建/删除：类型专用集合 + 命名空间 XML + package 参数（201 + Location）</text>
+  <text x="80" y="1292" font-size="11" fill="#334155">· 传输 cts/transportrequests · 转储 runtime/dumps（Atom · $query）· 执行 programrun/classrun</text>
+  <text x="80" y="1310" font-size="11" fill="#334155">· $batch：multipart/mixed 内嵌 HTTP · CSRF 外层一次 · sap-client/language 自动附加</text>
+  <text x="80" y="1328" font-size="11" fill="#334155">· DDIC 结构化：MSAG/DOMA/DTEL/TTYP vnd XML · read-modify-write 保属性</text>
+  <text x="80" y="1346" font-size="11" fill="#334155">· dataPreview / $query SQL（白名单插值）· ping 探活</text>
+
+  <rect x="980" y="1120" width="560" height="60" rx="8" fill="#ffffff" stroke="#5eead4"/>
+  <text x="995" y="1141" font-size="11.5" font-weight="bold" fill="#134e4a">xml.ts</text>
+  <text x="995" y="1159" font-size="10.5" fill="#475569">零依赖 ADT XML 解析 · 命名空间剥离 · CDATA · 实体</text>
+  <rect x="980" y="1188" width="560" height="60" rx="8" fill="#ffffff" stroke="#5eead4"/>
+  <text x="995" y="1209" font-size="11.5" font-weight="bold" fill="#134e4a">endpoints.ts</text>
+  <text x="995" y="1227" font-size="10.5" fill="#475569">端点与媒体类型常量 · application/vnd.sap.adt.* · 查询构造</text>
+  <rect x="980" y="1256" width="560" height="60" rx="8" fill="#ffffff" stroke="#5eead4"/>
+  <text x="995" y="1277" font-size="11.5" font-weight="bold" fill="#134e4a">structure.ts</text>
+  <text x="995" y="1295" font-size="10.5" fill="#475569">DDIC 结构化读写 · parseStructure / patchStructureXml</text>
+  <rect x="980" y="1324" width="560" height="61" rx="8" fill="#ffffff" stroke="#5eead4"/>
+  <text x="995" y="1345" font-size="11.5" font-weight="bold" fill="#134e4a">types.ts</text>
+  <text x="995" y="1363" font-size="10.5" fill="#475569">协议类型契约（AdtError · 各操作结果类型）</text>
+
+  <!-- ============ D. 后端 ============ -->
+  <path d="M 300 1405 L 300 1441" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="308" y="1430" font-size="10.5" fill="#334155">HTTP 127.0.0.1:8123（demo）</text>
+  <path d="M 1195 1405 L 1195 1441" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="1203" y="1430" font-size="10.5" fill="#334155">HTTPS · Basic + CSRF · x-csrf-token</text>
+
+  <rect x="40" y="1445" width="730" height="220" rx="12" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+  <text x="60" y="1473" font-size="14" font-weight="bold" fill="#92400e">@nefevcore/abap-adt-mock — 进程内 Mock ADT 服务器</text>
+  <text x="740" y="1473" text-anchor="end" font-size="10" fill="#b45309">零配置 demo</text>
+  <text x="60" y="1496" font-size="11" fill="#334155">· node:http · 127.0.0.1:8123 · demo 目的地（demo/demo · ADT_MOCK_* 覆盖）</text>
+  <text x="60" y="1514" font-size="11" fill="#334155">· 协议子集：discovery(AtomPub) · 通配符搜索 · LOCK/UNLOCK · /source/main 读写</text>
+  <text x="60" y="1532" font-size="11" fill="#334155">· 激活（HTTP 200 内嵌 chkl:messages 错误）· checkruns · 类型集合创建</text>
+  <text x="60" y="1550" font-size="11" fill="#334155">· ABAP Unit + ATC 异步 run（JUnit / checkstyle）· 传输请求 · 转储数据</text>
+  <text x="60" y="1568" font-size="11" fill="#334155">· Basic 认证 + CSRF 强制 · 声明式路由表（method 守卫）· 示例对象库</text>
+  <text x="60" y="1586" font-size="11" fill="#334155">· 端口被占（EADDRINUSE）→ 同服务器随机端口重听</text>
+  <text x="60" y="1610" font-size="10.5" fill="#b45309">也可独立运行：pnpm mock（packages/adt-mock CLI）— 无需 DSH</text>
+
+  <rect x="830" y="1445" width="730" height="220" rx="12" fill="#1e293b" stroke="#0f172a" stroke-width="1.5"/>
+  <text x="850" y="1473" font-size="14" font-weight="bold" fill="#f1f5f9">SAP ABAP 前端服务器（真实系统 · ×N 目的地）</text>
+  <text x="850" y="1496" font-size="11" fill="#cbd5e1">· HTTPS · /sap/bc/adt/* — ADT REST 服务（SICF）</text>
+  <text x="850" y="1514" font-size="11" fill="#cbd5e1">· 经典 NetWeaver：Basic 认证（strictSSL:false 兼容自签证书）</text>
+  <text x="850" y="1532" font-size="11" fill="#cbd5e1">· ABAP Cloud：auth 扩展点已预留（jwt · 未实现）</text>
+  <text x="850" y="1550" font-size="11" fill="#cbd5e1">· 锁 / 激活 / 单测 / ATC / 传输 / 转储 / 执行 均发生在后端</text>
+  <text x="850" y="1574" font-size="10.5" fill="#94a3b8">release 传输 = 人工决策（协议客户端有能力 · 插件不暴露工具）</text>
+
+  <path d="M 40 720 L 22 720 L 22 1555 L 36 1555" stroke="#b45309" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#arrm)"/>
+  <text x="13" y="1140" transform="rotate(-90 13 1140)" text-anchor="middle" font-size="9.5" fill="#92400e">demo:true → registry 进程内启停 Mock（startMock / close）</text>
+
+  <!-- ============ E. 本地工件 ============ -->
+  <rect x="40" y="1690" width="1520" height="210" rx="12" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="60" y="1718" font-size="13" font-weight="bold" fill="#334155">本地磁盘工件（经可选 dsh-fs / 凭证服务访问 · 编号对应配置分层）</text>
+
+  <rect x="60" y="1735" width="355" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="74" y="1755" font-size="10" font-weight="bold" fill="#0f172a" font-family="Consolas, monospace">~/.dsh/.agent-presets/abap-adt/</text>
+  <text x="74" y="1773" font-size="9.5" fill="#64748b">② 预设（agent.cordis.yml = standard + 插件行）</text>
+  <rect x="435" y="1735" width="355" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="449" y="1755" font-size="10" font-weight="bold" fill="#0f172a" font-family="Consolas, monospace">~/.dsh/settings.yaml</text>
+  <text x="449" y="1773" font-size="9.5" fill="#64748b">④ abap-adt: 用户段 · 保存即热生效</text>
+  <rect x="810" y="1735" width="355" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="824" y="1755" font-size="10" font-weight="bold" fill="#0f172a" font-family="Consolas, monospace">~/.dsh/.credentials.yaml</text>
+  <text x="824" y="1773" font-size="9.5" fill="#64748b">密码凭证 · passwordEnv 引用（schema 脱敏）</text>
+  <rect x="1185" y="1735" width="355" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="1199" y="1755" font-size="10" font-weight="bold" fill="#0f172a" font-family="Consolas, monospace">~/.dsh/storages/abap-adt-locks.json</text>
+  <text x="1199" y="1773" font-size="9.5" fill="#64748b">锁账本 · 跨会话 adt_unlock_all 清残留锁</text>
+
+  <rect x="60" y="1802" width="355" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="74" y="1822" font-size="10" font-weight="bold" fill="#0f172a" font-family="Consolas, monospace">&lt;工作区&gt;/.dsh-abap-adt/destinations.yaml</text>
+  <text x="74" y="1840" font-size="9.5" fill="#64748b">⑥ 工作区目的地层 · adt_create_destination 原子写</text>
+  <rect x="435" y="1802" width="355" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="449" y="1822" font-size="10" font-weight="bold" fill="#0f172a" font-family="Consolas, monospace">&lt;工作区&gt;/.adt-snapshots/&lt;目的地名&gt;/</text>
+  <text x="449" y="1840" font-size="9.5" fill="#64748b">OCC 快照 &lt;对象&gt;.abap + .json sidecar（baseHash）</text>
+  <rect x="810" y="1802" width="355" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="824" y="1822" font-size="10" font-weight="bold" fill="#0f172a" font-family="Consolas, monospace">&lt;工作区&gt; 导出目录 *.abap + .abaplint.json</text>
+  <text x="824" y="1840" font-size="9.5" fill="#64748b">adt_export_objects · adt_local_check（@abaplint/core）</text>
+  <rect x="1185" y="1802" width="355" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="1199" y="1822" font-size="10" font-weight="bold" fill="#0f172a" font-family="Consolas, monospace">SAP GUI：SAPUILandscape.xml / saplogon.ini</text>
+  <text x="1199" y="1840" font-size="9.5" fill="#64748b">sapgui.ts 连接发现 · 导入建目的地</text>
+
+  <!-- ============ 图例 ============ -->
+  <line x1="60" y1="1935" x2="100" y2="1935" stroke="#334155" stroke-width="2"/>
+  <text x="108" y="1939" font-size="11" fill="#334155">调用 / 数据流</text>
+  <line x1="240" y1="1935" x2="280" y2="1935" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="288" y="1939" font-size="11" fill="#334155">控制 / 生命周期（热重载）</text>
+  <line x1="560" y1="1935" x2="600" y2="1935" stroke="#b45309" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="608" y="1939" font-size="11" fill="#334155">进程内 Mock 启停</text>
+  <text x="1540" y="1939" text-anchor="end" font-size="10.5" fill="#94a3b8">与 docs/architecture.md / README.md 配套 · 工具名以 src/tools/*.ts 为准</text>
+
+  <text x="800" y="1985" text-anchor="middle" font-size="10" fill="#94a3b8">dsh-abap-adt · packages：adt-protocol（协议客户端）· adt-mock（演示后端）· dsh-plugin-abap-adt（DSH 插件）· MIT</text>
+</svg>

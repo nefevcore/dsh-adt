@@ -14,7 +14,7 @@
  * ```
  *
  * Namespaces are ignored structurally (local names only); attributes keep
- * their full prefixed names so callers can match `{http://...}name` or `name`.
+ * their full prefixed names so callers can match `name` or `prefix:name`.
  */
 export interface XmlNode {
     name: string;
@@ -24,7 +24,7 @@ export interface XmlNode {
 }
 /** Parse an XML string into a node tree. */
 export declare function parseXml(input: string): XmlNode;
-/** First child with the given local name (namespace prefix ignored). */
+/** First child with the given local name (parser output has no prefixes). */
 export declare function child(node: XmlNode, name: string): XmlNode | undefined;
 /** All children with the given local name. */
 export declare function children(node: XmlNode, name: string): XmlNode[];

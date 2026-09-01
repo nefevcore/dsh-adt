@@ -14,7 +14,12 @@
  * Connection kinds:
  *   - `direct`     — `<Service type="SAPGUI" mode="1" server="host:32nn"/>`;
  *                   ADT URL derived via the SAP port convention
- *                   (HTTPS 443&lt;nn&gt;, HTTP 80&lt;nn&gt; for instance number nn)
+ *                   (HTTPS 443&lt;nn&gt;, HTTP 80&lt;nn&gt; for instance number nn).
+ *                   The derivation is an UNVERIFIED guess: the GUI entry
+ *                   only proves the DIAG port, routing may go through a
+ *                   saprouter, and ICM/web-dispatcher ports vary — the
+ *                   destination tools validate candidates via probe.ts
+ *                   before trusting a derived URL
  *   - `group`      — load-balancing entry (`msid` + logon group): no single
  *                   application server, so no ADT URL can be derived
  *   - `reference`  — shortcut into a SAPGUI service carrying client / user /
@@ -183,6 +188,11 @@ function parseLandscapeXml(xml, source) {
         const { host, port } = service.server ? splitServer(service.server) : { host: undefined, port: undefined };
         const sysnr = sysnrFromDiagPort(port);
         const { adtUrl, httpUrl } = host ? adtUrlsFor(host, sysnr) : {};
+        // Routed entries keep the derived url (probing decides whether it works),
+        // but the caveat must say upfront that direct HTTP usually fails.
+        const routerCaveat = base.router
+            ? ' — WARNING: SAP GUI reaches this host through a saprouter, which HTTP cannot follow; direct access usually needs a web-dispatcher url'
+            : '';
         connections.push({
             ...base,
             kind: 'direct',
@@ -190,13 +200,13 @@ function parseLandscapeXml(xml, source) {
             sysnr,
             adtUrl,
             httpUrl,
-            adtUrlNote: host
+            adtUrlNote: (host
                 ? service.sncname
                     ? 'SNC-protected GUI entry — ADT needs a user/password; verify the server allows basic authentication'
                     : sysnr
                         ? 'URL derived from the GUI app server via the SAP port convention (HTTPS 443<nn>); adjust if a web dispatcher or different port serves /sap/bc/adt'
                         : 'server without instance port — URL assumes default HTTPS port; verify'
-                : 'entry carries no server host',
+                : 'entry carries no server host') + routerCaveat,
         });
     }
     return { connections, includes };

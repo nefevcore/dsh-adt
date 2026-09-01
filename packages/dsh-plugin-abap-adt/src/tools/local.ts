@@ -26,7 +26,7 @@ export interface FsReader {
 }
 
 /** Adapter over the DSH filesystem service — reads stay sandbox-aware like adt_export_objects. */
-export function fsReaderFromCtx(fs: FileSystem, signal?: AbortSignal): FsReader {
+function fsReaderFromCtx(fs: FileSystem, signal?: AbortSignal): FsReader {
   return {
     async readDir(absPath) {
       const target = await fs.resolve(absPath, { signal });

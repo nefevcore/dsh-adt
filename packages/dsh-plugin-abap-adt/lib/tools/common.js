@@ -1,3 +1,4 @@
+import { AdtError } from '@nefevcore/abap-adt-protocol';
 import { resolveObject, resolvePackageName } from '../resolve.js';
 import { AdtPolicyError } from '../policy.js';
 /**
@@ -11,6 +12,16 @@ export function assertExplicitTransport(policy, transport, toolName, objectName)
         return;
     policy.assertTransportsEnabled(toolName);
     policy.assertTransportAllowed(transport, objectName ? `${toolName} (${objectName})` : toolName);
+}
+/**
+ * Does this error mean "the backend profile does not expose the service"
+ * (404/405 on the service endpoint)? A type predicate: inside the branch
+ * `error` is narrowed to AdtError, so remedies can cite `error.status`.
+ * Tools re-throw with their own remedy message when this is true — the
+ * statuses alone are the shared fact.
+ */
+export function isAdtServiceUnavailable(error) {
+    return error instanceof AdtError && (error.status === 404 || error.status === 405);
 }
 /** `findings` array schema shared by the ATC-reporting tools. */
 export const ATC_FINDINGS_SCHEMA = {
@@ -122,7 +133,7 @@ export const PACKAGE_HINT_PARAM = {
  * Entries may carry `packageName` as a permission-check hint.
  * Bounded at MAX_OBJECT_LIST entries per call (audit P3).
  */
-export const MAX_OBJECT_LIST = 50;
+const MAX_OBJECT_LIST = 50;
 export const OBJECTS_PARAM = {
     objects: {
         type: 'array',
@@ -179,6 +190,15 @@ export const NAME_TYPE_OBJECTS_PARAM = {
         },
     },
 };
+/** Version-feed entry metadata shared by adt_object_versions and
+ *  adt_version_diff (each appends its own tail field). */
+export const VERSION_FEED_META_PROPERTIES = {
+    versionId: { type: 'string', required: true },
+    author: { type: 'string' },
+    updatedAt: { type: 'string' },
+    title: { type: 'string' },
+    transportRequest: { type: 'string' },
+};
 /** Pull the destination param value out of raw args. */
 export function destinationOf(args) {
     return optStr(args['destination']);
@@ -199,8 +219,14 @@ export function sessionCwd(exec) {
 export function optStr(value) {
     return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
+/** A raw arg TRIMMED to a non-empty value, else `undefined` — for user-typed
+ *  free text (transport numbers, queries) where stray whitespace is noise.
+ *  Unlike {@link optStr}, which does not trim. */
+export function trimmedArgStr(value) {
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
 /** Extract the `objectUri`/`name`/`type` reference args of a tool call. */
-export function objectRefArgs(args) {
+function objectRefArgs(args) {
     return {
         objectUri: optStr(args.objectUri),
         name: optStr(args.name),
@@ -244,6 +270,25 @@ export function clampWithNote(requested, min, max, label) {
     if (value === requested)
         return { value };
     return { value, note: `${label} clamped from ${requested} to ${value} (allowed ${min}..${max})` };
+}
+// --- Truncation wording (single source so the phrasing cannot drift) ---
+/**
+ * The sentence every capped answer owes its reader when the TOTAL is known:
+ * name the parameter that lifts the cap, by its real name. A bounded answer
+ * that does not say it was bounded reads as a clean verdict over a list read
+ * in part.
+ */
+export function showingOfTotal(shown, total, param) {
+    return `showing ${shown} of ${total}; raise ${param} to see the rest`;
+}
+/**
+ * The capped-answer sentence when counting the rest would cost another
+ * request: promise less, deliberately — an invented total is worse than an
+ * admitted one. `narrower` names how to ask a smaller question (a narrower
+ * pattern, a shorter time window, a package filter…).
+ */
+export function showingUnknownTotal(shown, param, narrower) {
+    return `showing ${shown}, and there may be more; raise ${param}, or ${narrower}`;
 }
 /** Render a simple text block. */
 export function text(content) {

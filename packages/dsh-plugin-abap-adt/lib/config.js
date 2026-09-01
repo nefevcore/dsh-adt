@@ -261,16 +261,20 @@ export async function loadExternalConfigFile(path) {
     }
     return parseExternalConfigText(raw, path);
 }
-/** Parse + validate config file text (shared by async and sync loaders). */
-export function parseExternalConfigText(raw, path) {
-    let parsed;
+/** Parse config-file text RAW (no validation): throws with the path in the
+ *  message on invalid YAML; null/undefined documents stay as-is. Shared by
+ *  the validating config loader and the raw workspace-layer parser. */
+export function parseYamlDocument(raw, path) {
     try {
-        parsed = parse(raw);
+        return parse(raw);
     }
     catch (error) {
         throw new Error(`[abap-adt] invalid YAML in ${path}: ${error.message}`);
     }
-    return validateExternalConfig(parsed, path);
+}
+/** Parse + validate config file text (shared by async and sync loaders). */
+export function parseExternalConfigText(raw, path) {
+    return validateExternalConfig(parseYamlDocument(raw, path), path);
 }
 /**
  * Resolve the effective plugin config across all layers (nearest wins):

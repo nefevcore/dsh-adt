@@ -307,15 +307,20 @@ export async function loadExternalConfigFile(path: string): Promise<Partial<Plug
   return parseExternalConfigText(raw, path);
 }
 
-/** Parse + validate config file text (shared by async and sync loaders). */
-export function parseExternalConfigText(raw: string, path: string): Partial<PluginConfig> {
-  let parsed: unknown;
+/** Parse config-file text RAW (no validation): throws with the path in the
+ *  message on invalid YAML; null/undefined documents stay as-is. Shared by
+ *  the validating config loader and the raw workspace-layer parser. */
+export function parseYamlDocument(raw: string, path: string): unknown {
   try {
-    parsed = parse(raw);
+    return parse(raw);
   } catch (error) {
     throw new Error(`[abap-adt] invalid YAML in ${path}: ${(error as Error).message}`);
   }
-  return validateExternalConfig(parsed, path);
+}
+
+/** Parse + validate config file text (shared by async and sync loaders). */
+export function parseExternalConfigText(raw: string, path: string): Partial<PluginConfig> {
+  return validateExternalConfig(parseYamlDocument(raw, path), path);
 }
 
 /** Inputs to {@link resolveEffectiveConfig}. */

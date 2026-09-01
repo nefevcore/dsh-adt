@@ -38,6 +38,7 @@ import { dumpTools } from './tools/dumps.js';
 import { executeTools } from './tools/execute.js';
 import { structureTools } from './tools/structure.js';
 import { destinationTools } from './tools/destinations.js';
+import { selfcheckTools } from './tools/selfcheck.js';
 const name = 'abap-adt';
 // Only `tools` is a hard dependency (audit D1): without it the plugin has no
 // reason to load at all. `fs` is deliberately OPTIONAL — resolved per call
@@ -147,6 +148,7 @@ async function apply(ctx, config) {
         ...dumpTools(deps),
         ...executeTools(deps),
         ...structureTools(deps),
+        ...selfcheckTools(deps),
     ];
     for (const tool of tools) {
         // Sanitize every tool's output at the registry boundary: strip `undefined`

@@ -139,8 +139,12 @@ test('discoverSapGuiLandscape: direct, reference, group and include entries', ()
     assert.equal(group?.adtUrl, undefined);
     assert.match(group?.adtUrlNote ?? '', /load-balancing/);
 
-    // Router association via routerid.
-    assert.equal(by.get('svc-routed')?.router, '/H/1.2.3.4');
+    // Router association via routerid — the derived URL keeps its guess but
+    // the note must warn that direct HTTP usually cannot follow a saprouter.
+    const routed = by.get('svc-routed');
+    assert.equal(routed?.router, '/H/1.2.3.4');
+    assert.equal(routed?.adtUrl, 'https://10.0.0.9:44300');
+    assert.match(routed?.adtUrlNote ?? '', /saprouter/);
 
     // Included landscape contributes with its own source path.
     const inc = by.get('svc-include');

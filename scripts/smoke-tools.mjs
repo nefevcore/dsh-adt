@@ -16,6 +16,7 @@ import { batchTools } from '../packages/dsh-plugin-abap-adt/lib/tools/batch.js';
 import { dumpTools } from '../packages/dsh-plugin-abap-adt/lib/tools/dumps.js';
 import { executeTools } from '../packages/dsh-plugin-abap-adt/lib/tools/execute.js';
 import { structureTools } from '../packages/dsh-plugin-abap-adt/lib/tools/structure.js';
+import { selfcheckTools } from '../packages/dsh-plugin-abap-adt/lib/tools/selfcheck.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,6 +42,7 @@ const all = [
   ...dumpTools(deps),
   ...executeTools(deps),
   ...structureTools(deps),
+  ...selfcheckTools(deps),
 ];
 console.log(`tools registered: ${all.length}`);
 const by = new Map(all.map((t) => [t.name, t]));
@@ -176,6 +178,18 @@ const msWrite = await by.get('adt_write_structure').execute(
   exec,
 );
 console.log(`write MSAG: changed=${msWrite.changed.join(',')} messages after=${msWrite.data.messages.length}`);
+
+// 15. method-level read + dependency-context read (vsp-inspired features)
+const rm = await by.get('adt_read_object').execute({ name: 'ZCL_DEMO', type: 'CLAS', method: 'greet' }, exec);
+console.log(`read method greet: lines ${rm.startLine}..${rm.endLine} of ${rm.totalLines}`);
+const rc = await by.get('adt_read_object').execute({ name: 'ZCL_DEMO~TEST', type: 'CLAS', context: true }, exec);
+console.log(`read with context: prologue chars=${rc.contextPrologue?.length ?? 0} (unresolved deps visible: ${rc.contextPrologue?.includes('UNRESOLVED')})`);
+
+// 16. capability sweep
+const sc = await by.get('adt_selfcheck').execute({}, exec);
+console.log(
+  `selfcheck: probe=${sc.probeObject} answered=${sc.summary.answered} dead=${sc.summary.dead} broken=${sc.summary.broken} unprobed=${sc.unprobedTools.length}`,
+);
 
 await registry.dispose();
 console.log('SMOKE OK');

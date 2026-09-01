@@ -39,6 +39,7 @@ import { dumpTools } from './tools/dumps.js';
 import { executeTools } from './tools/execute.js';
 import { structureTools } from './tools/structure.js';
 import { destinationTools } from './tools/destinations.js';
+import { selfcheckTools } from './tools/selfcheck.js';
 
 const name = 'abap-adt';
 // Only `tools` is a hard dependency (audit D1): without it the plugin has no
@@ -152,6 +153,7 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
     ...dumpTools(deps),
     ...executeTools(deps),
     ...structureTools(deps),
+    ...selfcheckTools(deps),
   ];
 
   for (const tool of tools) {

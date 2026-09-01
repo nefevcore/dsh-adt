@@ -398,8 +398,8 @@ function hWhereUsed({ res, state, url }) {
 }
 // ---- Data preview (ddic / cds / freestyle SQL) ----
 function hDataPreview({ res, url, path }) {
-    const dpDdic = /^\/datapreview\/ddic\/([^/]+)$/.exec(path);
-    const dpCds = /^\/datapreview\/cds\/([^/]+)$/.exec(path);
+    const dpDdic = DATA_PREVIEW_DDIC_RE.exec(path);
+    const dpCds = DATA_PREVIEW_CDS_RE.exec(path);
     const name = (dpDdic?.[1] ?? dpCds?.[1] ?? '').toUpperCase();
     const rowNumber = Number(url.searchParams.get('rowNumber') ?? 2) || 2;
     res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
@@ -413,7 +413,7 @@ function hDataPreviewFreestyle({ res, url }) {
 }
 // ---- Runtime dumps (ST22 short-dump analysis) ----
 function hDumpsList({ res, url }) {
-    let dumps = [...DUMPS];
+    let dumps = DUMPS;
     const query = url.searchParams.get('$query') ?? '';
     const userMatch = /equals\(\s*user\s*,\s*([^)]+?)\s*\)/.exec(query);
     if (userMatch) {
@@ -448,7 +448,7 @@ function hDumpsList({ res, url }) {
     res.end(`<?xml version="1.0" encoding="UTF-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom">\n  <title>Runtime Dumps</title>\n${entries}\n</feed>`);
 }
 function hDumpDetail({ res, path }) {
-    const dumpMatch = /^\/runtime\/dump\/([^/]+?)(?:\/(summary|formatted))?$/.exec(path);
+    const dumpMatch = DUMP_RE.exec(path);
     const dump = dumpMatch ? DUMPS.find((d) => d.id === decodeURIComponent(dumpMatch[1])) : undefined;
     if (!dump || !dumpMatch) {
         res.statusCode = 404;
@@ -480,7 +480,7 @@ function hDumpDetail({ res, path }) {
 }
 // ---- Program / class execution ----
 function hProgramRun({ res, state, path }) {
-    const programRun = /^\/programs\/programrun\/([^/]+)$/.exec(path);
+    const programRun = PROGRAM_RUN_RE.exec(path);
     const name = decodeURIComponent(programRun[1]).toUpperCase();
     const obj = findObjectByName(state, name);
     if (!obj || obj.category !== 'PROG') {
@@ -493,7 +493,7 @@ function hProgramRun({ res, state, path }) {
     res.end(`${name} executed (mock run)\nHello, World!\nOutput lines: 2`);
 }
 function hClassRun({ res, state, path }) {
-    const classRun = /^\/oo\/classrun\/([^/]+)$/.exec(path);
+    const classRun = CLASS_RUN_RE.exec(path);
     const name = decodeURIComponent(classRun[1]).toUpperCase();
     const obj = findObjectByName(state, name);
     if (!obj || obj.category !== 'CLAS') {
@@ -879,7 +879,7 @@ async function hUnitRun({ res, req, state }) {
 </aunit:runStatus>`));
 }
 function hUnitStatus({ res, state, path }) {
-    const unitStatusMatch = /^\/abapunit\/runs\/([^/]+)$/.exec(path);
+    const unitStatusMatch = UNIT_RUN_RE.exec(path);
     // Unknown run ids answer 404 (audit P3 fidelity): a made-up id used to
     // fabricate a completed green run.
     if (!state.unitRuns.has(unitStatusMatch[1])) {
@@ -895,7 +895,7 @@ function hUnitStatus({ res, state, path }) {
 </aunit:runStatus>`));
 }
 function hUnitResult({ res, state, opts, path }) {
-    const unitResultMatch = /^\/abapunit\/results\/([^/]+)$/.exec(path);
+    const unitResultMatch = UNIT_RESULT_RE.exec(path);
     const runId = unitResultMatch[1];
     if (!state.unitRuns.has(runId)) {
         res.statusCode = 404;
@@ -990,7 +990,7 @@ async function hAtcRun({ res, state }) {
 </atc:run>`));
 }
 function hAtcStatus({ res, path }) {
-    const atcStatusMatch = /^\/atc\/runs\/([^/]+)$/.exec(path);
+    const atcStatusMatch = ATC_RUN_RE.exec(path);
     // Mirror the real backend shape: `status` attribute, phases, and a result
     // link whose id DIFFERS from the run id (exercises link extraction).
     const runId = atcStatusMatch[1];
@@ -1019,7 +1019,7 @@ function hAtcResultsList({ res, url }) {
 </atcresult:resultList>`));
 }
 function hAtcResultDetail({ res, state, path }) {
-    const atcResultMatch = /^\/atc\/results\/([^/]+)$/.exec(path);
+    const atcResultMatch = ATC_RESULT_RE.exec(path);
     const displayId = atcResultMatch[1].toUpperCase();
     const sample = ATC_SAMPLE_RUNS.find((r) => r.displayId.toUpperCase() === displayId);
     const fromAsyncRun = state.atcRunIds.has(atcResultMatch[1]);
@@ -1042,11 +1042,12 @@ function hAtcResultDetail({ res, state, path }) {
     };
     // Real-backend shape: resultList → result → objects → object → findings.
     res.setHeader('Content-Type', 'application/xml');
+    const priorityOf = (severity) => severity === 'CRITICAL' ? 1 : severity === 'ERROR' ? 2 : severity === 'WARNING' ? 3 : 4;
     const objectsXml = targets
         .map((o) => {
         const findings = (o.atcFindings ?? [])
             .map((f, i) => {
-            const priority = f.severity === 'CRITICAL' ? 1 : f.severity === 'ERROR' ? 2 : f.severity === 'WARNING' ? 3 : 4;
+            const priority = priorityOf(f.severity);
             // A finding's location may point at ANOTHER object (e.g. an
             // include) while the finding itself hangs on this object's name.
             const locationUri = f.uri ?? atcSourceUri(o);
@@ -1061,14 +1062,7 @@ function hAtcResultDetail({ res, state, path }) {
     const counts = { p1: 0, p2: 0, p3: 0, p4: 0 };
     for (const o of targets) {
         for (const f of o.atcFindings ?? []) {
-            if (f.severity === 'CRITICAL')
-                counts.p1++;
-            else if (f.severity === 'ERROR')
-                counts.p2++;
-            else if (f.severity === 'WARNING')
-                counts.p3++;
-            else
-                counts.p4++;
+            counts[`p${priorityOf(f.severity)}`]++;
         }
     }
     res.end(adtXml(`<atcresult:resultList xmlns:atcresult="http://www.sap.com/adt/atc/result" xmlns:adtcore="http://www.sap.com/adt/core">
@@ -1093,6 +1087,17 @@ function hAtcResultDetail({ res, state, path }) {
 // --- The route table (dispatch order matters — do not reorder) ---------------
 const CREATE_COLLECTIONS = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|messageclass|msgclass|packages)$/;
 const TRANSPORT_RE = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/;
+// Route regexes are shared between the table entry and its handler — the
+// handlers' `match![1]!` captures rely on the two never drifting apart.
+const DATA_PREVIEW_DDIC_RE = /^\/datapreview\/ddic\/([^/]+)$/;
+const DATA_PREVIEW_CDS_RE = /^\/datapreview\/cds\/([^/]+)$/;
+const DUMP_RE = /^\/runtime\/dump\/([^/]+?)(?:\/(summary|formatted))?$/;
+const PROGRAM_RUN_RE = /^\/programs\/programrun\/([^/]+)$/;
+const CLASS_RUN_RE = /^\/oo\/classrun\/([^/]+)$/;
+const UNIT_RUN_RE = /^\/abapunit\/runs\/([^/]+)$/;
+const UNIT_RESULT_RE = /^\/abapunit\/results\/([^/]+)$/;
+const ATC_RUN_RE = /^\/atc\/runs\/([^/]+)$/;
+const ATC_RESULT_RE = /^\/atc\/results\/([^/]+)$/;
 /** Object base URI: strips a trailing `/source/main` (source-form URIs). */
 const objectPath = (path) => path.endsWith('/source/main') ? path.slice(0, -'/source/main'.length) : path;
 const ROUTES = [
@@ -1103,16 +1108,16 @@ const ROUTES = [
     // Data preview
     {
         method: 'GET',
-        match: (c) => /^\/datapreview\/ddic\/([^/]+)$/.test(c.path) || /^\/datapreview\/cds\/([^/]+)$/.test(c.path),
+        match: (c) => DATA_PREVIEW_DDIC_RE.test(c.path) || DATA_PREVIEW_CDS_RE.test(c.path),
         handler: hDataPreview,
     },
     { method: 'GET', match: (c) => c.path === '/datapreview/freestyle', handler: hDataPreviewFreestyle },
     // Runtime dumps
     { method: 'GET', match: (c) => c.path === '/runtime/dumps', handler: hDumpsList },
-    { method: 'GET', match: (c) => /^\/runtime\/dump\/([^/]+?)(?:\/(summary|formatted))?$/.test(c.path), handler: hDumpDetail },
+    { method: 'GET', match: (c) => DUMP_RE.test(c.path), handler: hDumpDetail },
     // Program / class execution
-    { method: 'POST', csrf: true, match: (c) => /^\/programs\/programrun\/([^/]+)$/.test(c.path), handler: hProgramRun },
-    { method: 'POST', csrf: true, match: (c) => /^\/oo\/classrun\/([^/]+)$/.test(c.path), handler: hClassRun },
+    { method: 'POST', csrf: true, match: (c) => PROGRAM_RUN_RE.test(c.path), handler: hProgramRun },
+    { method: 'POST', csrf: true, match: (c) => CLASS_RUN_RE.test(c.path), handler: hClassRun },
     // Protocol-level $batch
     { method: 'POST', csrf: true, match: (c) => c.path === '/$batch', handler: hBatch },
     // Structured metadata editors (must precede the generic object routes)
@@ -1168,14 +1173,14 @@ const ROUTES = [
     // like the original code); otherwise the async run flow.
     { method: 'POST', match: (c) => c.opts.legacyUnitOnly && c.path === '/abapunit/runs', handler: hUnitRunLegacy },
     { method: 'POST', csrf: true, match: (c) => c.path === '/abapunit/runs', handler: hUnitRun },
-    { method: 'GET', match: (c) => /^\/abapunit\/runs\/([^/]+)$/.test(c.path), handler: hUnitStatus },
-    { method: 'GET', match: (c) => /^\/abapunit\/results\/([^/]+)$/.test(c.path), handler: hUnitResult },
+    { method: 'GET', match: (c) => UNIT_RUN_RE.test(c.path), handler: hUnitStatus },
+    { method: 'GET', match: (c) => UNIT_RESULT_RE.test(c.path), handler: hUnitResult },
     { method: 'POST', csrf: true, match: (c) => c.path === '/abapunit/testruns', handler: hUnitTestruns },
     // ATC
     { method: 'POST', csrf: true, match: (c) => c.path === '/atc/runs', handler: hAtcRun },
-    { method: 'GET', match: (c) => /^\/atc\/runs\/([^/]+)$/.test(c.path), handler: hAtcStatus },
+    { method: 'GET', match: (c) => ATC_RUN_RE.test(c.path), handler: hAtcStatus },
     { method: 'GET', match: (c) => c.path === '/atc/results', handler: hAtcResultsList },
-    { method: 'GET', match: (c) => /^\/atc\/results\/([^/]+)$/.test(c.path), handler: hAtcResultDetail },
+    { method: 'GET', match: (c) => ATC_RESULT_RE.test(c.path), handler: hAtcResultDetail },
 ];
 // --- Structured metadata editors (MSAG / DOMA / DTEL / TTYP) -----------------
 /** Media types of the structured kinds (mirrors @nefevcore/abap-adt-protocol). */

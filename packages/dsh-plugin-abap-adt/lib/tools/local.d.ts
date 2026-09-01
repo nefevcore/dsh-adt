@@ -1,5 +1,4 @@
 import type { Context } from '@deepseek-ai/cordis';
-import type { FileSystem } from '@deepseek-ai/dsh-fs';
 import { type ToolDeps } from './common.js';
 /** Minimal filesystem surface the checker needs (injected, so tests can fake it). */
 export interface FsReader {
@@ -11,8 +10,6 @@ export interface FsReader {
     /** Read a whole UTF-8 text file by absolute path. */
     readFile(absPath: string): Promise<string>;
 }
-/** Adapter over the DSH filesystem service — reads stay sandbox-aware like adt_export_objects. */
-export declare function fsReaderFromCtx(fs: FileSystem, signal?: AbortSignal): FsReader;
 export type CheckSeverity = 'Error' | 'Warning' | 'Info';
 /**
  * Map an on-disk file name to the filename abaplint expects (type-suffixed,

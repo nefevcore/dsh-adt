@@ -100,6 +100,17 @@ export declare class AdtRegistry {
         ok: boolean;
         detail: string;
     }>>;
+    /**
+     * Ping a destination config that is not yet saved anywhere (pre-save
+     * verification for `adt_create_destination`): builds a transient entry
+     * with the same password resolution as a live one. Policy inputs do not
+     * affect reachability, so the global defaults apply.
+     */
+    pingUnsaved(dest: DestinationConfig, signal?: AbortSignal): Promise<{
+        ok: boolean;
+        status?: number;
+        detail?: string;
+    }>;
     /** Snapshot for the `adt_permissions` tool: global defaults + per destination (workspace-aware). */
     describePolicies(cwd?: string): Promise<{
         global: ReturnType<AdtPolicy['describe']>;

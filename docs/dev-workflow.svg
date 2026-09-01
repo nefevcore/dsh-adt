@@ -1,0 +1,276 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1700" font-family="Segoe UI, 'Microsoft YaHei', 'PingFang SC', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#334155"/>
+    </marker>
+    <marker id="arrr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#dc2626"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="1700" fill="#f8fafc"/>
+
+  <text x="800" y="44" text-anchor="middle" font-size="24" font-weight="bold" fill="#0f172a">ABAP 开发全流程 × adt_* 工具映射图</text>
+  <text x="800" y="70" text-anchor="middle" font-size="12.5" fill="#64748b">流程：建请求 → 建域 → 建数据元素 → 建表 → 写代码（含屏幕）→ 激活 → 测试 → 释放 —— 已补全前置准备、语法检查、失败回路与人工释放边界；37 个工具全部入图</text>
+
+  <!-- ============ 阶段 0 准备 ============ -->
+  <rect x="60" y="100" width="1400" height="140" rx="12" fill="#f0fdfa" stroke="#0d9488" stroke-width="1.5"/>
+  <rect x="76" y="112" width="150" height="116" rx="8" fill="#0d9488"/>
+  <text x="151" y="150" text-anchor="middle" font-size="10" fill="#ccfbf1">阶段 0</text>
+  <text x="151" y="172" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#ffffff">准备</text>
+  <text x="151" y="192" text-anchor="middle" font-size="9.5" fill="#99f6e4">连接 · 包 · 权限</text>
+
+  <rect x="246" y="124" width="150" height="28" rx="6" fill="#ffffff" stroke="#0d9488" stroke-width="1.2"/>
+  <text x="321" y="142" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_list_destinations</text>
+  <rect x="408" y="124" width="115" height="28" rx="6" fill="#ffffff" stroke="#0d9488" stroke-width="1.2"/>
+  <text x="465" y="142" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_system_info</text>
+  <rect x="535" y="124" width="72" height="28" rx="6" fill="#ffffff" stroke="#0d9488" stroke-width="1.2"/>
+  <text x="571" y="142" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_ping</text>
+  <rect x="619" y="124" width="158" height="28" rx="6" fill="#ffffff" stroke="#0d9488" stroke-width="1.2"/>
+  <text x="698" y="142" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_create_destination</text>
+  <rect x="789" y="124" width="178" height="28" rx="6" fill="#ffffff" stroke="#0d9488" stroke-width="1.2"/>
+  <text x="878" y="142" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_list_gui_connections</text>
+  <rect x="979" y="124" width="118" height="28" rx="6" fill="#ffffff" stroke="#0d9488" stroke-width="1.2"/>
+  <text x="1038" y="142" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_permissions</text>
+  <text x="1110" y="142" font-size="10" fill="#0f766e">▸ 权限六开关生效值自检</text>
+
+  <rect x="246" y="162" width="84" height="28" rx="6" fill="#ffffff" stroke="#0d9488" stroke-width="1.2"/>
+  <text x="288" y="180" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_search</text>
+  <rect x="342" y="162" width="142" height="28" rx="6" fill="#ffffff" stroke="#0d9488" stroke-width="1.2"/>
+  <text x="413" y="180" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_package_content</text>
+  <text x="496" y="180" font-size="10" fill="#0f766e">▸ 摸底已有对象/包；建包用 adt_create_object(DEVC)</text>
+
+  <text x="246" y="218" font-size="10.5" font-style="italic" fill="#0f766e">对话式建连接（SAP GUI 导入 · 端口探测）· $TMP 与可传输包决策 · demo mock 目的地可零配置演练全流程</text>
+
+  <path d="M 350 240 L 350 264" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- ============ 阶段 1 传输请求 ============ -->
+  <rect x="60" y="268" width="1400" height="140" rx="12" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  <rect x="76" y="280" width="150" height="116" rx="8" fill="#7c3aed"/>
+  <text x="151" y="318" text-anchor="middle" font-size="10" fill="#ede9fe">阶段 1</text>
+  <text x="151" y="340" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#ffffff">传输请求</text>
+  <text x="151" y="360" text-anchor="middle" font-size="9.5" fill="#ddd6fe">建请求</text>
+
+  <rect x="246" y="292" width="140" height="28" rx="6" fill="#ffffff" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="316" y="310" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_list_transports</text>
+  <text x="396" y="310" font-size="10" fill="#5b21b6">▸ 查/选已有请求号</text>
+
+  <rect x="560" y="288" width="880" height="100" rx="8" fill="#ffffff" stroke="#a78bfa" stroke-dasharray="5 4"/>
+  <text x="576" y="308" font-size="10.5" font-weight="bold" fill="#4c1d95">「建请求」没有专用工具 —— 请求号两种来源：</text>
+  <text x="576" y="326" font-size="10" fill="#334155">① 显式 transport 参数（write/create/delete/activate 均可带 · 用户值优先于后端分配）</text>
+  <text x="576" y="344" font-size="10" fill="#334155">② 后端首次 lock 自动分配 CORRNR（transportSource=auto，输出明示避免悄悄计入新请求）</text>
+  <text x="576" y="362" font-size="10" fill="#334155">两种都必须命中 allowedTransports 白名单，否则解锁回滚 + [POLICY] 拒绝；SE09/SE10 手工建请求同样可用</text>
+
+  <path d="M 350 408 L 350 432" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="362" y="424" font-size="10" fill="#475569">选定包 + 请求策略</text>
+
+  <!-- ============ 阶段 2 建 DDIC ============ -->
+  <rect x="60" y="436" width="1400" height="200" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <rect x="76" y="448" width="150" height="176" rx="8" fill="#2563eb"/>
+  <text x="151" y="510" text-anchor="middle" font-size="10" fill="#dbeafe">阶段 2</text>
+  <text x="151" y="532" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#ffffff">建 DDIC</text>
+  <text x="151" y="552" text-anchor="middle" font-size="9.5" fill="#bfdbfe">域→元素→表</text>
+
+  <rect x="246" y="476" width="268" height="92" rx="8" fill="#ffffff" stroke="#93c5fd"/>
+  <text x="260" y="494" font-size="11.5" font-weight="bold" fill="#1d4ed8">① 域 DOMA</text>
+  <rect x="260" y="502" width="112" height="24" rx="5" fill="#f8fafc" stroke="#60a5fa"/>
+  <text x="316" y="518" text-anchor="middle" font-size="9.5" fill="#0f172a" font-family="Consolas, monospace">adt_create_object</text>
+  <text x="378" y="518" font-size="9.5" fill="#64748b">▸ 建骨架</text>
+  <rect x="260" y="532" width="124" height="24" rx="5" fill="#f8fafc" stroke="#60a5fa"/>
+  <text x="322" y="548" text-anchor="middle" font-size="9.5" fill="#0f172a" font-family="Consolas, monospace">adt_write_structure</text>
+  <text x="390" y="548" font-size="9.5" fill="#64748b">▸ 属性+固定值</text>
+
+  <rect x="530" y="476" width="268" height="92" rx="8" fill="#ffffff" stroke="#93c5fd"/>
+  <text x="544" y="494" font-size="11.5" font-weight="bold" fill="#1d4ed8">② 数据元素 DTEL</text>
+  <rect x="544" y="502" width="112" height="24" rx="5" fill="#f8fafc" stroke="#60a5fa"/>
+  <text x="600" y="518" text-anchor="middle" font-size="9.5" fill="#0f172a" font-family="Consolas, monospace">adt_create_object</text>
+  <text x="662" y="518" font-size="9.5" fill="#64748b">▸ 建骨架</text>
+  <rect x="544" y="532" width="124" height="24" rx="5" fill="#f8fafc" stroke="#60a5fa"/>
+  <text x="606" y="548" text-anchor="middle" font-size="9.5" fill="#0f172a" font-family="Consolas, monospace">adt_write_structure</text>
+  <text x="674" y="548" font-size="9.5" fill="#64748b">▸ 类型引用+标签</text>
+
+  <rect x="814" y="476" width="268" height="92" rx="8" fill="#ffffff" stroke="#93c5fd"/>
+  <text x="828" y="494" font-size="11.5" font-weight="bold" fill="#1d4ed8">③ 表 TABL · STRU/TTYP</text>
+  <rect x="828" y="502" width="112" height="24" rx="5" fill="#f8fafc" stroke="#60a5fa"/>
+  <text x="884" y="518" text-anchor="middle" font-size="9.5" fill="#0f172a" font-family="Consolas, monospace">adt_create_object</text>
+  <text x="946" y="518" font-size="9.5" fill="#64748b">▸ 骨架×3</text>
+  <rect x="828" y="532" width="124" height="24" rx="5" fill="#f8fafc" stroke="#60a5fa"/>
+  <text x="890" y="548" text-anchor="middle" font-size="9.5" fill="#0f172a" font-family="Consolas, monospace">adt_write_structure</text>
+  <text x="958" y="548" font-size="9.5" fill="#64748b">▸ 仅 TTYP</text>
+
+  <rect x="1098" y="476" width="268" height="92" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-dasharray="5 4"/>
+  <text x="1112" y="494" font-size="11.5" font-weight="bold" fill="#1d4ed8">⓪ 复用优先</text>
+  <rect x="1112" y="502" width="124" height="24" rx="5" fill="#f8fafc" stroke="#60a5fa"/>
+  <text x="1174" y="518" text-anchor="middle" font-size="9.5" fill="#0f172a" font-family="Consolas, monospace">adt_read_structure</text>
+  <text x="1112" y="548" font-size="9.5" fill="#64748b">▸ 先 adt_search（阶段0）查已有域/元素，防重复造轮子</text>
+
+  <path d="M 517 516 l 9 7 l -9 7" stroke="#2563eb" stroke-width="2" fill="none"/>
+  <path d="M 801 516 l 9 7 l -9 7" stroke="#2563eb" stroke-width="2" fill="none"/>
+  <line x1="1086" y1="484" x2="1086" y2="560" stroke="#93c5fd" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+  <rect x="246" y="578" width="1198" height="48" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-dasharray="5 4"/>
+  <text x="260" y="596" font-size="10" fill="#334155">激活必须按依赖序：DOMA → DTEL → TABL → 代码（也可一次全激活，由后端排程）；MSAG 消息类通常在建表/写码前先行创建</text>
+  <text x="260" y="614" font-size="10" fill="#b45309">⚠ TABL 仅支持建骨架 —— 字段级维护不在结构化编辑器（仅 MSAG/DOMA/DTEL/TTYP）内，字段调整走 SE11/GUI 或等待后续版本</text>
+
+  <path d="M 350 636 L 350 660" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="362" y="652" font-size="10" fill="#475569">DDIC 就绪</text>
+
+  <!-- ============ 阶段 3 写代码 ============ -->
+  <rect x="60" y="664" width="1400" height="200" rx="12" fill="#fff1f2" stroke="#e11d48" stroke-width="1.5"/>
+  <rect x="76" y="676" width="150" height="176" rx="8" fill="#e11d48"/>
+  <text x="151" y="738" text-anchor="middle" font-size="10" fill="#ffe4e6">阶段 3</text>
+  <text x="151" y="760" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#ffffff">写代码</text>
+  <text x="151" y="780" text-anchor="middle" font-size="9.5" fill="#fecdd3">OCC 冲突安全</text>
+
+  <rect x="246" y="688" width="112" height="28" rx="6" fill="#ffffff" stroke="#e11d48" stroke-width="1.2"/>
+  <text x="302" y="706" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_read_object</text>
+  <text x="277" y="732" text-anchor="middle" font-size="9.5" fill="#9f1239">留 OCC 快照</text>
+  <text x="368" y="706" font-size="13" font-weight="bold" fill="#e11d48">→</text>
+  <rect x="386" y="688" width="114" height="28" rx="6" fill="#ffffff" stroke="#e11d48" stroke-width="1.2"/>
+  <text x="443" y="706" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_edit_object</text>
+  <text x="443" y="732" text-anchor="middle" font-size="9.5" fill="#9f1239">锁内哈希校验</text>
+  <text x="508" y="706" font-size="13" font-weight="bold" fill="#e11d48">→</text>
+  <rect x="526" y="688" width="112" height="28" rx="6" fill="#ffffff" stroke="#e11d48" stroke-width="1.2"/>
+  <text x="582" y="706" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_push_object</text>
+  <text x="582" y="732" text-anchor="middle" font-size="9.5" fill="#9f1239">本地文件校验上传</text>
+  <text x="648" y="706" font-size="13" fill="#94a3b8">｜</text>
+  <rect x="666" y="688" width="118" height="28" rx="6" fill="#ffffff" stroke="#e11d48" stroke-width="1.2"/>
+  <text x="725" y="706" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_write_object</text>
+  <text x="725" y="732" text-anchor="middle" font-size="9.5" fill="#9f1239">整文件直写</text>
+  <rect x="796" y="688" width="112" height="28" rx="6" fill="#ffffff" stroke="#e11d48" stroke-width="1.2"/>
+  <text x="852" y="706" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_create_object</text>
+  <text x="852" y="732" text-anchor="middle" font-size="9.5" fill="#9f1239">CLAS/INTF/PROG/FUNC/DDLS 骨架</text>
+
+  <rect x="246" y="744" width="112" height="28" rx="6" fill="#ffffff" stroke="#e11d48" stroke-width="1.2"/>
+  <text x="302" y="762" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_where_used</text>
+  <text x="368" y="762" font-size="10" fill="#9f1239">▸ 改已有对象前先做影响分析（usageReferences）</text>
+
+  <rect x="246" y="782" width="1198" height="66" rx="8" fill="#ffffff" stroke="#fda4af" stroke-dasharray="5 4"/>
+  <text x="260" y="802" font-size="10" font-weight="bold" fill="#9f1239">「绘制屏幕」的现实约束：经典 Dynpro 屏幕不走 ADT REST（SAP 未开放 Screen Painter）→ SE51 / SAP GUI 人工绘制</text>
+  <text x="260" y="820" font-size="10" fill="#334155">纯代码可达的「屏幕」：选择屏幕（PARAMETERS / SELECT-OPTIONS）✓ · ALV 列表（CL_SALV_TABLE / CL_GUI_ALV_GRID）✓</text>
+  <text x="260" y="838" font-size="10" fill="#334155">写码全程受策略门禁：allowedPackages 包白名单 · allowTransportableEdits（false 时仅 $TMP）· [CONFLICT] 冲突显式拒绝</text>
+
+  <path d="M 350 864 L 350 888" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="362" y="880" font-size="10" fill="#475569">代码就绪（含快照）</text>
+
+  <!-- ============ 阶段 4 检查·激活 ============ -->
+  <rect x="60" y="892" width="1400" height="140" rx="12" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+  <rect x="76" y="904" width="150" height="116" rx="8" fill="#d97706"/>
+  <text x="151" y="942" text-anchor="middle" font-size="10" fill="#fef3c7">阶段 4</text>
+  <text x="151" y="964" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#ffffff">检查·激活</text>
+  <text x="151" y="984" text-anchor="middle" font-size="9.5" fill="#fde68a">先语法后激活</text>
+
+  <rect x="246" y="916" width="84" height="28" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+  <text x="288" y="934" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_check</text>
+  <text x="340" y="934" font-size="10" fill="#92400e">▸ 语法检查（可独立于激活先跑，秒级反馈）</text>
+  <text x="600" y="934" font-size="13" font-weight="bold" fill="#d97706">→</text>
+  <rect x="618" y="916" width="100" height="28" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+  <text x="668" y="934" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_activate</text>
+  <text x="728" y="934" font-size="10" fill="#92400e">▸ 按依赖序激活 · 错误在 HTTP 200 body（chkl:messages type="E"）</text>
+
+  <rect x="246" y="958" width="100" height="28" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+  <text x="296" y="976" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_lock_info</text>
+  <rect x="358" y="958" width="112" height="28" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+  <text x="414" y="976" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_unlock_all</text>
+  <text x="480" y="976" font-size="10" fill="#92400e">▸ 403 EU510 残留锁：查因 / 清锁（持久锁账本跨会话生效）</text>
+
+  <path d="M 350 1032 L 350 1056" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="362" y="1048" font-size="10" fill="#475569">激活成功（无 E 型消息）</text>
+
+  <!-- ============ 阶段 5 测试验证 ============ -->
+  <rect x="60" y="1060" width="1400" height="170" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <rect x="76" y="1072" width="150" height="146" rx="8" fill="#16a34a"/>
+  <text x="151" y="1128" text-anchor="middle" font-size="10" fill="#dcfce7">阶段 5</text>
+  <text x="151" y="1150" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#ffffff">测试验证</text>
+  <text x="151" y="1170" text-anchor="middle" font-size="9.5" fill="#bbf7d0">多维度验证</text>
+
+  <rect x="246" y="1084" width="140" height="28" rx="6" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="316" y="1102" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_run_unit_tests</text>
+  <rect x="398" y="1084" width="100" height="28" rx="6" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="448" y="1102" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_run_atc</text>
+  <rect x="510" y="1084" width="132" height="28" rx="6" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="576" y="1102" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_list_atc_runs</text>
+  <rect x="654" y="1084" width="136" height="28" rx="6" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="722" y="1102" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_get_atc_result</text>
+  <text x="802" y="1102" font-size="10" fill="#14532d">▸ ABAP Unit（JUnit）· ATC（checkstyle）异步轮询</text>
+
+  <rect x="246" y="1124" width="94" height="28" rx="6" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="293" y="1142" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_execute</text>
+  <text x="350" y="1142" font-size="10" fill="#14532d">▸ 真跑程序/classrun（allowExecution 总闸）</text>
+  <rect x="600" y="1124" width="128" height="28" rx="6" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="664" y="1142" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_data_preview</text>
+  <text x="738" y="1142" font-size="10" fill="#14532d">▸ 表/CDS/SQL 数据验证</text>
+
+  <rect x="246" y="1164" width="112" height="28" rx="6" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="302" y="1182" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_list_dumps</text>
+  <rect x="370" y="1164" width="104" height="28" rx="6" fill="#ffffff" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="422" y="1182" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_get_dump</text>
+  <text x="486" y="1182" font-size="10" fill="#14532d">▸ ST22 短转储排障（运行时炸了看这里）</text>
+
+  <rect x="900" y="1124" width="380" height="34" rx="8" fill="#16a34a"/>
+  <text x="1090" y="1145" text-anchor="middle" font-size="11" font-weight="bold" fill="#ffffff" font-family="Consolas, monospace">adt_release_gate</text>
+  <text x="900" y="1174" font-size="10" fill="#14532d">▸ 发布门禁：语法 + Unit + ATC 一次跑完 → go / no-go，go 才进释放</text>
+
+  <path d="M 350 1230 L 350 1254" stroke="#334155" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="362" y="1246" font-size="10" fill="#475569">release_gate = go</text>
+
+  <!-- ============ 阶段 6 释放（人工） ============ -->
+  <rect x="60" y="1258" width="1400" height="150" rx="12" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+  <rect x="76" y="1270" width="150" height="126" rx="8" fill="#475569"/>
+  <text x="151" y="1320" text-anchor="middle" font-size="10" fill="#e2e8f0">阶段 6</text>
+  <text x="151" y="1342" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#ffffff">释放（人工）</text>
+  <text x="151" y="1362" text-anchor="middle" font-size="9.5" fill="#cbd5e1">刻意无工具</text>
+
+  <rect x="246" y="1282" width="134" height="28" rx="6" fill="#ffffff" stroke="#475569" stroke-width="1.2"/>
+  <text x="313" y="1300" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_object_versions</text>
+  <rect x="392" y="1282" width="126" height="28" rx="6" fill="#ffffff" stroke="#475569" stroke-width="1.2"/>
+  <text x="455" y="1300" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_version_diff</text>
+  <text x="530" y="1300" font-size="10" fill="#334155">▸ 释放前变更复核（改了什么一目了然）</text>
+  <rect x="800" y="1282" width="118" height="28" rx="6" fill="#ffffff" stroke="#475569" stroke-width="1.2"/>
+  <text x="859" y="1300" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_get_transport</text>
+  <text x="930" y="1300" font-size="10" fill="#334155">▸ 请求内容终检（任务/对象清单）</text>
+
+  <rect x="246" y="1326" width="1198" height="62" rx="8" fill="#fffbeb" stroke="#d97706" stroke-dasharray="5 4"/>
+  <text x="260" y="1348" font-size="10.5" font-weight="bold" fill="#92400e">释放传输 = 人工决策：协议客户端具备 release 能力，但插件刻意不暴露工具（责任与审计边界）→ SE10 / SAP GUI 人工释放</text>
+  <text x="260" y="1368" font-size="10" fill="#334155">这是「37 个工具里没有 release」的原因：AI 的工作止步于把请求整理到「待释放」状态，最终放行保留给人</text>
+
+  <!-- ============ 横切带 ============ -->
+  <rect x="60" y="1436" width="1400" height="150" rx="12" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="8 5"/>
+  <rect x="76" y="1448" width="150" height="126" rx="8" fill="#94a3b8"/>
+  <text x="151" y="1498" text-anchor="middle" font-size="10" fill="#f1f5f9">横切</text>
+  <text x="151" y="1520" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#ffffff">全程可用</text>
+  <text x="151" y="1540" text-anchor="middle" font-size="9.5" fill="#e2e8f0">跨阶段加速</text>
+
+  <rect x="246" y="1460" width="84" height="28" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="288" y="1478" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_batch</text>
+  <text x="340" y="1478" font-size="10" fill="#334155">▸ $batch 只读 GET 扇出（写部分需 allowBatchWrites）</text>
+  <rect x="640" y="1460" width="136" height="28" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="708" y="1478" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_export_objects</text>
+  <text x="786" y="1478" font-size="10" fill="#334155">▸ 源码落盘 .abap（git 化/备份）</text>
+
+  <rect x="246" y="1500" width="118" height="28" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="305" y="1518" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_local_check</text>
+  <text x="374" y="1518" font-size="10" fill="#334155">▸ 离线 abaplint 预检（配合 export：先本地验证再一次性推 SAP）</text>
+  <rect x="790" y="1500" width="124" height="28" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="852" y="1518" text-anchor="middle" font-size="10.5" fill="#0f172a" font-family="Consolas, monospace">adt_delete_object</text>
+  <text x="924" y="1518" font-size="10" fill="#334155">▸ 拆除误建对象（同受策略门禁，不可逆）</text>
+
+  <text x="246" y="1560" font-size="10.5" font-style="italic" fill="#475569">本地预检链：adt_export_objects → adt_local_check（abaplint 秒级反馈）→ 修完一次性 write + activate 推送 SAP；demo 目的地（进程内 mock）可零配置演练图中全部阶段</text>
+
+  <!-- ============ 失败回路 ============ -->
+  <path d="M 1460 1150 L 1506 1150 L 1506 730 L 1468 730" stroke="#dc2626" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#arrr)"/>
+  <text x="1522" y="940" transform="rotate(-90 1522 940)" text-anchor="middle" font-size="10" fill="#dc2626">失败回路：激活错误 · 单测/ATC 不通过 · [CONFLICT] → 重新 read 对齐快照后返工</text>
+
+  <!-- ============ 图例 ============ -->
+  <rect x="246" y="1440" width="0" height="0" fill="none"/>
+  <line x1="60" y1="1616" x2="100" y2="1616" stroke="#334155" stroke-width="2"/>
+  <text x="108" y="1620" font-size="11" fill="#334155">主流程推进</text>
+  <line x1="220" y1="1616" x2="260" y2="1616" stroke="#dc2626" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="268" y="1620" font-size="11" fill="#334155">失败回路</text>
+  <rect x="370" y="1602" width="70" height="26" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="405" y="1619" text-anchor="middle" font-size="10" fill="#0f172a" font-family="Consolas, monospace">adt_xxx</text>
+  <text x="450" y="1620" font-size="11" fill="#334155">工具（37 个全部入图 · adt_create_object 跨 DDIC/代码两阶段复用）</text>
+  <text x="1540" y="1620" text-anchor="end" font-size="10.5" fill="#94a3b8">灰字为该阶段的典型用法注记 · 详见 docs/dev-workflow.md</text>
+
+  <text x="800" y="1660" text-anchor="middle" font-size="10" fill="#94a3b8">dsh-abap-adt · 与 docs/architecture-diagram.svg（静态架构）、docs/tool-reference.md（工具手册）配套</text>
+</svg>

@@ -4,8 +4,7 @@
  * call and returns a single go/no-go verdict. Read-only (runs checks only).
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { sessionCwd, DESTINATION_PARAM, NAME_TYPE_OBJECTS_PARAM, clampWithNote, destinationOf, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, NAME_TYPE_OBJECTS_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, text } from './common.js';
 import { resolveObject } from '../resolve.js';
 /** Pure aggregation: all enabled stages must pass for a "go"; a stage the
  * backend does not deploy (skipped, e.g. no ATC service) does not veto. */
@@ -112,7 +111,7 @@ export function gateTools(deps) {
                         stages.push(await fn());
                     }
                     catch (error) {
-                        if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                        if (isAdtServiceUnavailable(error)) {
                             stages.push({
                                 stage,
                                 pass: false,

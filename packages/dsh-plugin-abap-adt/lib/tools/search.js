@@ -164,7 +164,7 @@ export function searchTools(deps) {
             execute: async (args, exec) => {
                 const entry = await registry.require(destinationOf(args), sessionCwd(exec));
                 const packageName = optStr(args.packageName)?.toUpperCase();
-                const clamp = typeof args.maxResults === 'number' ? clampWithNote(args.maxResults, 1, 100, 'maxResults') : { value: 25, note: undefined };
+                const clamp = clampWithNote(typeof args.maxResults === 'number' ? args.maxResults : 25, 1, 100, 'maxResults');
                 const maxResults = clamp.value;
                 const offset = Math.max(Number(args.offset ?? 0) || 0, 0);
                 // Offset is client-side paging: fetch offset+maxResults (within the

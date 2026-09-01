@@ -11,8 +11,7 @@
  * user, error analysis text — without leaving the tool family.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, optStr, showingUnknownTotal, text } from './common.js';
 /** `YYYYMMDD` / `YYYYMMDDHHMMSS` sanity for the time-range filters. */
 function normalizeStamp(value, label) {
     const trimmed = value.trim();
@@ -87,23 +86,31 @@ export function dumpTools(deps) {
                 notes.push(clamp.note);
             let dumps;
             try {
+                // Fetch ONE row beyond the cap: it distinguishes "exactly `top`
+                // dumps" from "a full page — there are more", which the feed cannot
+                // express (counting the rest would cost another request).
                 dumps = await entry.client.listDumps({
                     user: optStr(args.user),
                     from: optStr(args.from) ? normalizeStamp(String(args.from), 'from') : undefined,
                     to: optStr(args.to) ? normalizeStamp(String(args.to), 'to') : undefined,
-                    top: clamp.value,
+                    top: clamp.value + 1,
                     skip: skip > 0 ? skip : undefined,
                     signal: exec.signal,
                 });
             }
             catch (error) {
                 // Old / restricted profiles may not ship the runtime-dumps service.
-                if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                if (isAdtServiceUnavailable(error)) {
                     throw new Error(`Runtime dumps are not available on destination '${entry.config.name}' (HTTP ${error.status}) — ` +
                         'this ADT profile does not expose the /runtime/dumps service (BASIS < 7.5x). ' +
                         'Analyze errors from the run output / unit test messages instead.');
                 }
                 throw error;
+            }
+            const hasMore = dumps.length > clamp.value;
+            if (hasMore) {
+                notes.push(showingUnknownTotal(clamp.value, 'top', `page with skip=${skip + clamp.value} or narrow by user / from / to`));
+                dumps = dumps.slice(0, clamp.value);
             }
             return {
                 count: dumps.length,

@@ -60,8 +60,12 @@ export declare const POLICY_ENV: {
     readonly allowExecution: "SAP_ALLOW_EXECUTION";
     readonly allowBatchWrites: "SAP_ALLOW_BATCH_WRITES";
 };
-/** Built-in defaults: permissive for edits/execution, strict for batch writes. */
-declare const POLICY_DEFAULTS: {
+/**
+ * Built-in defaults: permissive for edits/execution, strict for batch writes.
+ * Exported for the workspace file renderer, which shows them as the commented
+ * template values of the policy keys.
+ */
+export declare const POLICY_DEFAULTS: {
     readonly enableTransports: true;
     readonly allowedTransports: "*";
     readonly allowTransportableEdits: true;

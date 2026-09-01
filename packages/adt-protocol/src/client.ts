@@ -213,6 +213,16 @@ function msagAltUri(uri: string): string {
   return uri.includes('/messageclass/') ? uri.replace('/messageclass/', '/msgclass/') : uri.replace('/msgclass/', '/messageclass/');
 }
 
+/** Is this 404 the message-class spelling duality that msagAltUri can retry? */
+function msagNotFound(error: unknown, kind: AdtStructureKind, uri: string): boolean {
+  return (
+    error instanceof AdtError &&
+    error.status === 404 &&
+    kind === 'MSAG' &&
+    /\/(messageclass|msgclass)\//.test(uri)
+  );
+}
+
 export class AdtClient {
   readonly destination: AdtDestination;
   private readonly cookies = new Map<string, { value: string; expiresAt?: number }>();
@@ -1861,12 +1871,7 @@ export class AdtClient {
       // serve /sap/bc/adt/messageclass/<name>, older ones (and the bundled
       // mock) only /sap/bc/adt/msgclass/<name>. Retry the other spelling on
       // 404 instead of failing the read.
-      if (
-        error instanceof AdtError &&
-        error.status === 404 &&
-        kind === 'MSAG' &&
-        /\/(messageclass|msgclass)\//.test(uri)
-      ) {
+      if (msagNotFound(error, kind, uri)) {
         const alt = msagAltUri(uri);
         xml = await get(alt);
       } else {
@@ -1901,12 +1906,7 @@ export class AdtClient {
     try {
       lock = await this.lock(uri, { signal: options.signal });
     } catch (error) {
-      if (
-        error instanceof AdtError &&
-        error.status === 404 &&
-        kind === 'MSAG' &&
-        /\/(messageclass|msgclass)\//.test(uri)
-      ) {
+      if (msagNotFound(error, kind, uri)) {
         uri = msagAltUri(uri);
         lock = await this.lock(uri, { signal: options.signal });
       } else {
@@ -2453,7 +2453,8 @@ function parseLockInfo(xml: string): { locked: boolean | undefined; lockedBy?: s
 
 /** Depth-first search for the text of the first element with the given local name. */
 function findTextDeep(root: XmlNode, name: string): string | undefined {
-  if (root.name === name || root.name.endsWith(`:${name}`)) {
+  // Node names are local-name only (xml.ts strips prefixes) — no `:name` form exists.
+  if (root.name === name) {
     return root.text || undefined;
   }
   for (const child of root.children) {
@@ -2479,25 +2480,26 @@ function deepText(node: XmlNode): string {
   return parts.join('').trim();
 }
 
-function parseLockHandle(xml: string): string | undefined {
+/**
+ * Shared LOCK-result field lookup: a nested `<UPPER>`/`<camel>` element first,
+ * then an attribute on the root element. ABAP backends commonly nest the value
+ * under `<asx:abap><asx:values><LOCK_HANDLE>…</LOCK_HANDLE>`, so the whole
+ * tree is searched (not only direct children).
+ */
+function lockResponseField(xml: string, upper: string, camel: string): string | undefined {
   const root = tryParseXml(xml);
   if (!root) return undefined;
-  // ABAP backends commonly nest the handle under <asx:abap><asx:values>
-  // <LOCK_HANDLE>…</LOCK_HANDLE>, so search the whole tree (not only direct
-  // children) and also accept an attribute on the root element.
-  const nested = findTextDeep(root, 'LOCK_HANDLE') ?? findTextDeep(root, 'lockHandle');
+  const nested = findTextDeep(root, upper) ?? findTextDeep(root, camel);
   if (nested) return nested;
-  const attrValue = root.attributes['lockHandle'] ?? root.attributes['LOCK_HANDLE'];
-  return attrValue ?? undefined;
+  return root.attributes[camel] ?? root.attributes[upper];
+}
+
+function parseLockHandle(xml: string): string | undefined {
+  return lockResponseField(xml, 'LOCK_HANDLE', 'lockHandle');
 }
 
 function parseLockTransport(xml: string): string | undefined {
-  const root = tryParseXml(xml);
-  if (!root) return undefined;
-  const nested = findTextDeep(root, 'CORRNR') ?? findTextDeep(root, 'corrNr');
-  if (nested) return nested;
-  const attrValue = root.attributes['corrNr'] ?? root.attributes['CORRNR'];
-  return attrValue ?? undefined;
+  return lockResponseField(xml, 'CORRNR', 'corrNr');
 }
 
 /**
@@ -2939,12 +2941,6 @@ function parseAtcResultList(xml: string): AdtAtcRunSummary[] {
   for (const el of children(root, 'result')) {
     const displayId = childText(el, 'displayId') ?? attr(el, 'displayId') ?? attr(el, 'id');
     if (!displayId) continue;
-    const agg = child(el, 'aggregates');
-    const num = (key: string): number => {
-      const raw = agg ? childText(agg, key) : undefined;
-      const n = raw !== undefined && raw !== '' ? Number(raw) : NaN;
-      return Number.isFinite(n) ? n : 0;
-    };
     const attributes: Record<string, string> = {};
     for (const [key, value] of Object.entries(el.attributes)) attributes[key.replace(/^[^:]*:/, '')] = value;
     runs.push({
@@ -2955,15 +2951,7 @@ function parseAtcResultList(xml: string): AdtAtcRunSummary[] {
       createdBy: childText(el, 'createdBy') ?? attr(el, 'createdBy') ?? attr(el, 'user'),
       status: childText(el, 'status') ?? attr(el, 'status') ?? attr(el, 'state'),
       kind: child(el, 'centralResult') ? 'central' : undefined,
-      aggregates: agg
-        ? {
-            priority1: num('numPrio1'),
-            priority2: num('numPrio2'),
-            priority3: num('numPrio3'),
-            priority4: num('numPrio4'),
-            failures: num('numFailure'),
-          }
-        : undefined,
+      aggregates: parseAggregatesNode(child(el, 'aggregates')),
       attributes,
     });
   }
@@ -3121,7 +3109,7 @@ function severityFromCheckstyle(value: string | undefined): AdtAtcFinding['sever
 
 function parseCreatedUri(xml: string): string | undefined {
   const root = tryParseXml(xml);
-  return root ? (attr(root, 'uri') ?? attr(root, 'href') ?? undefined) : undefined;
+  return root ? attr(root, 'uri') ?? attr(root, 'href') : undefined;
 }
 
 /** Object URI by convention for a freshly created object (fallback when the

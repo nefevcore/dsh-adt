@@ -1,6 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, VERSION_FEED_META_PROPERTIES, destinationOf, isAdtServiceUnavailable, resolveToolObject, text, type ToolDeps } from './common.js';
 
 /** Transport item (contained object) schema shared by adt_list_transports and adt_get_transport. */
 const TRANSPORT_ITEM_SCHEMA = {
@@ -13,6 +12,18 @@ const TRANSPORT_ITEM_SCHEMA = {
     action: { type: 'string', required: true },
     description: { type: 'string' },
   },
+} as const;
+
+/** Transport header fields shared by the list item and the detail view
+ *  (each adds its own tail fields after the spread). */
+const TRANSPORT_META_PROPERTIES = {
+  description: { type: 'string', required: true },
+  status: { type: 'string', required: true },
+  category: { type: 'string', required: true },
+  owner: { type: 'string', required: true },
+  system: { type: 'string', required: true },
+  client: { type: 'string', required: true },
+  modifiable: { type: 'boolean', required: true },
 } as const;
 
 export function transportTools(deps: ToolDeps) {
@@ -43,11 +54,7 @@ export function transportTools(deps: ToolDeps) {
               additionalProperties: false,
 
               properties: {
-                versionId: { type: 'string', required: true },
-                author: { type: 'string' },
-                updatedAt: { type: 'string' },
-                title: { type: 'string' },
-                transportRequest: { type: 'string' },
+                ...VERSION_FEED_META_PROPERTIES,
                 transportDescription: { type: 'string' },
               },
             },
@@ -76,7 +83,7 @@ export function transportTools(deps: ToolDeps) {
       try {
         versions = await entry.client.getVersions(ref.uri, { signal: exec.signal });
       } catch (error) {
-        if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+        if (isAdtServiceUnavailable(error)) {
           throw new Error(
             `Version history (versions feed) is not available for ${ref.name} on this backend (HTTP ${error.status}); ` +
               'use adt_get_transport / adt_list_transports to map objects to transports instead',
@@ -113,13 +120,7 @@ export function transportTools(deps: ToolDeps) {
 
             properties: {
               number: { type: 'string', required: true },
-              description: { type: 'string', required: true },
-              status: { type: 'string', required: true },
-              category: { type: 'string', required: true },
-              owner: { type: 'string', required: true },
-              system: { type: 'string', required: true },
-              client: { type: 'string', required: true },
-              modifiable: { type: 'boolean', required: true },
+              ...TRANSPORT_META_PROPERTIES,
               target: { type: 'string' },
               items: {
                 type: 'array',
@@ -220,13 +221,7 @@ export function transportTools(deps: ToolDeps) {
             type: 'string',
             description: 'The number as asked for — differs from `number` when a task was resolved to its parent request.',
           },
-          description: { type: 'string', required: true },
-          status: { type: 'string', required: true },
-          category: { type: 'string', required: true },
-          owner: { type: 'string', required: true },
-          system: { type: 'string', required: true },
-          client: { type: 'string', required: true },
-          modifiable: { type: 'boolean', required: true },
+          ...TRANSPORT_META_PROPERTIES,
           note: { type: 'string', description: 'Present when the requested number resolved to a different request (task → parent).' },
           items: {
             type: 'array',

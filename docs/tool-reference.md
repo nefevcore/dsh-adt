@@ -1,6 +1,6 @@
 # adt_* 工具清单 — 入参 / 返回参考
 
-> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **37 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代）。
+> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **38 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代）。
 > 标记约定：🛡 = 经过**目标目的地**的权限策略校验；⏱ = 自定义超时；🔒 = 声明 `isConcurrencySafe`（可并发/只读）。
 > 通用参数 `destination`（string，可省略 = 默认目的地）适用于除 `adt_local_check` / `adt_permissions` / `adt_list_destinations` / `adt_list_gui_connections` / `adt_create_destination` 外的所有工具，下表不再重复。
 > 通用对象引用三元组：`objectUri`（精确 URI，优先）/ `name` / `type`（短码或 ADT 形式，如 CLAS 或 CLAS/OC）。
@@ -8,7 +8,7 @@
 
 ---
 
-## 1. 系统与连接（6）
+## 1. 系统与连接（7）
 
 ### adt_list_destinations 🔒
 枚举配置的全部 ADT 目的地并逐个 ping（含**会话工作区文件** `.dsh-abap-adt/destinations.yaml` 叠加后的完整视图）。
@@ -17,15 +17,19 @@
 
 ### adt_list_gui_connections 🔒
 搜索**本机 SAP GUI（SAP Logon）连接列表**（`SAPUILandscape.xml` / `saplogon.ini`），用于把已有 GUI 连接导入为 ADT 目的地。用户口头要一个连接时先搜这里，把匹配项拿出来让用户挑；多词查询逐词 AND（"impc qas"）。`group` 类条目（消息服务器负载均衡）推不出单机 URL，需用户补 url。
-- **入参**：`query`（可选，空 = 全列）；`limit`（默认 25，钳 1–100）。
-- **返回**：`available, sources[], connections[] { uuid, name, kind(direct|group|reference), systemId?, folder?, client?, user?, language?, host?, sysnr?, router?, adtUrl?, httpUrl?, adtUrlNote? }, truncated?`。无 GUI 时 `available: false` + 提示改走手工字段。
-- ADT URL 推导：SAP 端口约定 `https://<host>:443<nn>` / `http://<host>:80<nn>`（nn = 实例号，来自 GUI 的 `server=host:32nn`）。
+**端口约定推导 + 实测验证**：GUI 条目只证明 DIAG 端口（`host:32nn`），`adtUrl`（端口约定 `https://host:443nn` / `http://host:80nn`）只是**未验证猜测**——实例号未必对应 ICM 端口、web dispatcher 可能走 443、saprouter 条目本机直连通常不通。因此默认对每个带 host 的匹配**探测**候选组合（`443<nn>` / `443` / `80<nn>` / `80`；无凭证 GET `/sap/bc/adt`，任何 HTTP 响应算可达，401 = ADT 存活的标准无凭证应答），返回 `probe.verifiedUrl`（真正应答的那个，可能与 adtUrl 不同——**导入以它为准**）或 `probe.detail`（全部不通时的逐候选原因与引导：VPN/防火墙/saprouter/需 web dispatcher url）。
+- **入参**：`query`（可选，空 = 全列）；`limit`（默认 25，钳 1–100）；`probe`（默认 true）；`probeTimeoutMs`（单候选超时 ms，默认 2500，钳 250–10000）。
+- **返回**：`available, sources[], connections[] { uuid, name, kind(direct|group|reference), systemId?, folder?, client?, user?, language?, host?, sysnr?, router?, adtUrl?(未验证猜测), httpUrl?, adtUrlNote?, probe? { reachable, verifiedUrl?, status?, detail, tried[] { url, ok, status?, detail } } }, truncated?`。无 GUI 时 `available: false` + 提示改走手工字段。
 
 ### adt_create_destination
-在**会话工作区**写 `.dsh-abap-adt/destinations.yaml` 创建/更新目的地（原子写、写后即热生效——下一次 `adt_*` 调用即可用）。两种模式：`guiUuid` 导入 GUI 连接（client/language/username 自动带出，URL 按端口约定推导，`strictSSL` 默认 false）；或手工传 `name` + `url`。
+在**会话工作区**写 `.dsh-abap-adt/destinations.yaml` 创建/更新目的地（原子写、写后即热生效——下一次 `adt_*` 调用即可用）。两种模式：`guiUuid` 导入 GUI 连接（client/language/username 自动带出，`strictSSL` 默认 false）；或手工传 `name` + `url`。
+**URL 探测（导入模式）**：URL 按 GUI 推导时（未显式传 `url`）默认实测候选组合（`443<nn>` / `443` / `80<nn>` / `80`，无凭证 GET，401 = 存活），用**第一个真正应答的** URL 落盘（可能与端口约定不同并在 notes 说明）；**没有任何候选展示可用 ADT 端点时拒绝创建**（不写文件），报逐候选原因与引导（VPN/防火墙；**saprouter 条目**：HTTP 无法走 GUI 的 saprouter——要 web dispatcher url 作为显式 `url` 传入）；`force: true` 可强制保存（标记 `urlVerified.ok=false`）。显式传入的 `url` 不探测（用 `ping` 验证）。
+**ping 先行（`ping: true`）**：保存前先带凭证 ping。**连接级失败**（无 HTTP 状态码：网络/VPN 不通）同样拒绝保存（`force` 可覆盖）；**HTTP 级失败**（如 401——URL 已证存活）照常保存并提示修凭证/服务。
+**写出的文件自带说明**：每个未指定的可配置项都以注释行（含默认值与用途，`passwordEnv` 按目的地名生成约定引用）一并写入，取消注释即可手工改配置；托管写入保留已设值并重新生成注释模板，不会把 schema 默认值物化成真实行。
+**按目的地权限**：六个策略键 `enableTransports` / `allowedTransports` / `allowTransportableEdits` / `allowedPackages` / `allowExecution` / `allowBatchWrites` 可直接传入，写入该条目的 `policy:` 块；只覆盖显式传入的键，未传的沿用全局配置 / `SAP_*` 环境变量 / 内置默认（见 policy 表）。
 **密码**：直接传 `password` —— 默认存入 **DSH 凭证文件** `~/.dsh/.credentials.yaml`（引用名 = `passwordEnv` 或约定 `ADT_<NAME>_PASSWORD`，destinations.yaml 只留引用不落明文）；未挂载凭证服务、或显式 `passwordInFile: true`、或凭证服务拒绝写入（同名环境变量遮蔽）时回退**明文写入文件**并附警告。不传 `password` 时可自行维护该引用（DSH 分层解析：进程环境变量 > 凭证文件 > `.env`，每次调用实时读取）。
-- **入参**：`name?, url?, client?, language?, username?, password?, passwordEnv?, passwordInFile?, strictSSL?, timeoutMs?, guiUuid?, setDefault?, overwrite?, ping?`。
-- **返回**：`file, action(created|updated), destination{}, setAsDefault, passwordStoredIn?(credential-store|file), importedFromGui?, shadowsGlobal, notes[], ping? { ok, detail }, hint`。
+- **入参**：`name?, url?, client?, language?, username?, password?, passwordEnv?, passwordInFile?, strictSSL?, timeoutMs?, enableTransports?, allowedTransports?, allowTransportableEdits?, allowedPackages?, allowExecution?, allowBatchWrites?, guiUuid?, probe?, probeTimeoutMs?, setDefault?, overwrite?, ping?, force?`。
+- **返回**：`file, action(created|updated), destination{ ..., policy? }, setAsDefault, urlVerified? { ok, url?, status?, detail }, passwordStoredIn?(credential-store|file), importedFromGui?, shadowsGlobal, notes[], ping? { ok, detail }, hint`。
 - 同名已存在时需 `overwrite: true`；同名全局配置会被工作区条目就近覆盖（`shadowsGlobal` 提示）。
 
 ### adt_system_info 🔒
@@ -42,6 +46,13 @@
 策略自省：**全局默认 + 每个目的地的生效策略**（目的地 `policy:` 块逐键覆盖全局）及每项来源。
 - **入参**：无。
 - **返回**：`enableTransports, allowedTransports[], allowTransportableEdits, allowedPackages[], sources{}, defaults{}, perDestination{ <name>: {同前四项 + sources} }`。
+
+### adt_selfcheck 🔒（能力巡检 sweep）
+对一个目的地做**只读能力扫描**（绝不写、绝不执行代码）：对每个只读能力用一个探针对象实跑并给出判定——`answered / empty（真空，非故障）/ absent（后端无此服务，404/405）/ refused（策略拒绝）/ dead（返回空而独立 oracle 证明有内容——本工具存在的理由）/ broken（我们的错误）/ skipped（无探针输入）`。探针对象默认取搜索 `Z*` 的第一个类，也可显式传 `name`(+`type`)。
+- **入参**：`name`/`type`（探针对象，可省略）；`packageName`（限定探针搜索）；destination。
+- **返回**：`destination, probeObject, checks[] { capability, tool, verdict, detail }, summary{answered,empty,dead,absent,refused,broken,skipped}, unprobedTools[]（刻意不巡检的全部工具名——覆盖声明是清单不是空白）, note`。
+- **oracle 交叉验证**：search↔read↔$batch↔package-content↔ping/system_info 两两独立印证——"搜索说对象存在而 read 说没有"即 `dead`。
+- **用途**：新系统接入验证、插件升级后回归、"为什么某能力什么都不返回"的第一诊断。设计借鉴 vsp 的 sweep.go（"十个能力广告了、注册了、可达、但从未答对过——全是手工发现的"）。
 
 ## 2. 搜索与浏览（3）
 
@@ -65,9 +76,11 @@
 
 ### adt_read_object 🔒
 读取对象源码 + 元数据。支持行窗口分页读取大对象。**默认同时在本地留全量快照**（`.adt-snapshots/<目的地>/…`，沙箱感知）+ sidecar 记录读取时刻的服务端内容哈希——这是冲突安全编辑的基础（edit 对快照匹配、push 校验后上传）。
-- **入参**：对象三元组；`startLine`（1 起含，默认 1）；`endLine`（含，默认末行）；`snapshot`（默认 true；false 关闭本地快照）。
-- **返回**：`uri, name, type, source（窗口内）, description?, properties{}, startLine, endLine, totalLines, localCopy?（快照路径）, snapshotHash?（冲突校验基准哈希）`。全量读取（≤2000 行）仍重放为行号化 read 卡片。
+- **入参**：对象三元组；`startLine`（1 起含，默认 1）；`endLine`（含，默认末行）；`snapshot`（默认 true；false 关闭本地快照）；**`method`**（方法级读取：只返回该 METHOD…ENDMETHOD. 块；窗口仍按全源行号编址，不能与 startLine/endLine 同用；未找到→错误列出该类全部方法名，多处定义（本地测试类同名）→错误列出各位置）；**`context`**（默认 false；true 时附加**依赖契约序言**）；**`contextDeps`**（序言契约数预算，默认 8，钳制 1–15）。
+- **返回**：`uri, name, type, source（窗口内）, description?, properties{}, startLine, endLine, totalLines, method?, contextPrologue?, localCopy?（快照路径）, snapshotHash?（冲突校验基准哈希）`。全量读取（≤2000 行、非方法级）仍重放为行号化 read 卡片。
+- **依赖契约序言**（`context: true`，借鉴 vsp ctxcomp）：从**所读片段**（方法级读取则仅该方法）提取依赖——超类/接口优先，其次签名类型、高频协作者、异常类；按预算并发拉取类/接口的**公共契约**（类只留 DEFINITION 的 PUBLIC SECTION，接口全文；单个契约 ≤80 行，序言总额 ≤24K 字符）。预算花在**成功取回**的契约上（解析失败只损失一次尝试不损失名额）；**解析失败的依赖原样列出**（看得见的缺口≠没有依赖）；函数模块调用只列调用次数（契约在函数组里）。方法级读取时序言随方法收窄。
 - **include 解析**（impc-dev 实战）：`name+type=PROG` 传 include 名不再 404——PROG/INCL 族的按约定 URI 是二义的（`/programs/programs/` vs `/programs/includes/`），解析先做精确名搜索取真实 URI/type，搜索不可用才回落约定 URI。
+- **路由守卫**：MSAG/DOMA/DTEL/TTYP 是结构化元数据（真实后端无 `/source/main`）→ 直接拒绝并指向 `adt_read_structure`；DEVC → 指向 `adt_package_content`。与 read_structure 的反向守卫（源码对象指向本工具）对称，杜绝"读到占位垃圾或 404 却不知该去哪"。
 
 ### adt_push_object 🛡⏱180s（pull→edit→push 的 push 半）
 把本地编辑后的快照上传服务器，**上传前在持锁状态下做哈希校验**：服务端仍是快照基准状态 → 上传；被他人改过 → `[CONFLICT]` 拒绝且服务端不动，本地文件保留——重读、合并、再推。上传后**回读验证持久性**（见 adt_write_object 的 `persisted`）。
@@ -83,12 +96,13 @@
 - **传输语义**：显式 `transport` 经 PUT `?corrNr=` 精确生效（用户值优先于 lock 分配值，对齐官方编辑器行为）。
 
 ### adt_edit_object 🛡
-只替换源码的一部分——**双模式**，与 DSH `edit` 同心智。**冲突安全（默认）**：存在本地快照（adt_read_object 建立）时，匹配跑在**你读到的快照**上（确定性，非对漂移文本的模糊匹配），且上传前在持锁状态下哈希校验服务端未变——他人改过 → `[CONFLICT]` 拒绝、服务端不动；重读后再改即恢复：
+只替换源码的一部分——**三模式**，与 DSH `edit` 同心智。**冲突安全（默认）**：存在本地快照（adt_read_object 建立）时，匹配跑在**你读到的快照**上（确定性，非对漂移文本的模糊匹配），且上传前在持锁状态下哈希校验服务端未变——他人改过 → `[CONFLICT]` 拒绝、服务端不动；重读后再改即恢复：
 - **模式 1（推荐，精确编辑）：`oldText` + `newText`**。从刚读的 `adt_read_object` 输出**原样引用**要替换的文本（多行 OK、含尾注释 OK），给出替换文本。不唯一 → 错误列出全部位置，**多引上下文行即可消歧**（或 `occurrence`）；找不到 → 列最接近行，重读一次重试即收敛。多行引用按行匹配（剥注释/大小写/缩进容忍）。
 - **模式 2（整块替换，省上下文）：`start`/`end` 块标记**。替换整个 METHOD/FORM 而无需引用其全文。裸闭合语句（ENDFORM./ENDIF./…）按**嵌套深度结构化解析**（2063 行语料 ENDFORM.×31/ENDIF.×59 下取对本块闭合）；同名重复行用 `occurrence`；按位置用 `startLine`/`endLine`（同时给 `start` 时校验该行防行号过期）。
+- **模式 3（方法手术，类）：`method` + `newText`**。按方法名替换恰好一个 METHOD…ENDMETHOD. 块——只收发 ~30 行的新块，服务端取全类拼接、OCC 校验、推送同其他模式。多处同名（本地测试类）→ 错误列出各位置（改用模式 2）。不能与 oldText/start/end/startLine/endLine 同用。
 - 也可**自己编辑本地快照文件**（路径见 read 输出 `localCopy`），再 `adt_push_object` 校验上传。
 - start 匹配层级：①注释剥离子串 → ②去空白（引号内空格容差 `'BUKRS  '` vs `'BUKRS'`）→ ③原始行（可编辑注释掉的代码）。
-- **入参**：对象三元组；`packageName`；模式 1（`oldText`/`newText`）或 模式 2（`start`/`end`/`source`/`sourceFile`/`startLine`/`endLine`）；共用 `occurrence`/`activate`/`transport`。
+- **入参**：对象三元组；`packageName`；模式 1（`oldText`/`newText`）/ 模式 2（`start`/`end`/`source`/`sourceFile`/`startLine`/`endLine`）/ 模式 3（`method`/`newText`）；共用 `occurrence`/`activate`/`transport`。
 - **返回**：`uri, name, start, end, replaced, startLineNumber, endLineNumber, oldLines, newLines, matchMode ('structured'|'text'|'text-loose'|'text-raw'|'line-number'), occurrence?, unlocked?, activated?, persisted?, warning?, transport?, transportSource?, activation?`。
 - **持久性验证**（impc-dev 实战新增）：写后回读验证（同 adt_write_object 的 `persisted`）。`persisted:false` = 并发编辑者（同账号另一会话的旧缓冲区）在写后覆盖了改动——**重读重做，勿激活**；多会话/共享账号环境下编辑后立即 `adt_read_object` 复核仍是最可靠的确认。
 - **回退链**：无快照 → 对拉取的服务端源码匹配（旧行为）；结构化失败（起始行非块开头/深度失衡）→ 自动回退文本匹配，不会静默错编。
@@ -220,6 +234,7 @@
 列 ABAP 短转储（ST22 feed）。运行/测试报运行时错误后定位 dump。
 - **入参**：`user`；`from`/`to`（YYYYMMDD 或 YYYYMMDDHHMMSS，服务端过滤）；`top`（默认 20，钳 1–100）；`skip`。
 - **返回**：`count, note?, dumps[] { id, title, category?, user?, updatedAt? }`。
+- **满页判定（多取一行）**：实际请求 `top+1` 行——多出一行即说明"还有更多"，note 写 `showing N, and there may be more; raise top, or page with skip=… / narrow by user / from / to`；恰好 N 行与"N 行还有更多"区分开，不编造总数。
 
 ### adt_get_dump 🔒
 读单个转储详情（id 来自 adt_list_dumps）。

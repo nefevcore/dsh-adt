@@ -1,4 +1,4 @@
-import type { AdtClient, AdtObjectRef } from '@nefevcore/abap-adt-protocol';
+import { AdtError, type AdtClient, type AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 import type { AdtRegistry, RegistryDestination } from '../registry.js';
 import type { LockLedger } from '../locks.js';
 import type { AdtPolicy } from '../policy.js';
@@ -9,6 +9,14 @@ import type { AdtPolicy } from '../policy.js';
  * included in the denial context to identify the object involved.
  */
 export declare function assertExplicitTransport(policy: AdtPolicy, transport: string | undefined, toolName: string, objectName?: string): void;
+/**
+ * Does this error mean "the backend profile does not expose the service"
+ * (404/405 on the service endpoint)? A type predicate: inside the branch
+ * `error` is narrowed to AdtError, so remedies can cite `error.status`.
+ * Tools re-throw with their own remedy message when this is true — the
+ * statuses alone are the shared fact.
+ */
+export declare function isAdtServiceUnavailable(error: unknown): error is AdtError;
 /** One ATC finding as the tools report it (mapped from the protocol shape). */
 export interface AtcFindingOutput {
     checkTitle: string;
@@ -167,14 +175,6 @@ export declare const PACKAGE_HINT_PARAM: {
         readonly description: string;
     };
 };
-/**
- * Shared `objects` array parameter for tools that process an object list
- * (activate, check, unit tests, ATC). Each entry is `{objectUri}` or
- * `{name, type}` — `name` is optional so a bare `objectUri` validates too.
- * Entries may carry `packageName` as a permission-check hint.
- * Bounded at MAX_OBJECT_LIST entries per call (audit P3).
- */
-export declare const MAX_OBJECT_LIST = 50;
 export declare const OBJECTS_PARAM: {
     readonly objects: {
         readonly type: "array";
@@ -233,6 +233,26 @@ export declare const NAME_TYPE_OBJECTS_PARAM: {
         };
     };
 };
+/** Version-feed entry metadata shared by adt_object_versions and
+ *  adt_version_diff (each appends its own tail field). */
+export declare const VERSION_FEED_META_PROPERTIES: {
+    readonly versionId: {
+        readonly type: "string";
+        readonly required: true;
+    };
+    readonly author: {
+        readonly type: "string";
+    };
+    readonly updatedAt: {
+        readonly type: "string";
+    };
+    readonly title: {
+        readonly type: "string";
+    };
+    readonly transportRequest: {
+        readonly type: "string";
+    };
+};
 /** Pull the destination param value out of raw args. */
 export declare function destinationOf(args: Record<string, unknown>): string | undefined;
 /**
@@ -245,12 +265,10 @@ export declare function destinationOf(args: Record<string, unknown>): string | u
 export declare function sessionCwd(exec: unknown): string | undefined;
 /** A raw arg as a non-empty string, else `undefined`. */
 export declare function optStr(value: unknown): string | undefined;
-/** Extract the `objectUri`/`name`/`type` reference args of a tool call. */
-export declare function objectRefArgs(args: Record<string, unknown>): {
-    objectUri?: string;
-    name?: string;
-    type?: string;
-};
+/** A raw arg TRIMMED to a non-empty value, else `undefined` — for user-typed
+ *  free text (transport numbers, queries) where stray whitespace is noise.
+ *  Unlike {@link optStr}, which does not trim. */
+export declare function trimmedArgStr(value: unknown): string | undefined;
 /**
  * Resolve the object a tool call refers to: `objectUri` wins, otherwise
  * `name` (+ optional `type`) via search with exact-match preference.
@@ -284,6 +302,20 @@ export declare function clampWithNote(requested: number, min: number, max: numbe
     value: number;
     note?: string;
 };
+/**
+ * The sentence every capped answer owes its reader when the TOTAL is known:
+ * name the parameter that lifts the cap, by its real name. A bounded answer
+ * that does not say it was bounded reads as a clean verdict over a list read
+ * in part.
+ */
+export declare function showingOfTotal(shown: number, total: number, param: string): string;
+/**
+ * The capped-answer sentence when counting the rest would cost another
+ * request: promise less, deliberately — an invented total is worse than an
+ * admitted one. `narrower` names how to ask a smaller question (a narrower
+ * pattern, a shorter time window, a package filter…).
+ */
+export declare function showingUnknownTotal(shown: number, param: string, narrower: string): string;
 /** Register-time helper: name a tool and give it the registry. */
 export interface ToolDeps {
     /**

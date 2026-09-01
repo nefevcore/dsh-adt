@@ -6,6 +6,7 @@ import { sessionCwd,
   assertObjectEditable,
   destinationOf,
   requireObjectList,
+  trimmedArgStr,
   text,
   type ToolDeps,
 } from './common.js';
@@ -126,7 +127,7 @@ export function lifecycleTools(deps: ToolDeps) {
       // Permission checks. checkOnly (syntax pre-audit) changes nothing and is
       // always allowed; a real activation is an edit and must satisfy the
       // policy for every object.
-      const transport = typeof args.transport === 'string' && args.transport.trim().length > 0 ? args.transport.trim() : undefined;
+      const transport = trimmedArgStr(args.transport);
       assertExplicitTransport(entry.policy, transport, 'adt_activate');
       if (!checkOnly) {
         for (let i = 0; i < refs.length; i++) {

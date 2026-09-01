@@ -1,6 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, optStr, text } from './common.js';
 import { resolveObject } from '../resolve.js';
 /**
  * Batch & pipeline tools — capabilities that go beyond the interactive VS Code
@@ -226,7 +225,7 @@ export function batchTools(deps, ctx) {
                 // Not every backend deploys the ADT $batch service (on-prem subsets
                 // return 404 for POST /sap/bc/adt/$batch) — say so instead of leaking
                 // the raw not-found error.
-                if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                if (isAdtServiceUnavailable(error)) {
                     throw new Error(`$batch is not available on destination '${entry.config.name}' (HTTP ${error.status}) — this backend does ` +
                         'not deploy the ADT $batch service. Call the individual adt_* tools sequentially instead.');
                 }

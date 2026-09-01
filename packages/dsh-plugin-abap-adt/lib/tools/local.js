@@ -15,7 +15,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { join } from 'node:path';
 import { text } from './common.js';
 /** Adapter over the DSH filesystem service — reads stay sandbox-aware like adt_export_objects. */
-export function fsReaderFromCtx(fs, signal) {
+function fsReaderFromCtx(fs, signal) {
     return {
         async readDir(absPath) {
             const target = await fs.resolve(absPath, { signal });

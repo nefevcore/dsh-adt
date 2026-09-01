@@ -2,10 +2,10 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-222-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-246-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
-> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **37 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, conflict-checked local snapshots, local export, offline abaplint) and conversational destination management (create connections from the local SAP GUI list by just chatting). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system.
+> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **38 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, conflict-checked local snapshots, local export, offline abaplint, method-level read/edit, dependency-contract context prologues, a read-only capability sweep) and conversational destination management (create connections from the local SAP GUI list by just chatting). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system. Agent-facing usage guide with the critical limitations first: [docs/agent-guide.md](docs/agent-guide.md).
 
 在 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 上直接访问 SAP ABAP 系统的插件与协议客户端。
 
@@ -39,9 +39,24 @@ DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.
 
 ### 从 0.1.0 升级
 
-#### 0.4.0（安全与保真度修复）
+#### 0.5.0（安全修复 + 代理体验双批次，首个包含下述 0.4.0 内容的发布版）
 
-全量缺陷审核关闭（详见 [`docs/audit-fix-plan.md`](docs/audit-fix-plan.md)）：策略绕过三类修复（包名 hint 不可再欺骗白名单、拼错名绝不模糊落到别的对象、`$batch` 头注入/编码路径封死）、SSRF 凭证转发封堵（绝对 URL 同源校验）、SQL/`$query` 插值白名单、响应 body 超时覆盖、锁账本原子写与 `adt_write_structure` 锁登记、导出路径消毒、fs 降级真实生效（精简 profile 上只读工具可用）、上下文炸弹全线上限（execute 20k / dumps 8k / datapreview 500 行 / read 200k / diff 20k）、mock 保真度约 30 项对齐真实后端。升级命令同 0.2.0 的两步（update + 重建预设）。
+**A. 安全与保真度修复**——0.4.0 审计批次首次随本版发布（原 0.4.0 号未发布，内容完整包含在此）：策略绕过三类修复（包名 hint 不可欺骗白名单、拼错名绝不模糊回退、`$batch` 头注入/编码路径封死）、SSRF 凭证转发封堵、SQL/`$query` 插值白名单、响应 body 超时覆盖、锁账本原子写与 `adt_write_structure` 锁登记、导出路径消毒、fs 降级真实生效、上下文炸弹全线上限、mock 保真度约 30 项；另含 MSAG URI 双拼写 404 重试、传输/版本工具 schema 富化与服务缺失回退、工作区 destinations 文件**自文档化**（未设置的每个选项以注释行写出默认值与用途）。
+
+**B. 代理体验批次**（源自 vsp / abap-mcp-adt-powerup 同类工具调研，详见 [`docs/agent-experience-upgrade-plan.md`](docs/agent-experience-upgrade-plan.md)）：
+- **方法级读写**：`adt_read_object` / `adt_edit_object` 新增 `method` 参数——只收发一个 METHOD 块（编辑走完整 OCC 冲突链）
+- **依赖契约序言**：`adt_read_object {context: true}` 一次读取带回所用类/接口的公共契约（超类/接口优先；解析失败的依赖原样列出）
+- **能力巡检**：新工具 `adt_selfcheck`（第 38 个）——只读扫描判定 answered/empty/dead/absent/broken，交叉 oracle 验证，未巡检工具显式列出
+- **截断纪律**：dumps 等列表"多取一行"区分满页与还有更多；截断话术单一来源
+- **路由守卫**：`adt_read_object` 对 MSAG/DOMA/DTEL/TTYP 直接指向 `adt_read_structure`、DEVC 指向 `adt_package_content`
+- **面向 AI 的指南** [`docs/agent-guide.md`](docs/agent-guide.md)（限制先行：ABAP SQL 方言、写≠激活、OCC 契约等）
+- 测试 222 → **246**；工具 37 → **38**（目录计数已由测试锁定，漂移即测试失败）
+
+升级命令同 0.2.0 的两步（update + 重建预设）。
+
+#### 0.4.0（未单独发布）
+
+安全与保真度审计批次（全量缺陷审核关闭，详见 [`docs/audit-fix-plan.md`](docs/audit-fix-plan.md)）——**0.4.0 版本号从未发布，全部内容随 0.5.0 一并上线**（细目见上方 0.5.0 的 A 节）。
 
 #### 0.2.0（默认不加载 + 配置迁 settings）
 
@@ -59,7 +74,10 @@ dsh plugin --profile web exec abap-adt-preset --force
 
 ## 核心能力
 
-- **代理原生工具**：37 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **代理原生工具**：38 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **方法级读写（token 经济）**：`adt_read_object`/`adt_edit_object` 带 `method` 参数——只收发一个 METHOD 块（~30 行而非全类），窗口仍按全源行号编址；编辑走完整 OCC 冲突链
+- **依赖契约序言**：`adt_read_object {context: true}` 一次读取带回所用类/接口的**公共契约**（超类/接口优先，预算花在成功取回的契约上；解析失败的依赖原样列出——看得见的缺口≠没有依赖）
+- **能力巡检（sweep）**：`adt_selfcheck` 对目的地做只读能力扫描，判定 answered/empty/dead/absent/broken——`dead` = 返回空而独立 oracle（search↔read↔$batch 交叉印证）证明有内容；报告列出全部刻意不巡检的工具（覆盖声明是清单不是空白）
 - **对话式建连接**：`adt_create_destination` / `adt_list_gui_connections` —— 直接说"帮我建 impc 的连接"，代理搜索本机 SAP GUI 连接列表让你挑（或问你要 url/账号），一条对话写好**工作区配置文件** `.dsh-abap-adt/destinations.yaml`；密码默认存入 DSH 凭证文件 `~/.dsh/.credentials.yaml`（配置只留引用），下一次调用即生效
 - **冲突安全编辑（OCC）**：`adt_read_object` 默认在本地留对象快照（含服务端内容哈希）；`adt_edit_object` 对**你读到的快照**做确定性匹配，上传前在持锁状态下哈希校验服务端未变——他人改动 → `[CONFLICT]` 显式拒绝而非静默错配；也可直接编辑本地快照文件后用 `adt_push_object` 校验上传（pull→edit→push）
 - **错误分析**：`adt_list_dumps` / `adt_get_dump` 直接读取 ABAP 短转储（ST22）做排障闭环
@@ -189,12 +207,16 @@ abap-adt:
 
 ## 测试
 
-共 **222 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**密码分层解析**（明文 > DSH 凭证服务 > 进程环境变量）、**工作区配置层**（叠加合并/默认目的地/权限键/客户端复用/原子写）、**SAP GUI 连接发现**（SAPUILandscape.xml 解析：直连/引用/负载均衡/Include/经典 ini 回退/多词搜索）与 **adt_create_destination 工具流**（GUI 导入/手工创建/覆盖保护/密码入凭证文件或明文回退）、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退——源自 impc-dev/D01 实战反馈）。
+共 **246 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**密码分层解析**（明文 > DSH 凭证服务 > 进程环境变量）、**工作区配置层**（叠加合并/默认目的地/权限键/客户端复用/原子写）、**SAP GUI 连接发现**（SAPUILandscape.xml 解析：直连/引用/负载均衡/Include/经典 ini 回退/多词搜索）与 **adt_create_destination 工具流**（GUI 导入/手工创建/覆盖保护/密码入凭证文件或明文回退）、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退——源自 impc-dev/D01 实战反馈）、**方法级读写 + 依赖契约序言 + 能力巡检**（`agent_extras.test.ts`：方法块定位/依赖提取排序/契约抽取的纯函数测试，方法窗口编址、序言"失败依赖可见"纪律、方法手术走 OCC 流水线、`adt_selfcheck` 判定表与 **发布目录计数锁定**——目录数漂移时测试先于文档失败）。
 
 ## 路线图（可扩展方向）
 
+> **完整的分级实施计划**（含规格、验收标准、参考实现路径）见 [`docs/agent-experience-upgrade-plan.md`](docs/agent-experience-upgrade-plan.md)——源自对 vsp（vibing-steampunk）与 abap-mcp-adt-powerup 两个同类工具的深度调研，P0 项（读侧敏感表黑名单、目的地环境分级、工具描述 RAG 工程、CSRF 预热核实）已排定。
+
 - JWT/OAuth2（ABAP Cloud / BTP 服务键）认证支持——`auth` 类型扩展点已预留，目前仅 `'basic'`
-- ABAP Debugger REST API 工具（断点/栈/变量）
+- ABAP Debugger REST API 工具（断点/栈/变量）——升级计划 P1-1，标准 ADT REST 零服务端安装路径已验证
+- TABL 带字段一步创建（DDIC DDL）——升级计划 P1-2
+- 文本元素读取（标准 ADT 端点）——升级计划 P1-3
 - RAP 对象（BDEF/DDLX/SRVD）专项工具
 - ATC 豁免/基线（exemptions）管理
 - 应用日志（SLG1）/Gateway 错误日志读取工具

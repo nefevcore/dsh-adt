@@ -14,6 +14,17 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { hashSource, loadSnapshot, saveSnapshot, sourcesEquivalent, SnapshotConflictError, } from '../snapshots.js';
 import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, } from './common.js';
+import { findMethodBlocks } from '../abap.js';
+/** `activate` parameter spec shared by adt_write_object and adt_edit_object
+ *  (adt_push_object keeps its own shorter wording). */
+const ACTIVATE_AFTER_WRITE_PARAM = {
+    activate: {
+        type: 'boolean',
+        description: 'Also activate the object after writing (default false). Activates ONLY the written object — a PROG main ' +
+            "program's includes (TOP/SCR/...) are NOT cascaded on most backends; call adt_activate with the main " +
+            'object AND its includes in one list for a full activation.',
+    },
+};
 /**
  * Post-write persistence verification — the answer to a real-world incident:
  * on a shared development account, ANOTHER session (second DSH session, ADT
@@ -625,12 +636,7 @@ export function writeTools(deps, ctx) {
                     '(sandbox-aware). Provide exactly one of source / sourceFile.',
             },
             unlock: { type: 'boolean', description: 'Unlock after writing (default true).' },
-            activate: {
-                type: 'boolean',
-                description: 'Also activate the object after writing (default false). Activates ONLY the written object — a PROG main ' +
-                    "program's includes (TOP/SCR/...) are NOT cascaded on most backends; call adt_activate with the main " +
-                    'object AND its includes in one list for a full activation.',
-            },
+            ...ACTIVATE_AFTER_WRITE_PARAM,
             transport: {
                 type: 'string',
                 description: 'Transport request number the change is recorded into, e.g. S4HK900001 (see adt_list_transports, ' +
@@ -708,13 +714,15 @@ export function writeTools(deps, ctx) {
             'against THE SNAPSHOT YOU READ (deterministic — never a fuzzy match against drifted server text) and the ' +
             'server copy is hash-verified under the lock first; if someone changed it since your read you get a ' +
             '[CONFLICT] error and nothing is applied — re-read and redo. ' +
-            'TWO MODES — prefer (1) for precise edits, (2) for whole blocks: ' +
+            'THREE MODES — prefer (1) for precise edits, (2) for whole blocks, (3) for one method: ' +
             '(1) oldText + newText (recommended): quote the exact text to replace VERBATIM from your adt_read_object ' +
             '(multi-line OK, tail comments tolerated) and give its replacement. Not unique → include neighboring ' +
             'lines in the quote (or `occurrence`); not found → the error lists the closest lines. ' +
             '(2) start/end block markers (whole METHOD/FORM/etc. without quoting it): bare closers ' +
             '(ENDFORM./ENDIF./…) resolve structurally by nesting depth; DUPLICATE lines take `occurrence`; ' +
             'by position use startLine/endLine. ' +
+            '(3) method + newText (method surgery, classes): replace one METHOD … ENDMETHOD. block by method name — ' +
+            'send only the new block; the whole class is spliced and verified server-side. ' +
             'Tip: edit the local snapshot file yourself (path from adt_read_object) and upload via adt_push_object. ' +
             'Provide the replacement via `newText` (mode 1) or `source`/`sourceFile` (mode 2). ' +
             'PERSISTENCE: the OCC hash check guards the window BEFORE the write only. When another session of the SAME ' +
@@ -731,6 +739,13 @@ export function writeTools(deps, ctx) {
                 description: 'Mode 1 (DSH-edit style): the exact text to replace, quoted verbatim from a recent adt_read_object. ' +
                     'Multi-line quotes are matched per line (comment/case/indent tolerant); make it unique by including ' +
                     'neighboring lines.',
+            },
+            method: {
+                type: 'string',
+                description: 'Mode 3 (method surgery, classes): replace exactly ONE METHOD … ENDMETHOD. block. Give the method name ' +
+                    'and the FULL new block (METHOD … ENDMETHOD.) as `newText`. You send/receive ~30 lines instead of the ' +
+                    'whole class; the full source is fetched, spliced, conflict-checked and written server-side exactly as ' +
+                    'in the other modes. Defined in several local classes → error listing each occurrence (use mode 2 then).',
             },
             newText: {
                 type: 'string',
@@ -766,12 +781,7 @@ export function writeTools(deps, ctx) {
                 type: 'string',
                 description: 'Mode 2 alternative to `source`: absolute path of a local UTF-8 file holding the replacement block.',
             },
-            activate: {
-                type: 'boolean',
-                description: 'Also activate the object after writing (default false). Activates ONLY the written object — a PROG main ' +
-                    "program's includes (TOP/SCR/...) are NOT cascaded on most backends; call adt_activate with the main " +
-                    'object AND its includes in one list for a full activation.',
-            },
+            ...ACTIVATE_AFTER_WRITE_PARAM,
             transport: {
                 type: 'string',
                 description: 'Transport request number the change is recorded into, e.g. S4HK900001. When omitted the backend ' +
@@ -816,11 +826,22 @@ export function writeTools(deps, ctx) {
                 packageHint: optStr(args.packageName),
                 signal: exec.signal,
             });
-            // ---- Mode validation: oldText (mode 1) vs start/startLine (mode 2). ----
+            // ---- Mode validation: oldText (mode 1) vs start/startLine (mode 2) vs
+            // method (mode 3). ----
             const oldText = typeof args.oldText === 'string' ? args.oldText : undefined;
+            const methodName = typeof args.method === 'string' ? args.method.trim() : undefined;
             const startText = String(args.start ?? '').trim();
             const hasStartLine = args.startLine !== undefined && args.startLine !== null;
-            if (oldText !== undefined) {
+            if (methodName) {
+                if (oldText !== undefined || startText || hasStartLine || args.end !== undefined || args.endLine !== undefined) {
+                    throw new Error('adt_edit_object: `method` cannot be combined with `oldText`/`start`/`end`/`startLine`/`endLine` — ' +
+                        'the method block picks the replacement window itself');
+                }
+                if (typeof args.newText !== 'string') {
+                    throw new Error('adt_edit_object: `method` requires `newText` — the FULL new METHOD … ENDMETHOD. block');
+                }
+            }
+            else if (oldText !== undefined) {
                 if (startText || hasStartLine || args.end !== undefined || args.endLine !== undefined) {
                     throw new Error('adt_edit_object: `oldText` cannot be combined with `start`/`end`/`startLine`/`endLine` — ' +
                         'oldText+newText replaces the quoted text directly');
@@ -833,7 +854,8 @@ export function writeTools(deps, ctx) {
                 }
             }
             else if (!startText && !hasStartLine) {
-                throw new Error('adt_edit_object: provide `oldText`+`newText` (quote-and-replace, preferred) or `start`/`startLine` (block mode)');
+                throw new Error('adt_edit_object: provide `oldText`+`newText` (quote-and-replace, preferred), `method`+`newText` ' +
+                    '(method surgery), or `start`/`startLine` (block mode)');
             }
             if (args.endLine !== undefined && !hasStartLine) {
                 throw new Error('adt_edit_object: `endLine` requires `startLine` (position mode)');
@@ -845,7 +867,9 @@ export function writeTools(deps, ctx) {
             // Mode 2 end resolution: explicit `end` > derived closer (METHOD/FORM/…)
             // > the start line itself (single-line replacement).
             const endText = String(args.end ?? '').trim() || defaultEndFor(startText) || startText;
-            const replacement = oldText !== undefined ? args.newText : await resolveSourceInput(ctx, args);
+            // Modes 1 and 3 take the replacement from `newText` directly; only
+            // mode 2 resolves source/sourceFile from disk.
+            const replacement = oldText !== undefined || methodName !== undefined ? String(args.newText ?? '') : await resolveSourceInput(ctx, args);
             // Explicitly-passed transport: policy-check up front, then the write
             // (PUT ?corrNr=…) records the change into EXACTLY this request.
             const transport = optStr(args.transport);
@@ -874,22 +898,44 @@ export function writeTools(deps, ctx) {
                     else {
                         base = current.source;
                     }
-                    const replacementText = oldText !== undefined ? String(args.newText ?? '') : replacement;
-                    replaced =
-                        oldText !== undefined
-                            ? replaceSourceText(base, oldText, replacementText, { occurrence })
-                            : replaceSourceBlock(base, startText, endText, replacementText, {
-                                occurrence,
-                                startLine: hasStartLine ? Number(args.startLine) : undefined,
-                                endLine: args.endLine !== undefined ? Number(args.endLine) : undefined,
-                            });
+                    const replacementText = oldText !== undefined || methodName !== undefined ? String(args.newText ?? '') : replacement;
+                    if (methodName) {
+                        // Method surgery: locate the block on the edit base (snapshot or
+                        // current server source — same OCC guarantee as the other
+                        // modes), then splice via the line-number path, which also
+                        // verifies the METHOD opener against the located line.
+                        const blocks = findMethodBlocks(base, methodName);
+                        if (blocks.length === 0) {
+                            throw new Error(`adt_edit_object: method "${methodName}" not found in the current source of ${ref.name} — ` +
+                                're-read (method-level surgery needs a current view; the source may have changed since you last read it)');
+                        }
+                        if (blocks.length > 1) {
+                            const occurrences = blocks.map((b, i) => `#${i + 1} lines ${b.startIdx + 1}..${b.endIdx + 1}`).join('; ');
+                            throw new Error(`adt_edit_object: method "${methodName}" is defined ${blocks.length} times (local classes?) — ${occurrences}. ` +
+                                'Use mode 2 (start/end or startLine/endLine) to pick one.');
+                        }
+                        replaced = replaceSourceBlock(base, `METHOD ${methodName}.`, `METHOD ${methodName}.`, replacementText, {
+                            startLine: blocks[0].startIdx + 1,
+                            endLine: blocks[0].endIdx + 1,
+                        });
+                    }
+                    else {
+                        replaced =
+                            oldText !== undefined
+                                ? replaceSourceText(base, oldText, replacementText, { occurrence })
+                                : replaceSourceBlock(base, startText, endText, replacementText, {
+                                    occurrence,
+                                    startLine: hasStartLine ? Number(args.startLine) : undefined,
+                                    endLine: args.endLine !== undefined ? Number(args.endLine) : undefined,
+                                });
+                    }
                     return replaced.full;
                 },
             });
             // In oldText mode report the first/last quoted line as the block labels.
             const oldQuoteLines = oldText !== undefined ? oldText.replace(/\r\n/g, '\n').split('\n') : undefined;
-            const startLabel = oldQuoteLines ? (oldQuoteLines[0] ?? '').trim() : startText;
-            const endLabel = oldQuoteLines ? (oldQuoteLines[oldQuoteLines.length - 1] ?? '').trim() : endText;
+            const startLabel = oldQuoteLines ? (oldQuoteLines[0] ?? '').trim() : methodName ? `METHOD ${methodName}.` : startText;
+            const endLabel = oldQuoteLines ? (oldQuoteLines[oldQuoteLines.length - 1] ?? '').trim() : methodName ? 'ENDMETHOD.' : endText;
             return {
                 uri: ref.uri,
                 name: ref.name,

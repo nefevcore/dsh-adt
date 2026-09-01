@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { sessionCwd, DESTINATION_PARAM, OBJECTS_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, requireObjectList, text, } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, OBJECTS_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, requireObjectList, trimmedArgStr, text, } from './common.js';
 import { resolveObjects, typeLabel } from '../resolve.js';
 export function lifecycleTools(deps) {
     const { registry } = deps;
@@ -89,7 +89,7 @@ export function lifecycleTools(deps) {
             // Permission checks. checkOnly (syntax pre-audit) changes nothing and is
             // always allowed; a real activation is an edit and must satisfy the
             // policy for every object.
-            const transport = typeof args.transport === 'string' && args.transport.trim().length > 0 ? args.transport.trim() : undefined;
+            const transport = trimmedArgStr(args.transport);
             assertExplicitTransport(entry.policy, transport, 'adt_activate');
             if (!checkOnly) {
                 for (let i = 0; i < refs.length; i++) {

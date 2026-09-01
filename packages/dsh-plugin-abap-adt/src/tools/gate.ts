@@ -4,8 +4,8 @@
  * call and returns a single go/no-go verdict. Read-only (runs checks only).
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { AdtError, type AdtObjectRef } from '@nefevcore/abap-adt-protocol';
-import { sessionCwd, DESTINATION_PARAM, NAME_TYPE_OBJECTS_PARAM, clampWithNote, destinationOf, text, type ToolDeps } from './common.js';
+import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
+import { sessionCwd, DESTINATION_PARAM, NAME_TYPE_OBJECTS_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
 
 export type GateStage = 'syntax' | 'unit' | 'atc';
@@ -128,7 +128,7 @@ export function gateTools(deps: ToolDeps) {
           try {
             stages.push(await fn());
           } catch (error) {
-            if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+            if (isAdtServiceUnavailable(error)) {
               stages.push({
                 stage,
                 pass: false,

@@ -316,6 +316,10 @@ export declare function validateExternalConfig(parsed: unknown, path: string): P
  * returns an empty object for an empty file.
  */
 export declare function loadExternalConfigFile(path: string): Promise<Partial<PluginConfig>>;
+/** Parse config-file text RAW (no validation): throws with the path in the
+ *  message on invalid YAML; null/undefined documents stay as-is. Shared by
+ *  the validating config loader and the raw workspace-layer parser. */
+export declare function parseYamlDocument(raw: string, path: string): unknown;
 /** Parse + validate config file text (shared by async and sync loaders). */
 export declare function parseExternalConfigText(raw: string, path: string): Partial<PluginConfig>;
 /** Inputs to {@link resolveEffectiveConfig}. */

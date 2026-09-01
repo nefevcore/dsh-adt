@@ -12,7 +12,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
-import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text } from './common.js';
+import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, optStr, text } from './common.js';
 /** Map the shared type-code namespace onto the two preview API modes. */
 const KIND_TO_MODE = {
     TABL: 'ddic',
@@ -128,7 +128,7 @@ export function dataPreviewTools(deps) {
                         return await fn();
                     }
                     catch (error) {
-                        if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                        if (isAdtServiceUnavailable(error)) {
                             throw new Error(`Data Preview is not available on destination '${entry.config.name}' — ` +
                                 'the ADT profile does not expose the datapreview service (HTTP ' +
                                 `${error.status}). Read data another way: export/analyze sources locally, ` +
@@ -150,6 +150,19 @@ export function dataPreviewTools(deps) {
                         throw error;
                     }
                 };
+                // Shared output mapping of the sql and entity paths (only the
+                // source/name pair differs between them).
+                const toOutput = (source, name, result, paging, rows) => ({
+                    source,
+                    name,
+                    offset: paging.offset,
+                    totalRows: result.totalRows,
+                    note: notes.length ? notes.join('; ') : undefined,
+                    queryExecutionTime: result.queryExecutionTime,
+                    columns: result.columns,
+                    rows,
+                    rawXml: result.rawXml,
+                });
                 const sql = optStr(args.sql);
                 if (sql) {
                     // Light SELECT-only lint (audit M3): the freestyle endpoint is a
@@ -164,17 +177,7 @@ export function dataPreviewTools(deps) {
                     const paging = resolveRowWindow(args, notes);
                     const result = await run(() => entry.client.runSqlQuery(sql, { top: paging.fetchTop, signal: exec.signal }));
                     const rows = pageRows(result.rows, paging.offset, paging.length, notes);
-                    return {
-                        source: 'sql',
-                        name: result.name,
-                        offset: paging.offset,
-                        totalRows: result.totalRows,
-                        note: notes.length ? notes.join('; ') : undefined,
-                        queryExecutionTime: result.queryExecutionTime,
-                        columns: result.columns,
-                        rows,
-                        rawXml: result.rawXml,
-                    };
+                    return toOutput('sql', result.name, result, paging, rows);
                 }
                 const name = String(args.name ?? '').toUpperCase().trim();
                 if (!name)
@@ -192,17 +195,7 @@ export function dataPreviewTools(deps) {
                 const paging = resolveRowWindow(args, notes);
                 const result = await run(() => entry.client.dataPreview(name, mode, { top: paging.fetchTop, signal: exec.signal }));
                 const rows = pageRows(result.rows, paging.offset, paging.length, notes);
-                return {
-                    source: mode === 'cds' ? 'DDLS' : kindCode,
-                    name,
-                    offset: paging.offset,
-                    totalRows: result.totalRows,
-                    note: notes.length ? notes.join('; ') : undefined,
-                    queryExecutionTime: result.queryExecutionTime,
-                    columns: result.columns,
-                    rows,
-                    rawXml: result.rawXml,
-                };
+                return toOutput(mode === 'cds' ? 'DDLS' : kindCode, name, result, paging, rows);
             },
         }),
     ];
