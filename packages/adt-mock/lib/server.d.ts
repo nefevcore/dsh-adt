@@ -57,6 +57,44 @@ interface MockState {
     unitRuns: Map<string, string[] | undefined>;
     /** ATC run ids issued by the async run flow. */
     atcRunIds: Set<string>;
+    /** Debugger state machine (see hDebugger* handlers). */
+    debugger: MockDebuggerState;
+}
+/** Debugger state: enough of the ADT debugger lifecycle to exercise the tools. */
+interface MockDebuggerState {
+    /** terminalId → registered listener. */
+    listeners: Map<string, {
+        ideId: string;
+        user: string;
+    }>;
+    /** Breakpoint id → placement; shared by all listeners (external scope). */
+    breakpoints: Map<string, {
+        uri: string;
+        line: number;
+    }>;
+    bpCounter: number;
+    /**
+     * A breakpoint was just set: the NEXT listener POST catches a debuggee
+     * immediately (deterministic hit — no real long-poll needed in tests).
+     */
+    pendingHit: boolean;
+    /** The stopped debuggee while a debug session is active. */
+    session?: {
+        debuggeeId: string;
+        terminalId: string;
+        program: string;
+        include: string;
+        line: number;
+        user: string;
+        /** Variable name → value view (setVariableValue mutates this). */
+        variables: Map<string, {
+            value: string;
+            type: string;
+            readOnly: boolean;
+        }>;
+        /** Debuggee released (stepContinue) — no longer inspectable. */
+        running: boolean;
+    };
 }
 export declare function createMockAdtServer(options?: MockAdtOptions): {
     server: import("http").Server<typeof IncomingMessage, typeof ServerResponse>;

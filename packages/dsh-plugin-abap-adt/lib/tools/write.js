@@ -11,7 +11,7 @@
  * an AMBIGUOUS marker (multiple candidate lines) is an error listing the
  * candidates — never a silent first-match.
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { hashSource, loadSnapshot, saveSnapshot, sourcesEquivalent, SnapshotConflictError, } from '../snapshots.js';
 import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, } from './common.js';
 import { findMethodBlocks } from '../abap.js';
@@ -60,12 +60,12 @@ async function verifyPersisted(client, ref, expected, signal) {
     }
     return { persisted: true, readBackSource: readBack.source };
 }
-/** Read a UTF-8 text file through the sandbox-aware DSH filesystem service. */
+/** Read a UTF-8 text file through the sandbox-aware host filesystem service. */
 async function readSourceFile(ctx, filePath) {
     // Optional service (audit D1): resolved at call time, not injected.
     const fs = ctx.get('fs');
     if (!fs)
-        throw new Error('adt: the dsh filesystem service is required to read `sourceFile`');
+        throw new Error('adt: a host filesystem service is required to read `sourceFile`');
     const target = await fs.resolve(filePath);
     return fs.readText(target);
 }
@@ -1018,7 +1018,7 @@ export function writeTools(deps, ctx) {
                 signal: exec.signal,
             });
             if (!ctx.get('fs'))
-                throw new Error('adt_push_object requires the dsh filesystem service');
+                throw new Error('adt_push_object requires a host filesystem service');
             const customPath = optStr(args.path);
             const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
             let localSource;

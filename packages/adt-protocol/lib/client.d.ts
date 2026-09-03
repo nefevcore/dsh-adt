@@ -16,7 +16,9 @@
  * server that exposes the ADT service (classic NetWeaver and ABAP Cloud).
  */
 import { type XmlNode } from './xml.js';
-import type { AdtActivationResult, AdtAtcResult, AdtAtcRunSummary, AdtBatchRequestPart, AdtBatchResponsePart, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtDestination, AdtDiscovery, AdtDumpDetail, AdtDumpSummary, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtObjectVersion, AdtObjectLockInfo, AdtRunResult, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtStructureChanges, AdtStructureData, AdtStructureKind, AdtStructureWriteResult, AdtSystemInfo, AdtTransport, AdtUnitRunResult, AdtWhereUsedResult, AdtDataPreview } from './types.js';
+import { type AdtCreateTableRequest } from './tableddl.js';
+import { type AdtTextElements } from './textelements.js';
+import type { AdtActivationResult, AdtAtcResult, AdtAtcRunSummary, AdtBatchRequestPart, AdtBatchResponsePart, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtCreateTableResult, AdtDebugBreakpoint, AdtDebugListenResult, AdtDebugStack, AdtDebugStepResult, AdtDebugVariable, AdtDestination, AdtDiscovery, AdtDumpDetail, AdtDumpSummary, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtObjectVersion, AdtObjectLockInfo, AdtRunResult, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtStructureChanges, AdtStructureData, AdtStructureKind, AdtStructureWriteResult, AdtSystemInfo, AdtTransport, AdtUnitRunResult, AdtWhereUsedResult, AdtDataPreview } from './types.js';
 /** Error raised for HTTP-level or protocol-level failures. */
 export declare class AdtError extends Error {
     readonly status?: number | undefined;
@@ -59,6 +61,8 @@ export declare class AdtClient {
     readonly destination: AdtDestination;
     private readonly cookies;
     private csrfToken;
+    /** Cached "/debugger/stack not available on this release" note (probed once). */
+    private stackUnavailable?;
     private readonly base;
     private readonly fetchImpl;
     /** Connection identifier sent as `sap-adt-connection-id` on every request. */
@@ -327,6 +331,18 @@ export declare class AdtClient {
         signal?: AbortSignal;
     }): Promise<AdtCreateObjectResult>;
     /**
+     * Create a DDIC table WITH fields in one flow (DDIC 2.0 DDL, the format the
+     * ADT table editor itself uses): create via blueSource → lock → write the
+     * generated `define table` DDL → unlock → activate. The DDL generator
+     * (tableddl.ts) auto-adds the MANDT client key; vsp-verified semantics.
+     *
+     * Returns the generated DDL so callers can surface it, plus the activation
+     * outcome — a table that did not activate does not exist for consumers.
+     */
+    createTable(request: AdtCreateTableRequest, options?: {
+        signal?: AbortSignal;
+    }): Promise<AdtCreateTableResult>;
+    /**
      * Delete an object. Prefers the modern deletion service
      * (`POST /sap/bc/adt/deletion/delete`, response media type
      * `deletion.response.v1+xml`) and falls back to the legacy
@@ -405,6 +421,104 @@ export declare class AdtClient {
         onLocked?: (assignedTransport: string | undefined, lockHandle: string | undefined) => void;
         signal?: AbortSignal;
     }): Promise<AdtStructureWriteResult>;
+    /**
+     * Register a debugger listener and WAIT for a debuggee (long-poll). The
+     * request rides the STATEFUL session (`x-sap-adt-sessiontype` + the
+     * `sap-contextid` cookie the backend sets): every follow-up debugger call
+     * (steps, variables, stack) MUST go through the same client instance or the
+     * backend answers 403 — the debug loop is bound to the HTTP session that
+     * registered the listener (vsp field note).
+     *
+     * Empty response body = the wait window elapsed without a breakpoint hit.
+     * A conflict (another debugger holds this user's session) is surfaced as
+     * `conflict` instead of an error.
+     */
+    debuggerListen(options?: {
+        user: string;
+        terminalId: string;
+        ideId: string;
+        /** Server-side wait window in seconds (default 30, vsp uses 240). */
+        timeoutSeconds?: number;
+        signal?: AbortSignal;
+    }): Promise<AdtDebugListenResult>;
+    /** Read the listener registry of the backend (session status). */
+    debuggerListenerStatus(options?: {
+        user?: string;
+        signal?: AbortSignal;
+    }): Promise<{
+        rawXml: string;
+    }>;
+    /**
+     * Detach the listener (DELETE). Failures are swallowed by the CALLER-side
+     * manager when the backend is already detached; here a backend error is an
+     * error. Note: after a detach the session CANNOT be re-attached — a fresh
+     * listen (with a fresh terminal id) is the only way back in.
+     */
+    debuggerDetach(options: {
+        user: string;
+        terminalId: string;
+        ideId: string;
+        signal?: AbortSignal;
+    }): Promise<void>;
+    /** Set an external (session-independent) line breakpoint; returns its id. */
+    setDebugBreakpoint(options: {
+        sourceUri: string;
+        line: number;
+        user: string;
+        terminalId: string;
+        ideId: string;
+        signal?: AbortSignal;
+    }): Promise<AdtDebugBreakpoint[]>;
+    /** Delete a breakpoint by id (external scope). */
+    deleteDebugBreakpoint(options: {
+        id: string;
+        user: string;
+        terminalId: string;
+        ideId: string;
+        signal?: AbortSignal;
+    }): Promise<void>;
+    /** One debugger step (stepInto/stepOver/stepReturn/stepContinue/terminateDebuggee). */
+    debuggerStep(options: {
+        step: 'stepInto' | 'stepOver' | 'stepReturn' | 'stepContinue' | 'terminateDebuggee';
+        signal?: AbortSignal;
+    }): Promise<AdtDebugStepResult>;
+    /** Read variable values of the stopped debuggee (POST method=getVariables). */
+    debuggerVariables(options: {
+        names: string[];
+        signal?: AbortSignal;
+    }): Promise<AdtDebugVariable[]>;
+    /** Change one variable of the stopped debuggee (POST method=setVariableValue). */
+    debuggerSetVariable(options: {
+        name: string;
+        value: string;
+        signal?: AbortSignal;
+    }): Promise<void>;
+    /**
+     * Read the call stack of the stopped debuggee. Backends before ~7.51 do not
+     * expose the `/debugger/stack` resource at all (404, vsp pitfall) — the
+     * fact is probed once per client and then answered locally, so every stack
+     * call on such a system returns `{ unavailable: true }` with an explanation
+     * instead of a raw 404.
+     */
+    debuggerStack(options?: {
+        signal?: AbortSignal;
+    }): Promise<AdtDebugStack & {
+        unavailable?: boolean;
+        note?: string;
+    }>;
+    /**
+     * Read the text elements of a program (text symbols I, selection texts S,
+     * list headings H) via the standard ADT textelements subsources. The wire
+     * format is SAP's plain-text custom format (see textelements.ts); the
+     * result is textpool-shaped rows (ID/KEY/ENTRY/LENGTH).
+     *
+     * A 404/405 on the service itself surfaces with guidance (restricted ADT
+     * profiles may not expose it); a failing SUBSOURCE degrades to empty with
+     * a note instead of failing the whole read.
+     */
+    readTextElements(programName: string, options?: {
+        signal?: AbortSignal;
+    }): Promise<AdtTextElements>;
     /**
      * Inner `$batch` request path: the client/language query parameters of the
      * destination are appended (once) so every embedded request executes in the

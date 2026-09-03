@@ -44,6 +44,10 @@ export declare const MEDIA: {
     readonly lockResult: "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result";
     /** Generic source (XML-wrapped). */
     readonly source: "application/vnd.sap.adt.source.v1+xml";
+    /** Debugger variables request/response (ABAP XML). */
+    readonly debuggerVariables: "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.debugger.Variables";
+    /** Debugger debuggee/step/listener documents (ABAP XML / dbg namespace). */
+    readonly debugger: "application/vnd.sap.as+xml";
 };
 /** Build a query string from parameters (ADT style: repeated keys allowed). */
 export declare function toQuery(params: AdtQueryParams | undefined): string;
@@ -124,5 +128,21 @@ export declare const ENDPOINTS: {
     readonly classRun: (className: string) => string;
     /** Protocol-level `$batch` (multipart/mixed embedded HTTP requests). */
     readonly batch: () => string;
+    /** Debugger core resource (steps / variable access via `?method=`). */
+    readonly debugger: (query?: AdtQueryParams) => string;
+    /** Debugger listener registration (POST listen / GET status / DELETE detach). */
+    readonly debuggerListeners: (query?: AdtQueryParams) => string;
+    /** Debugger breakpoint collection (external scope). */
+    readonly debuggerBreakpoints: (query?: AdtQueryParams) => string;
+    /** One debugger breakpoint by id. */
+    readonly debuggerBreakpoint: (id: string, query?: AdtQueryParams) => string;
+    /** Debugger call stack (absent on older backends, e.g. 7.50 → 404). */
+    readonly debuggerStack: (query?: AdtQueryParams) => string;
+    /**
+     * Textelements subsources of a program (plain-text custom format):
+     * `symbols` (text symbols I), `selections` (selection texts S),
+     * `headings` (list headings H).
+     */
+    readonly textElements: (programName: string, subsource: "symbols" | "selections" | "headings") => string;
 };
 //# sourceMappingURL=endpoints.d.ts.map

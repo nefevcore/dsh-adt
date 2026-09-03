@@ -4,15 +4,17 @@
  * without the usageReferences collection degrade to an explicit note instead
  * of a raw 404/405.
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, isAdtServiceUnavailable, resolveToolObject, text } from './common.js';
 export function whereUsedTools(deps) {
     const { registry } = deps;
     return [
         defineTool({
             name: 'adt_where_used',
-            description: 'Where-used / impact analysis: find objects that reference or depend on the given ABAP object. ' +
-                'Run before changing an object to understand the blast radius. Read-only.',
+            description: 'Find where an ABAP object is used (where-used list / impact analysis, SE80/ADT Where-Used-In): ' +
+                'find objects that reference or depend on the given object — classes (CLAS), interfaces (INTF), ' +
+                'programs/includes (PROG), CDS views (DDLS), tables (TABL), data elements (DTEL), domains (DOMA), ' +
+                'message classes (MSAG) and more. Run before changing an object to understand the blast radius. Read-only.',
             parameters: {
                 ...OBJECT_REF_PARAMS,
                 enableAllTypes: {

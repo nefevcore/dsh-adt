@@ -8,7 +8,7 @@
  * adt_delete_object — delete an object (modern deletion service with legacy
  * `_action` fallback). Irreversible.
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { AdtError, type AdtCreatableObjectType } from '@nefevcore/abap-adt-protocol';
 import { sessionCwd,
   DESTINATION_PARAM,
@@ -23,6 +23,7 @@ import { sessionCwd,
   type ToolDeps,
 } from './common.js';
 import { refFromName } from '../resolve.js';
+import { crudCreatableTypes } from '../crudmatrix.js';
 
 /** True when the backend answers GET on the object URI (object exists). */
 async function objectExists(client: { readSource(uri: string): Promise<unknown> }, uri: string): Promise<boolean> {
@@ -42,13 +43,17 @@ export function objectTools(deps: ToolDeps) {
     description:
       'Create a new ABAP development object: class (CLAS), interface (INTF), program (PROG), CDS view (DDLS), ' +
       'table (TABL), structure (STRU), domain (DOMA), data element (DTEL), table type (TTYP), message class ' +
-      '(MSAG), function group (FUNC) or package (DEVC). Use package "$TMP" for local objects without transports.',
+      '(MSAG), function group (FUNC) or package (DEVC). Use package "$TMP" for local objects without transports. ' +
+      'TABL one-step mode: pass `fields` (name/type/length/decimals/isKey/notNull/description; builtin codes ' +
+      'CHAR/NUMC/RAW/DEC/CURR/QUAN/INT… or a data-element name) and the table is created from generated DDIC 2.0 ' +
+      'DDL (auto MANDT key, @AbapCatalog annotations) and ACTIVATED in one call — the output echoes the DDL. ' +
+      'Without `fields` a TABL is created as an empty placeholder as before.',
     parameters: {
       type: {
         type: 'string',
         required: true,
-        enum: ['CLAS', 'INTF', 'PROG', 'DDLS', 'TABL', 'STRU', 'DOMA', 'DTEL', 'TTYP', 'MSAG', 'FUNC', 'DEVC'],
-        description: 'Object type to create.',
+        enum: crudCreatableTypes(),
+        description: 'Object type to create (derived from the CRUD matrix — src/crudmatrix.ts).',
       },
       name: { type: 'string', required: true, description: 'Object name, e.g. ZCL_MY_CLASS.' },
       description: { type: 'string', required: true, description: 'Short description of the object.' },
@@ -58,6 +63,33 @@ export function objectTools(deps: ToolDeps) {
         description: 'Development package; use $TMP for local objects.',
       },
       transport: { type: 'string', description: 'Transport request number when the package requires one.' },
+      fields: {
+        type: 'array',
+        description:
+          'TABL only: field list for the one-step DDL flow. Each: {name, type (builtin code or data element name), ' +
+          'length?, decimals?, isKey?, notNull?, description?}. The MANDT client key is added automatically.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string', required: true, description: 'Field name (ABAP name).' },
+            type: { type: 'string', required: true, description: 'Builtin type code (CHAR, NUMC, RAW, DEC, CURR, QUAN, INT1..8, FLTP, STRING, RAWSTRING, DATS, TIMS, UTCLONG, UUID, CHARnn/NUMCnn) or a data element name.' },
+            length: { type: 'integer', description: 'Field length (builtin types).' },
+            decimals: { type: 'integer', description: 'Decimals (DEC/CURR/QUAN; default 2).' },
+            isKey: { type: 'boolean', description: 'Key field (implies not null).' },
+            notNull: { type: 'boolean', description: 'NOT NULL (non-key).' },
+            description: { type: 'string', description: 'Field label (@EndUserText.label annotation).' },
+          },
+        },
+      },
+      deliveryClass: {
+        type: 'string',
+        description: 'TABL with fields: delivery class (A application table [default], C customizing, L temporary, G/S customer table).',
+      },
+      tableCategory: {
+        type: 'string',
+        description: 'TABL with fields: TRANSPARENT (default), STRUCTURE, CLUSTER or POOL.',
+      },
       ...DESTINATION_PARAM,
     },
     output: {
@@ -70,6 +102,8 @@ export function objectTools(deps: ToolDeps) {
           uri: { type: 'string', required: true },
           name: { type: 'string' },
           type: { type: 'string' },
+          activated: { type: 'boolean', description: 'TABL one-step flow: the activation outcome.' },
+          ddlSource: { type: 'string', description: 'TABL one-step flow: the generated DDIC 2.0 DDL that was written.' },
           messages: {
             type: 'array',
             required: true,
@@ -89,6 +123,8 @@ export function objectTools(deps: ToolDeps) {
         text(
           [
             `${value.success ? 'Created' : 'FAILED to create'} ${value.type ?? ''} ${value.name ?? ''} — ${value.uri}`,
+            ...(value.activated === false ? ['  activation FAILED — the table exists but is inactive; fix the DDL and activate via adt_activate'] : []),
+            ...(value.ddlSource ? ['', 'generated DDL:', value.ddlSource] : []),
             ...value.messages.map((m) => `  ${m.severity}: ${m.text}`),
           ].join('\n'),
         ),
@@ -100,6 +136,53 @@ export function objectTools(deps: ToolDeps) {
       entry.policy.assertEditAllowed(packageName, 'adt_create_object');
       const transport = optStr(args.transport);
       assertExplicitTransport(entry.policy, transport, 'adt_create_object');
+
+      // TABL one-step flow: fields given → create from generated DDIC 2.0 DDL
+      // and activate in one call (see client.createTable).
+      if (String(args.type).toUpperCase() === 'TABL' && Array.isArray(args.fields)) {
+        const rawFields = args.fields as Array<Record<string, unknown>>;
+        if (rawFields.length === 0) {
+          throw new Error(
+            'adt_create_object: `fields` must contain at least one field ' +
+              '(or omit it entirely for a placeholder table)',
+          );
+        }
+        const table = await entry.client.createTable(
+          {
+            name: String(args.name),
+            description: String(args.description ?? ''),
+            packageName,
+            transport,
+            deliveryClass: optStr(args.deliveryClass),
+            tableCategory: optStr(args.tableCategory),
+            fields: rawFields.map((f) => ({
+              name: String(f.name ?? ''),
+              type: String(f.type ?? ''),
+              length: typeof f.length === 'number' ? f.length : undefined,
+              decimals: typeof f.decimals === 'number' ? f.decimals : undefined,
+              isKey: f.isKey === true,
+              notNull: f.notNull === true,
+              description: optStr(f.description),
+            })),
+          },
+          { signal: exec.signal },
+        );
+        // The transport the create was recorded into (explicit or assigned)
+        // must pass the policy, like the generic path below.
+        if (table.transport) {
+          entry.policy.assertTransportUsage(table.transport, `adt_create_object (${table.name})`);
+        }
+        return {
+          success: table.activated,
+          uri: table.uri,
+          name: table.name,
+          type: 'TABL/DT',
+          activated: table.activated,
+          ddlSource: table.ddlSource,
+          messages: table.messages.map((m) => ({ severity: m.severity, text: m.text })),
+        };
+      }
+
       const result = await (async (): Promise<{
         success: boolean;
         uri?: string;

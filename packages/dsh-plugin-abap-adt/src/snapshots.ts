@@ -28,7 +28,7 @@
  *   <name>.<category>.abap.json       — sidecar: base hash, uri, fetchedAt
  */
 import { createHash } from 'node:crypto';
-import type { Context } from '@deepseek-ai/cordis';
+import type { AdtFileSystem, ToolHost } from './tooldef.js';
 import type { AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 
 /** Thrown when the server source no longer matches the snapshot's base hash. */
@@ -103,12 +103,12 @@ function snapshotPaths(destination: string, ref: { name: string; type: string })
 
 /** Load the tracked snapshot for an object; undefined when absent/corrupt/no fs. */
 export async function loadSnapshot(
-  ctx: Context,
+  ctx: ToolHost,
   destination: string,
   ref: { name: string; type: string; uri: string },
 ): Promise<ObjectSnapshot | undefined> {
-  // Optional service (audit D1): no dsh-fs → no snapshots, callers degrade.
-  const fs = ctx.get('fs');
+  // Optional service (audit D1): no host fs → no snapshots, callers degrade.
+  const fs = ctx.get('fs') as AdtFileSystem | undefined;
   if (!fs) return undefined;
   const { file, sidecar } = snapshotPaths(destination, ref);
   try {
@@ -126,15 +126,15 @@ export async function loadSnapshot(
 
 /** Save/refresh the snapshot; returns the file path. */
 export async function saveSnapshot(
-  ctx: Context,
+  ctx: ToolHost,
   destination: string,
   ref: { name: string; type: string; uri: string },
   source: string,
 ): Promise<string> {
-  // Optional service (audit D1): snapshotting needs dsh-fs; callers treat a
+  // Optional service (audit D1): snapshotting needs a host fs; callers treat a
   // throw here as "no snapshot available", not a read failure.
-  const fs = ctx.get('fs');
-  if (!fs) throw new Error('adt: snapshotting requires the dsh filesystem service (ctx.get(\'fs\'))');
+  const fs = ctx.get('fs') as AdtFileSystem | undefined;
+  if (!fs) throw new Error("adt: snapshotting requires a host filesystem service (ctx.get('fs'))");
   const { file, sidecar } = snapshotPaths(destination, ref);
   const meta: SnapshotSidecar = {
     destination,

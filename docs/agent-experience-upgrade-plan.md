@@ -1,10 +1,10 @@
 # Agent 体验升级计划（源自 vsp / abap-mcp-adt-powerup 调研）
 
-> **状态**：待实施。本文档是完整的实施规格——面向**下一个全新 session**，自包含、不依赖调研对话。
+> **状态**：✅ **已实施**（2026-08，实施 session 完成全部 P0 + P1-1..P1-4；追加用户决策提前落地 P2 的 **Compact CRUD 矩阵**——`src/crudmatrix.ts` 单一事实源 + `adt_crud` 动词路由门面，长尾规则随之生效）。基线 246 测试 / 38 工具 → 实施后 **288 测试 / 46 工具**（发布数字锁定已同步：agent_extras 计数 pin、selfcheck UNPROBED/COVERED、README 徽章、docs/tool-reference.md + **CRUD 矩阵表**）。落地明细见 README 0.6.0 节；关键实现：`src/tableblocklist.ts`（读侧目录）、`src/debugger.ts` + `src/tools/debugger.ts`（调试器五件套，插件级会话 + Fiber 卸载 detach）、`src/crudmatrix.ts` + `src/tools/crud.ts`（CRUD 矩阵与门面）、`packages/adt-protocol/src/tableddl.ts`（TABL DDL 生成）与 `textelements.ts`（三子源解析）；其余 P2（BTP 认证、compat 探测、available_in、WBCROSSGT、dump 归因）仍按需启动。
 > **来源**：两个同类工具的深度调研（源码快照 + 笔记在 `.research/`，gitignored 但随工作区保留）：
 > - **vsp** = [oisee/vibing-steampunk](https://github.com/oisee/vibing-steampunk)：Go 版 ADT→MCP，走"agent 智能"路线。快照 `.research/repos/vibing-steampunk-main/`，笔记 `.research/vsp_lessons.md`。
 > - **abap-mcp** = [abap0917/abap-mcp-adt-main](https://github.com/abap0917/abap-mcp-adt-main)（`@babamba2/abap-mcp-adt-powerup`，fr0ster fork）：TS 版 MCP，走"企业分发+合规治理+对象广度"路线。快照 `.research/repos/abap-mcp-adt-main-main/`，笔记 `.research/abapmcp_lessons.md`。
-> **注意**：abap-mcp 存在宣称与实现漂移（rate-limit 未实现、header-validator 零引用）——借鉴其任何机制前先 grep 其源码核实，本文引用的路径均已由子代理核实过。
+> **注意**：abap-mcp 存在宣称与实现漂移（rate-limit 未实现、header-validator 零引用——readonlyGuard 实际在 `src/lib/readonlyGuard.ts` 而非 plan 所写路径）——借鉴其任何机制前先 grep 其源码核实，本文引用的路径均已由子代理核实过。
 
 ## 下一 session 启动检查
 
@@ -112,7 +112,7 @@
 - **BTP/JWT/XSUAA/服务键认证**（roadmap 首位）：参考 abap-mcp 的 broker/stores/providers 分层 + `keychain:<service>/<account>` 引用 + 401/403 透明续期；我们 `auth` 扩展点已预留。**大项，独立规划**。
 - **compat 能力探测升级**：`probe.ts` 从"URL 端口探测"升级为"按能力探测并给路由建议"（vsp `compat`：ATC/dumps/where-used 在各 release 的可用性矩阵；差异化探测结果落 registry 缓存）。
 - **available_in 环境标注**：仅当支持多环境（cloud/ECC legacy）时做——工具描述/policy 标注环境适用性。
-- **Compact CRUD 矩阵**：**决策规则**而非立即实施——将来新增对象类型长尾（RAP BDEF/SRVD/SRVB、屏幕、DDLX…）超过 ~5 类时，采用 `Handler verb × object_type` 矩阵 + 单一事实源文件（学 abap-mcp compactMatrix + vsp 通用工具教训），而不是继续加细粒度工具。
+- **Compact CRUD 矩阵**：~~决策规则而非立即实施~~ **✅ 已于 2026-08 提前落地（用户决策）**——`src/crudmatrix.ts` 单一事实源（verb × 13 类型 × 归属工具）+ `adt_crud {verb, type, …}` 动词路由门面（路由到专用工具原样执行，owner 策略/OCC/持久化链不变；无 verb 返回矩阵卡；不支持组合列出支持项）；`adt_create_object` 类型枚举由矩阵派生；parity 测试锁定 矩阵 ↔ 协议 createByType ↔ 目录 ↔ tool-reference 矩阵表。**长尾规则自今生效**：将来 BDEF/SRVD/SRVB/屏幕/DDLX 超过 ~5 类时只加矩阵行 + 协议端点，经门面暴露，不再加细粒度工具。
 - **where-used 增强（WBCROSSGT 反向依赖）**：vsp graph 的 CROSS/WBCROSSGT 多跳 frontier 拉取算法可移植（经 RunQuery/dataPreview），服务影响分析。
 - **dump 归因增强**：vsp 的 similar（相似聚类 ladder）与 correlate（与应用日志对时关联）——SLG1 日志读取是前置。
 

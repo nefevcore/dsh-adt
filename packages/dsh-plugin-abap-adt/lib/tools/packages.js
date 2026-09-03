@@ -1,11 +1,11 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, destinationOf, text } from './common.js';
 export function packageTools(deps) {
     const { registry } = deps;
     return [
         defineTool({
             name: 'adt_package_content',
-            description: 'List the direct members (objects) of a development package, e.g. all classes, programs, interfaces and CDS views of ZPACK_DEMO. ' +
+            description: 'List the direct members (objects) of a development package (DEVC; SE80 package view), e.g. all classes, programs, interfaces and CDS views of ZPACK_DEMO. ' +
                 'Use "$TMP" for local objects.',
             parameters: {
                 packageName: {

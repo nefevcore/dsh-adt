@@ -11,10 +11,8 @@
  * `.abaplint.json` in the export directory to tune the rules.
  */
 import { Config, MemoryFile, Registry } from '@abaplint/core';
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool, type AdtFileSystem, type ToolHost } from '../tooldef.js';
 import { join } from 'node:path';
-import type { Context } from '@deepseek-ai/cordis';
-import type { FileSystem } from '@deepseek-ai/dsh-fs';
 import { text, type ToolDeps } from './common.js';
 
 /** Minimal filesystem surface the checker needs (injected, so tests can fake it). */
@@ -25,8 +23,8 @@ export interface FsReader {
   readFile(absPath: string): Promise<string>;
 }
 
-/** Adapter over the DSH filesystem service — reads stay sandbox-aware like adt_export_objects. */
-function fsReaderFromCtx(fs: FileSystem, signal?: AbortSignal): FsReader {
+/** Adapter over a host filesystem service — reads stay sandbox-aware like adt_export_objects. */
+function fsReaderFromCtx(fs: AdtFileSystem, signal?: AbortSignal): FsReader {
   return {
     async readDir(absPath) {
       const target = await fs.resolve(absPath, { signal });
@@ -254,7 +252,7 @@ function renderLocalCheck(args: Record<string, unknown>, value: LocalCheckResult
   return lines.join('\n');
 }
 
-export function localTools(_deps: ToolDeps, ctx: Context) {
+export function localTools(_deps: ToolDeps, ctx: ToolHost) {
   return [
     defineTool({
       name: 'adt_local_check',
@@ -342,8 +340,8 @@ export function localTools(_deps: ToolDeps, ctx: Context) {
       timeoutMs: 300_000,
       execute: async (args, exec) => {
         // Optional service (audit D1): resolved at call time, not injected.
-        const fs = ctx.get('fs');
-        if (!fs) throw new Error('adt_local_check requires the dsh filesystem service');
+        const fs = ctx.get('fs') as AdtFileSystem | undefined;
+        if (!fs) throw new Error('adt_local_check requires a host filesystem service');
         return runLocalCheck(String(args.dir), {
           severity: typeof args.severity === 'string' ? (args.severity as CheckSeverity) : undefined,
           maxFiles: typeof args.maxFiles === 'number' ? args.maxFiles : undefined,

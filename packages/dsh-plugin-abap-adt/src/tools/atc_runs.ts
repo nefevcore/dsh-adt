@@ -1,4 +1,4 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd,
   ATC_AGGREGATES_SCHEMA,
   ATC_COUNTS_SCHEMA,

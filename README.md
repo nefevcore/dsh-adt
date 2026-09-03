@@ -2,10 +2,10 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-246-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-288-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
-> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **38 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, conflict-checked local snapshots, local export, offline abaplint, method-level read/edit, dependency-contract context prologues, a read-only capability sweep) and conversational destination management (create connections from the local SAP GUI list by just chatting). Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system. Agent-facing usage guide with the critical limitations first: [docs/agent-guide.md](docs/agent-guide.md).
+> **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **46 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → debug → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, one-step table creation from field lists, conflict-checked local snapshots, local export, offline abaplint, method-level read/edit, dependency-contract context prologues, a read-only capability sweep, transport co-change analysis) and conversational destination management (create connections from the local SAP GUI list by just chatting). Governance is two-sided: write-side per-destination policy knobs with dev/qa/prd environment profiles, read-side sensitive-table blocklists for data preview. Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system. Agent-facing usage guide with the critical limitations first: [docs/agent-guide.md](docs/agent-guide.md).
 
 在 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 上直接访问 SAP ABAP 系统的插件与协议客户端。
 
@@ -21,7 +21,7 @@
 # ① 安装（装进 web profile；仅安装，不自动加载）
 dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin
 
-# ② 生成按会话启用的 agent 预设（一次性；复制 standard 预设、追加插件行并剔除 tool-cordis/skill-filesystem 行）
+# ② 生成按会话启用的 agent 预设（一次性；复制 standard 预设、追加插件行、剔除 tool-cordis/skill-filesystem 行，并把 persona 替换为 ABAP 专属人设——含工具指引/开发流程/传输请求纪律：修改前向用户要请求号）
 dsh plugin --profile web exec abap-adt-preset
 
 # 更新到最新版（更新不会动你的预设与配置）
@@ -33,11 +33,37 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 
 **默认不加载，按会话启用（by design）**：包内不声明 `dsh.bundle`，安装只是把包放进 profile 的依赖里——`adt_*` 工具**只出现在用 `abap-adt` 预设创建的会话**，其他会话完全不受影响。安装时 dsh 会提示 `declares no dsh.bundle — installed as a plain dependency`，这正是预期行为。
 
-②生成的预设：复制 `standard` 预设（完整编码代理、不含插件开发工具集）到 `~/.dsh/.agent-presets/abap-adt/`，追加插件行并剔除源里可能携带的 `tool-cordis` / `skill-filesystem` 行；刻意不复制部署默认预设——默认为 `cordis` 时会带入 `tool-cordis`（其 Host Cordis inspect provider 与活动 cordis 会话冲突），需要时 `--from` 可覆盖。支持 `--id/--from/--name/--force/--dry-run`。重启 DSH 后新建会话，在预设 chip 选「ABAP Development」即可。手工建预设的说明见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md)。
+### 其他宿主：host-neutral `./agent` 入口（AgentChat 内置行等）
+
+工具层本体不依赖任何 DSH 运行时——包的 `./agent` 导出入口（`@nefevcore/abap-adt-dsh-plugin/agent`）暴露同一份引擎：`assembleAdtTools(deps, host)` 聚合全部 46 个工具（参数已是标准 JSON Schema），外加 `AdtRegistry` / `LockLedger` / `DebuggerManager` / 配置分层（`composeLayers` / `resolveEffectiveConfig`）与 `deepCompact` 等出口。宿主只需适配三个结构化缝（定义在 `src/tooldef.ts`）：
+
+- `ToolHost.get('fs')` → `AdtFileSystem`（快照/导出/本地检查的文件面；DSH 的 dsh-fs 服务结构兼容，其他宿主给小适配器）
+- `ToolHost.get('credentials')` → 密码引用解析缝（`ADT_<NAME>_PASSWORD` 词汇）
+- 执行上下文 `exec.signal` + `exec.agent.session.header.cwd`（per-call 工作区锚点）
+
+首个消费方是 [AgentChat](https://github.com/nefevcore/AgentChat) 的内置插件行 `ac-sap-adt`（`src/ac-sap-adt/`，47 工具带 `sap-adt` 能力标签门禁；fs 缝 = 数据根子树内的 node:fs 适配器，credentials 缝 = 加密凭据存储；demo 目的地同样开箱即用）。开发期 AgentChat 以 pnpm `link:` 指向本仓库检出版本，引擎发版后切 semver。
+
+②生成的预设：复制 `standard` 预设（完整编码代理、不含插件开发工具集）到 `~/.dsh/.agent-presets/abap-adt/`，追加插件行、剔除源里可能携带的 `tool-cordis` / `skill-filesystem` 行，并**将 persona 替换为 ABAP 专属人设**（常用工具使用指引、开发流程指引，以及传输请求纪律：修改前必须向用户索取请求号并显式传 `transport`，绝不省略让后端自行建任务；释放传输保持人工决策）。刻意不复制部署默认预设——默认为 `cordis` 时会带入 `tool-cordis`（其 Host Cordis inspect provider 与活动 cordis 会话冲突），需要时 `--from` 可覆盖。支持 `--id/--from/--name/--force/--dry-run`。重启 DSH 后新建会话，在预设 chip 选「ABAP Development」即可。手工建预设的说明见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md)。
 
 DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更免重启热生效——连接真实系统的 `destinations` 推荐放**工作区配置** `<工作区>/.dsh-abap-adt/destinations.yaml`（对话式创建见下），全局兜底/权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
 ### 从 0.1.0 升级
+
+#### 0.6.0（治理 + 调试器 + 对象能力，P0/P1 全量落地）
+
+源自 [`docs/agent-experience-upgrade-plan.md`](docs/agent-experience-upgrade-plan.md) 的完整实施批次：
+
+- **读侧敏感表黑名单（P0-1）**：`blockedTablesProfile`（off/minimal/standard/strict，默认 off——opt-in）+ `blockedTables` 自定义追加 + `allowedTables` 豁免（审计 note + logger）。`adt_data_preview` 两条路径**发请求前**解析目标表（SQL 走 FROM/JOIN 提取器）过目录——命中即 `[POLICY] blockedTables: <表> — <类别>: <理由>`，**零 SAP 请求**，deny 无逐调用豁免。目录按类别+tier+why 编目（银行/客户供应商 PII/地址/认证/HR/税务 ⊂ 交易单据 ⊂ 审计日志/通信/`Z*`）。
+- **写侧环境分级（P0-2）**：目的地 `profile: dev|qa|prd`（默认 dev）——qa 把 execution/batchWrites（及 debugger）未显式配置时默认收 false；prd **硬拒**三者（显式开也拒，报错含 `profile: prd`，fail-closed 无 prd 白名单）。
+- **工具描述 RAG 工程（P0-3）**：全部工具描述动词前置 + ADT 类型码（CLAS/TABL/DDLS…）与事务码别名（ST22/SE16/SE10/SA38/ATC/SAUNIT…）富化——面向 Cline/Cursor 类 embedding 检索选工具的客户端。
+- **CSRF 预热核实（P0-5）**：已核实首写请求**不裸奔**（token 探针先于任何非 GET 请求发出、缓存复用、403 失效重探重试一次）——`quirks.test.ts` 两个测试锁定该顺序。
+- **Debugger 工具组（P1-1）**：5 个 `adt_debug_*` 工具（session listen/status/detach、breakpoint set/delete、step F5–F8/terminate、inspect variables/stack、set_variable）走**标准 ADT REST 调试器**（`/sap/bc/adt/debugger/*`，零服务端安装）。会话身份插件级持有（一个 ADT 会话一个调试会话、detach 不可重 attach——插件卸载自动 detach）；`/debugger/stack` 7.50 缺失探测缓存；策略 `allowDebugger`（默认 false）+ 变量写入双重 opt-in `allowDebugVariables`；prd 硬拒。
+- **TABL 带字段一步创建（P1-2）**：`adt_create_object {type: TABL, fields: [...]}` → DDIC 2.0 DDL（自动 MANDT、`@AbapCatalog.*` 注解、内建类型映射）→ blueSource 创建 → 锁内写 → **激活**一条龙，输出回显生成的 DDL；空 fields 数组报错不静默；无 fields 保持占位创建。
+- **文本元素读取（P1-3）**：`adt_read_textelements`（PROG/REPT）——标准端点读文本符号/选择文本/列表标题，TEXTPOOL 形状（ID/KEY/ENTRY/LENGTH）；写侧待真实系统验证 PUT 格式后开放。
+- **co-change 分析（P1-4）**：`adt_cochange`——输入对象 → 版本历史传输号 → 请求条目展开 → 按共享传输数排序共现对象（截断纪律：top/maxTransports 钳制均写 note；输入无版本 feed 可见列出）。
+- **agent-guide 增补（P0-4）**：写前 Before/After diff 展示义务、大改先 `adt_check` 再写（check→lock→write→activate 顺序）；读侧治理与 profile 说明。
+- **Compact CRUD 门面（P2 提前落地，用户决策）**：`src/crudmatrix.ts` 单一事实源（verb × 13 类型 × 归属工具）驱动一切——`adt_crud {verb, type, …}` 门面按矩阵路由到**专用工具**原样执行（owner 的策略/OCC/持久化链原封不动，`routedTool` 回显实际执行者；无 verb 调用返回能力矩阵卡；不支持的 verb×type 列出该类型支持什么）；`adt_create_object` 类型枚举由矩阵派生；parity 测试锁定 矩阵 ↔ 协议 createByType ↔ 目录 ↔ tool-reference 矩阵表（第五道发布数字锁）。**长尾规则生效**：将来 BDEF/SRVD/SRVB/屏幕/DDLX 超过 ~5 类时只加矩阵行 + 协议端点，不再加细粒度工具。
+- 测试 246 → **288**；工具 38 → **46**（目录 pin / selfcheck UNPROBED / README 徽章 / tool-reference + **CRUD 矩阵表** 五处同步）。
 
 #### 0.5.0（安全修复 + 代理体验双批次，首个包含下述 0.4.0 内容的发布版）
 
@@ -74,7 +100,11 @@ dsh plugin --profile web exec abap-adt-preset --force
 
 ## 核心能力
 
-- **代理原生工具**：38 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **代理原生工具**：46 个 `adt_*` 工具，AI 自主编排多步开发流程
+- **双向治理**：写侧 per-destination 策略（11 开关 + dev/qa/prd profile——prd 硬拒执行/批量写/调试器）；读侧敏感表黑名单（三档目录，deny 零请求拒绝，豁免审计留痕）
+- **ABAP 调试器（零安装）**：`adt_debug_*` 五件套走标准 ADT REST——断点/监听/单步/栈/变量（写值双重 opt-in）
+- **TABL 一步建表**：fields 字段清单 → DDIC 2.0 DDL → 创建+激活一条龙（自动 MANDT）
+- **文本元素 / 协变分析**：`adt_read_textelements`（TEXTPOOL 形状读文本符号/选择文本/标题）；`adt_cochange`（传输共变排回归范围）
 - **方法级读写（token 经济）**：`adt_read_object`/`adt_edit_object` 带 `method` 参数——只收发一个 METHOD 块（~30 行而非全类），窗口仍按全源行号编址；编辑走完整 OCC 冲突链
 - **依赖契约序言**：`adt_read_object {context: true}` 一次读取带回所用类/接口的**公共契约**（超类/接口优先，预算花在成功取回的契约上；解析失败的依赖原样列出——看得见的缺口≠没有依赖）
 - **能力巡检（sweep）**：`adt_selfcheck` 对目的地做只读能力扫描，判定 answered/empty/dead/absent/broken——`dead` = 返回空而独立 oracle（search↔read↔$batch 交叉印证）证明有内容；报告列出全部刻意不巡检的工具（覆盖声明是清单不是空白）
@@ -207,7 +237,7 @@ abap-adt:
 
 ## 测试
 
-共 **246 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**密码分层解析**（明文 > DSH 凭证服务 > 进程环境变量）、**工作区配置层**（叠加合并/默认目的地/权限键/客户端复用/原子写）、**SAP GUI 连接发现**（SAPUILandscape.xml 解析：直连/引用/负载均衡/Include/经典 ini 回退/多词搜索）与 **adt_create_destination 工具流**（GUI 导入/手工创建/覆盖保护/密码入凭证文件或明文回退）、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退——源自 impc-dev/D01 实战反馈）、**方法级读写 + 依赖契约序言 + 能力巡检**（`agent_extras.test.ts`：方法块定位/依赖提取排序/契约抽取的纯函数测试，方法窗口编址、序言"失败依赖可见"纪律、方法手术走 OCC 流水线、`adt_selfcheck` 判定表与 **发布目录计数锁定**——目录数漂移时测试先于文档失败）。
+共 **288 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略（含读侧黑名单与环境分级 profile）、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**密码分层解析**（明文 > DSH 凭证服务 > 进程环境变量）、**工作区配置层**（叠加合并/默认目的地/权限键/客户端复用/原子写）、**SAP GUI 连接发现**（SAPUILandscape.xml 解析：直连/引用/负载均衡/Include/经典 ini 回退/多词搜索）与 **adt_create_destination 工具流**（GUI 导入/手工创建/覆盖保护/密码入凭证文件或明文回退）、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退、**CSRF 预热顺序锁定**——源自 impc-dev/D01 实战反馈）、**方法级读写 + 依赖契约序言 + 能力巡检**（`agent_extras.test.ts`：方法块定位/依赖提取排序/契约抽取的纯函数测试，方法窗口编址、序言"失败依赖可见"纪律、方法手术走 OCC 流水线、`adt_selfcheck` 判定表与 **发布目录计数锁定**——目录数漂移时测试先于文档失败）、**读侧治理与环境分级**（`read_policy.test.ts`：standard 档 KNA1 零请求拒绝、off 档不拦、豁免审计 note、SQL FROM/JOIN 提取）、**调试器全链路**（`debugger.test.ts`：断点→listen 命中→栈→变量→单步→写值→detach 对 mock 走完整循环 + 三档策略门）、**TABL 一步建表 + 文本元素 + co-change**（DDL 生成纯函数、blueSource 流激活验证、三子源解析、共变排序与截断纪律）。
 
 ## 路线图（可扩展方向）
 

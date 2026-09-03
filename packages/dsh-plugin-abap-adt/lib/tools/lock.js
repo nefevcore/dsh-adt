@@ -8,7 +8,7 @@
  * explicitly named objects; unlocks with the recorded handle, falling back to
  * a handle-less unlock on backends that accept it.
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text } from './common.js';
 import { resolveObjects } from '../resolve.js';
 export function lockTools(deps) {

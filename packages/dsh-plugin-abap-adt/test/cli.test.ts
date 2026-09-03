@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import {
   PLUGIN_ROW,
+  PERSONA_ROW,
+  PERSONA_SOURCE_ROW_ID,
   renderPresetYml,
   defaultSourcePresetId,
   stripPresetRows,
@@ -31,6 +33,53 @@ test('PLUGIN_ROW: appended to a composition parses as one list', () => {
   const base = '- id: persona\n  name: p\n';
   const doc = parse(base.trimEnd() + '\n' + PLUGIN_ROW) as Array<{ id: string }>;
   assert.deepEqual(doc.map((r) => r.id), ['persona', 'abap-adt']);
+});
+
+test('PERSONA_ROW: the ABAP persona — identity, tool guidance, transport discipline', () => {
+  const row = parse(PERSONA_ROW) as Array<{ id: string; name: string; config: { text: string } }>;
+  assert.equal(row.length, 1);
+  assert.equal(row[0]?.id, 'persona');
+  assert.equal(row[0]?.name, '@deepseek-ai/dsh-persona');
+  const text = row[0]!.config.text;
+  assert.match(text, /\{\{model\}\}/);
+  assert.match(text, /\{\{cwd\}\}/);
+  // Identity first, live-system warning included.
+  assert.ok(text.startsWith('You are an SAP ABAP development agent'), 'persona opens with the identity line');
+  assert.match(text, /no draft state and no undo/);
+  // Tool guidance across the workflow phases of docs/dev-workflow.svg.
+  for (const marker of [
+    'adt_permissions', 'adt_search', 'adt_package_content',
+    'adt_read_object', 'adt_read_structure', 'adt_read_textelements',
+    'adt_where_used', 'adt_cochange', 'adt_edit_object', 'adt_write_object', 'adt_push_object',
+    'adt_create_object', 'adt_write_structure',
+    'adt_check', 'adt_activate',
+    'adt_run_unit_tests', 'adt_run_atc', 'adt_execute', 'adt_data_preview',
+    'adt_list_dumps', 'adt_debug_session',
+    'adt_release_gate', 'adt_object_versions', 'adt_version_diff', 'adt_get_transport',
+    'adt_batch', 'adt_export_objects', 'adt_local_check', 'adt_delete_object', 'adt_crud',
+  ]) {
+    assert.ok(text.includes(marker), `persona mentions ${marker}`);
+  }
+  // Failure-marker semantics spelled out inline (DSH system-prompt style).
+  for (const marker of ['[CONFLICT]', 'persisted:false', '[POLICY]', 'DESCENDING', 'length/offset']) {
+    assert.ok(text.includes(marker), `persona explains ${marker}`);
+  }
+  // Transport discipline (the headline rule): user-provided request number,
+  // explicit transport argument, never let the backend auto-create a task.
+  assert.ok(text.includes('request number'));
+  assert.ok(text.includes('adt_list_transports'));
+  assert.match(text, /pass the transport argument explicitly/);
+  assert.match(text, /never omit/);
+  // Release stays a human decision.
+  assert.ok(text.includes('Releasing a transport'));
+  // The workflow spine (prepare → … → release-ready) closes the persona.
+  assert.ok(text.includes('prepare → request → DDIC → code → check/activate → test → release-ready'));
+  assert.equal(PERSONA_SOURCE_ROW_ID, 'persona');
+});
+
+test('PERSONA_ROW: composes with PLUGIN_ROW as one list (generation shape)', () => {
+  const doc = parse('- id: tool-skill\n  name: t\n' + PERSONA_ROW + PLUGIN_ROW) as Array<{ id: string }>;
+  assert.deepEqual(doc.map((r) => r.id), ['tool-skill', 'persona', 'abap-adt']);
 });
 
 test('renderPresetYml: quotes name and description', () => {
@@ -160,11 +209,17 @@ test('main: generates from standard by default, strips authoring rows, refuses t
     assert.equal(main([]), 0);
     const presetDir = join(home, '.agent-presets', 'abap-adt');
     assert.equal(existsSync(join(presetDir, 'skills', 'demo', 'SKILL.md')), true, 'whole dir copied');
-    const doc = parse(readFileSync(join(presetDir, 'agent.cordis.yml'), 'utf8')) as Array<{ id: string }>;
-    assert.deepEqual(doc.map((r) => r.id), ['persona', 'tool-skill', 'abap-adt'], 'skill-filesystem stripped');
+    const doc = parse(readFileSync(join(presetDir, 'agent.cordis.yml'), 'utf8')) as Array<{ id: string; name?: string; config?: { text?: string } }>;
+    // The source persona is stripped and the ABAP persona re-appended in
+    // front of the plugin row — the generated session keeps a persona.
+    assert.deepEqual(doc.map((r) => r.id), ['tool-skill', 'persona', 'abap-adt'], 'skill-filesystem stripped, persona replaced');
+    const personaRow = doc.find((r) => r.id === 'persona');
+    assert.equal(personaRow?.name, '@deepseek-ai/dsh-persona');
+    assert.ok(personaRow?.config?.text?.includes('request number'), 'transport-request discipline present');
     assert.equal(parse(readFileSync(join(presetDir, 'preset.yml'), 'utf8')).name, 'ABAP Development');
     assert.match(captured, /from preset 'standard'/);
     assert.match(captured, /stripped row\(s\).*skill-filesystem/);
+    assert.match(captured, /persona replaced with the ABAP development persona/);
 
     assert.equal(main([]), 1); // exists → refuse
     assert.equal(main(['--force']), 0); // replace
@@ -177,7 +232,7 @@ test('main: generates from standard by default, strips authoring rows, refuses t
     const cordisDoc = parse(
       readFileSync(join(home, '.agent-presets', 'abap-adt-cordis', 'agent.cordis.yml'), 'utf8'),
     ) as Array<{ id: string }>;
-    assert.deepEqual(cordisDoc.map((r) => r.id), ['persona', 'abap-adt'], 'tool-cordis + skill-filesystem stripped');
+    assert.deepEqual(cordisDoc.map((r) => r.id), ['persona', 'abap-adt'], 'tool-cordis + skill-filesystem stripped, persona re-appended');
     assert.match(captured, /stripped row\(s\).*tool-cordis, skill-filesystem/);
   } finally {
     process.stdout.write = origWrite;

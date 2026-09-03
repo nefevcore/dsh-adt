@@ -1,4 +1,4 @@
-import type { Context } from '@deepseek-ai/cordis';
+import { type ToolHost } from '../tooldef.js';
 import { type ToolDeps } from './common.js';
 /** Minimal filesystem surface the checker needs (injected, so tests can fake it). */
 export interface FsReader {
@@ -54,5 +54,5 @@ export interface LocalCheckResult {
 }
 /** Run abaplint over a directory of ABAP sources. Pure core, no tool plumbing. */
 export declare function runLocalCheck(dir: string, options: LocalCheckOptions, fs: FsReader): Promise<LocalCheckResult>;
-export declare function localTools(_deps: ToolDeps, ctx: Context): import("@deepseek-ai/dsh-tools").ToolDefinition[];
+export declare function localTools(_deps: ToolDeps, ctx: ToolHost): import("../tooldef.js").DefinedTool[];
 //# sourceMappingURL=local.d.ts.map

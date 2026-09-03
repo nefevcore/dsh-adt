@@ -16,7 +16,7 @@
  * Writes go through the same permission gates as every edit (package
  * whitelist, transport policy incl. backend-assigned CORRNR rollback).
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import {
   AdtError,
   type AdtStructureChanges,

@@ -11,5 +11,5 @@ export interface GateStageResult {
 export declare function aggregateGate(stages: GateStageResult[]): {
     verdict: 'go' | 'no-go';
 };
-export declare function gateTools(deps: ToolDeps): import("@deepseek-ai/dsh-tools").ToolDefinition[];
+export declare function gateTools(deps: ToolDeps): import("../tooldef.js").DefinedTool[];
 //# sourceMappingURL=gate.d.ts.map

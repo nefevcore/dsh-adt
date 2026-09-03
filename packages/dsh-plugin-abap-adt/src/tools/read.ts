@@ -11,9 +11,7 @@
  * (adt_edit_object matches against this snapshot; adt_push_object uploads a
  * locally edited copy after verifying the server still matches).
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
-import type { JsonValue } from '@deepseek-ai/dsh-tools';
-import type { Context } from '@deepseek-ai/cordis';
+import { defineTool, type JsonValue, type ToolHost } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, destinationOf, resolveToolObject, text, type ToolDeps } from './common.js';
 import { typeLabel } from '../resolve.js';
 import { hashSource, saveSnapshot } from '../snapshots.js';
@@ -52,14 +50,16 @@ function readPresentationMeta(value: { name: string; type: string; source: strin
   };
 }
 
-export function readTools(deps: ToolDeps, ctx?: Context) {
+export function readTools(deps: ToolDeps, ctx?: ToolHost) {
   const { registry } = deps;
 
   const readObject = defineTool({
     name: 'adt_read_object',
     description:
-      'Read the source code and metadata of an ABAP development object (class, interface, program, CDS view, ' +
-      'table, domain, ...). Pass `objectUri` (from search results) or `name` + optional `type`. ' +
+      'Read the source code and metadata of an ABAP development object — classes (CLAS), interfaces (INTF), ' +
+      'programs and includes (PROG), function groups (FUGR), CDS views (DDLS), tables/structures (TABL/STRU). ' +
+      'Structured metadata objects (MSAG/DOMA/DTEL/TTYP) are refused with a pointer to adt_read_structure; ' +
+      'packages (DEVC) point at adt_package_content. Pass `objectUri` (from search results) or `name` + optional `type`. ' +
       'Optionally window the source with `startLine`/`endLine` (1-based, inclusive) — the response always ' +
       'carries `totalLines` so large objects can be read in slices. ' +
       'By default the full source is also kept as a local snapshot (see `localCopy` in the output): ' +

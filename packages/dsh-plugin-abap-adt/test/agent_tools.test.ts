@@ -20,8 +20,19 @@ import { sourcesEquivalent } from '../lib/snapshots.js';
 import { replaceSourceBlock, replaceSourceText } from '../lib/tools/write.js';
 import type { Context } from '@deepseek-ai/cordis';
 import { readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+
+// Isolate DSH-home state (chiefly the persistent lock ledger) from the REAL
+// user home: `node --test` runs test files as parallel processes and several
+// of them construct LockLedger-backed tools — sharing ~/.dsh/storages across
+// processes both pollutes the user's machine and races the M6 snapshot
+// assertion ("no stale entry after a clean write"). locks.ts resolves the
+// ledger path per operation, so setting the env here covers every ledger
+// instance created in this process.
+process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'abap-adt-agent-tools-'));
 
 /** The real production include (ZFIR_GXYH040_FRM, 2063 lines) as test data. */
 const REAL_SOURCE = readFileSync(
@@ -1592,11 +1603,11 @@ test('D1: without the optional dsh-fs service the plugin still works and fs tool
       { objects: [{ name: 'ZCL_DEMO', type: 'CLAS' }], targetDir: 'C:/tmp/x' },
       exec,
     ),
-    /requires the dsh filesystem service/,
+    /requires a host filesystem service/,
   );
   await assert.rejects(
     () => by.get('adt_push_object')!.execute({ name: 'ZCL_DEMO', type: 'CLAS' }, exec),
-    /requires the dsh filesystem service/,
+    /requires a host filesystem service/,
   );
 });
 

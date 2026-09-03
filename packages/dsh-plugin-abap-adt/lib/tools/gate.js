@@ -3,7 +3,7 @@
  * battery over a package or object set (syntax check + ABAP Unit + ATC) in one
  * call and returns a single go/no-go verdict. Read-only (runs checks only).
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, NAME_TYPE_OBJECTS_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, text } from './common.js';
 import { resolveObject } from '../resolve.js';
 /** Pure aggregation: all enabled stages must pass for a "go"; a stage the
@@ -17,8 +17,9 @@ export function gateTools(deps) {
     return [
         defineTool({
             name: 'adt_release_gate',
-            description: 'Pre-release quality gate: runs syntax check + ABAP Unit + ATC over a package or object set in one call ' +
-                'and returns a go/no-go verdict. Use before releasing a transport request — "verify everything, then push". ' +
+            description: 'Verify a package or object set before release: runs syntax check + ABAP Unit + ATC over a DEVC ' +
+                'package or explicit CLAS/INTF/PROG/DDLS… list in one call and returns a go/no-go verdict. Use it ' +
+                'before releasing a transport request (SE10) — "verify everything, then push". ' +
                 'Read-only (only runs checks; nothing is activated or transported).',
             parameters: {
                 packageName: { type: 'string', description: 'Check every member of this development package.' },

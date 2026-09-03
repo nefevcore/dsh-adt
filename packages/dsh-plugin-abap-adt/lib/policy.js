@@ -1,8 +1,9 @@
 /**
  * ADT permission policy ("权限管控") — the guard rails applied to every
- * mutating tool of the plugin.
+ * mutating tool of the plugin, and (since the read-side upgrade) to
+ * row-returning reads as well.
  *
- * Six independent knobs, each resolvable from three sources (in order):
+ * Nine independent knobs, each resolvable from three sources (in order):
  *
  *   1. explicit plugin config (`cordis.patch.yml` → `config:` block)
  *   2. a `SAP_*` environment variable
@@ -16,11 +17,20 @@
  * | allowed development package | `allowedPackages`         | `SAP_ALLOWED_PACKAGES`        | `*`     |
  * | program/class execution     | `allowExecution`          | `SAP_ALLOW_EXECUTION`         | `true`  |
  * | write parts in adt_batch    | `allowBatchWrites`        | `SAP_ALLOW_BATCH_WRITES`      | `false` |
+ * | read-side table profile     | `blockedTablesProfile`    | `SAP_BLOCKED_TABLES_PROFILE`  | `off`   |
+ * | extra blocked tables        | `blockedTables`           | `SAP_BLOCKED_TABLES`          | (none)  |
+ * | blocked-table exemptions    | `allowedTables`           | `SAP_ALLOWED_TABLES`          | (none)  |
+ * | debugger tool family        | `allowDebugger`           | `SAP_ALLOW_DEBUGGER`          | `false` |
+ * | debugger variable writes    | `allowDebugVariables`     | `SAP_ALLOW_DEBUG_VARIABLES`   | `false` |
  *
  * Pattern lists (`allowedTransports`, `allowedPackages`) are comma-separated
  * globs: `*` matches any sequence, `?` any single char; matching is
  * case-insensitive. `*` alone (or an empty/omitted value) allows everything.
  * `$TMP` is the SAP "Local Objects" package (no transport involved).
+ *
+ * Table lists (`blockedTables`, `allowedTables`) accept SAP-name globs where
+ * `*` means `[A-Z0-9_]*` (see tableblocklist.ts); env values are
+ * comma-separated.
  *
  * Semantics:
  *  - `enableTransports=false`  → every transport-family tool (`adt_list_*`,
@@ -42,6 +52,22 @@
  *    default; write parts additionally require this knob because a generic
  *    embedded POST/PUT cannot be per-object policy-checked. Dedicated write
  *    tools remain the policy-enforced path.
+ *  - `blockedTablesProfile`    → read-side governance of `adt_data_preview`
+ *    (opt-in, default `off`). When active, row reads of cataloged sensitive
+ *    tables are DENIED before any request is sent, with the category and
+ *    reason; a deny can never be bypassed. `blockedTables` adds custom
+ *    names/patterns; `allowedTables` exempts names per destination — every
+ *    exemption use is reported back for the audit trail. See
+ *    tableblocklist.ts for the tiers.
+ *
+ * Destination environment profile (`profile: dev|qa|prd`, a destination-level
+ * key — NOT part of the `policy:` block):
+ *  - `dev` (default): the knobs above apply as written.
+ *  - `qa`: `allowExecution` and `allowBatchWrites` default to `false`
+ *    (explicit config/env values still open them).
+ *  - `prd`: execution and batch writes are HARD-DENIED — not even an explicit
+ *    `allowExecution: true` overrides the prd tier (fail-closed; no prd
+ *    allowlist by design).
  *
  * Every denial throws an {@link AdtPolicyError} carrying the rule id, so the
  * agent sees exactly which knob blocked it and how to adapt.
@@ -49,6 +75,7 @@
  * The module is intentionally dependency-free (pure logic + `process.env`)
  * so it can be unit-tested without a live SAP system.
  */
+import { findBlockedTable, } from './tableblocklist.js';
 /** SAP "Local Objects" package — edits here never touch the transport system. */
 export const LOCAL_PACKAGE = '$TMP';
 /** Environment variable names for the policy knobs. */
@@ -59,11 +86,17 @@ export const POLICY_ENV = {
     allowedPackages: 'SAP_ALLOWED_PACKAGES',
     allowExecution: 'SAP_ALLOW_EXECUTION',
     allowBatchWrites: 'SAP_ALLOW_BATCH_WRITES',
+    blockedTablesProfile: 'SAP_BLOCKED_TABLES_PROFILE',
+    blockedTables: 'SAP_BLOCKED_TABLES',
+    allowedTables: 'SAP_ALLOWED_TABLES',
+    allowDebugger: 'SAP_ALLOW_DEBUGGER',
+    allowDebugVariables: 'SAP_ALLOW_DEBUG_VARIABLES',
 };
 /**
- * Built-in defaults: permissive for edits/execution, strict for batch writes.
- * Exported for the workspace file renderer, which shows them as the commented
- * template values of the policy keys.
+ * Built-in defaults: permissive for edits/execution, strict for batch writes,
+ * read-side governance OFF (opt-in — enabling it must never break an existing
+ * user). Exported for the workspace file renderer, which shows them as the
+ * commented template values of the policy keys.
  */
 export const POLICY_DEFAULTS = {
     enableTransports: true,
@@ -72,10 +105,17 @@ export const POLICY_DEFAULTS = {
     allowedPackages: '*',
     allowExecution: true,
     allowBatchWrites: false,
+    blockedTablesProfile: 'off',
+    blockedTables: [],
+    allowedTables: [],
+    allowDebugger: false,
+    allowDebugVariables: false,
 };
 /**
- * The six policy knob keys — the canonical list config.ts (known-key
+ * The policy knob keys — the canonical list config.ts (known-key
  * validation) and registry.ts (workspace-layer overlay) derive theirs from.
+ * The destination `profile` is deliberately NOT a knob: it is a
+ * destination-level sibling of the `policy:` block.
  */
 export const POLICY_KEYS = Object.keys(POLICY_DEFAULTS);
 /** Thrown when a policy rule denies an operation. */
@@ -134,6 +174,34 @@ export function parseEnvBoolean(value) {
         return false;
     return undefined;
 }
+/** Parse a comma/space-separated env value into an uppercase name list. */
+function parseEnvList(value) {
+    if (value === undefined)
+        return undefined;
+    const parts = value
+        .split(/[\s,]+/)
+        .map((part) => part.trim().toUpperCase())
+        .filter((part) => part.length > 0);
+    return parts.length > 0 ? parts : undefined;
+}
+/** Normalize a profile word (`undefined` for unset/empty, throws on junk). */
+function normalizeProfile(value, what) {
+    if (value === undefined || value === null || value === '')
+        return 'dev';
+    const word = String(value).trim().toLowerCase();
+    if (word === 'dev' || word === 'qa' || word === 'prd')
+        return word;
+    throw new AdtPolicyError('profile', `invalid ${what} '${String(value)}' (expected dev, qa or prd)`);
+}
+/** Validate a read-side profile word (`undefined` for unset, throws on junk). */
+function normalizeBlockedProfile(value, what) {
+    if (value === undefined || value === null || value === '')
+        return undefined;
+    const word = String(value).trim().toLowerCase();
+    if (word === 'off' || word === 'minimal' || word === 'standard' || word === 'strict')
+        return word;
+    throw new AdtPolicyError('blockedTablesProfile', `invalid ${what} '${String(value)}' (expected off, minimal, standard or strict)`);
+}
 /** The resolved, enforced policy for one plugin instance. */
 export class AdtPolicy {
     enableTransports;
@@ -142,6 +210,18 @@ export class AdtPolicy {
     allowedPackages;
     allowExecution;
     allowBatchWrites;
+    /** Debugger tool family (adt_debug_*): off unless explicitly enabled. */
+    allowDebugger;
+    /** Writing debuggee variables (adt_debug_set_variable): double opt-in. */
+    allowDebugVariables;
+    /** Destination environment profile (dev keeps the plain knob semantics). */
+    profile;
+    /** Read-side governance profile for row-returning reads (`off` = none). */
+    blockedTablesProfile;
+    /** Custom blocked names/patterns added on top of the built-in catalog. */
+    blockedTables;
+    /** Exemptions from the blocked-table catalog (audited on every use). */
+    allowedTables;
     /** Where each knob's effective value came from (for `adt_permissions`). */
     sources;
     constructor(effective) {
@@ -151,11 +231,20 @@ export class AdtPolicy {
         this.allowedPackages = parsePatterns(effective.allowedPackages);
         this.allowExecution = effective.allowExecution;
         this.allowBatchWrites = effective.allowBatchWrites;
+        this.allowDebugger = effective.allowDebugger;
+        this.allowDebugVariables = effective.allowDebugVariables;
+        this.profile = effective.profile;
+        this.blockedTablesProfile = effective.blockedTablesProfile;
+        this.blockedTables = effective.blockedTables;
+        this.allowedTables = effective.allowedTables;
         this.sources = effective.sources;
     }
     /**
      * Resolve the effective policy: explicit config > `SAP_*` env var > default.
      * `env` defaults to `process.env`; pass a stub for tests.
+     *
+     * The destination profile then TIGHTENS the result (never loosens it):
+     * qa defaults the execution/batch knobs to false; prd hard-denies them.
      */
     static resolve(config, env = process.env) {
         const sources = {
@@ -165,44 +254,93 @@ export class AdtPolicy {
             allowedPackages: 'default',
             allowExecution: 'default',
             allowBatchWrites: 'default',
+            blockedTablesProfile: 'default',
+            blockedTables: 'default',
+            allowedTables: 'default',
+            allowDebugger: 'default',
+            allowDebugVariables: 'default',
+            profile: 'default',
         };
-        const enableTransports = config.enableTransports ?? parseEnvBoolean(env[POLICY_ENV.enableTransports]);
-        if (config.enableTransports !== undefined)
-            sources.enableTransports = 'config';
-        else if (enableTransports !== undefined && env[POLICY_ENV.enableTransports] !== undefined)
-            sources.enableTransports = 'env';
-        const allowTransportableEdits = config.allowTransportableEdits ?? parseEnvBoolean(env[POLICY_ENV.allowTransportableEdits]);
-        if (config.allowTransportableEdits !== undefined)
-            sources.allowTransportableEdits = 'config';
-        else if (allowTransportableEdits !== undefined && env[POLICY_ENV.allowTransportableEdits] !== undefined)
-            sources.allowTransportableEdits = 'env';
-        const allowedTransportsRaw = config.allowedTransports ?? env[POLICY_ENV.allowedTransports];
-        if (config.allowedTransports !== undefined)
-            sources.allowedTransports = 'config';
-        else if (env[POLICY_ENV.allowedTransports] !== undefined)
-            sources.allowedTransports = 'env';
-        const allowedPackagesRaw = config.allowedPackages ?? env[POLICY_ENV.allowedPackages];
-        if (config.allowedPackages !== undefined)
-            sources.allowedPackages = 'config';
-        else if (env[POLICY_ENV.allowedPackages] !== undefined)
-            sources.allowedPackages = 'env';
-        const allowExecution = config.allowExecution ?? parseEnvBoolean(env[POLICY_ENV.allowExecution]);
-        if (config.allowExecution !== undefined)
-            sources.allowExecution = 'config';
-        else if (allowExecution !== undefined && env[POLICY_ENV.allowExecution] !== undefined)
-            sources.allowExecution = 'env';
-        const allowBatchWrites = config.allowBatchWrites ?? parseEnvBoolean(env[POLICY_ENV.allowBatchWrites]);
-        if (config.allowBatchWrites !== undefined)
-            sources.allowBatchWrites = 'config';
-        else if (allowBatchWrites !== undefined && env[POLICY_ENV.allowBatchWrites] !== undefined)
-            sources.allowBatchWrites = 'env';
+        // Per-shape knob resolvers — each records WHERE its value came from.
+        // (config > SAP_* env > built-in default; the default itself is applied
+        // by the caller/constructor, except where tiering intervenes below.)
+        const booleanKnob = (key) => {
+            const value = config[key] ?? parseEnvBoolean(env[POLICY_ENV[key]]);
+            if (config[key] !== undefined)
+                sources[key] = 'config';
+            else if (value !== undefined && env[POLICY_ENV[key]] !== undefined)
+                sources[key] = 'env';
+            return value;
+        };
+        const stringKnob = (key) => {
+            const value = config[key] ?? env[POLICY_ENV[key]];
+            if (config[key] !== undefined)
+                sources[key] = 'config';
+            else if (env[POLICY_ENV[key]] !== undefined)
+                sources[key] = 'env';
+            return value;
+        };
+        const listKnob = (key) => {
+            const value = config[key] ?? parseEnvList(env[POLICY_ENV[key]]) ?? [];
+            if (config[key] !== undefined)
+                sources[key] = 'config';
+            else if (value.length > 0)
+                sources[key] = 'env';
+            return value;
+        };
+        const enableTransports = booleanKnob('enableTransports');
+        const allowTransportableEdits = booleanKnob('allowTransportableEdits');
+        const allowedTransportsRaw = stringKnob('allowedTransports');
+        const allowedPackagesRaw = stringKnob('allowedPackages');
+        const allowExecution = booleanKnob('allowExecution');
+        const allowBatchWrites = booleanKnob('allowBatchWrites');
+        const allowDebugger = booleanKnob('allowDebugger');
+        const allowDebugVariables = booleanKnob('allowDebugVariables');
+        const blockedTables = listKnob('blockedTables');
+        const allowedTables = listKnob('allowedTables');
+        const profile = normalizeProfile(config.profile, 'destination profile');
+        if (config.profile !== undefined)
+            sources.profile = 'config';
+        const blockedTablesProfile = normalizeBlockedProfile(config.blockedTablesProfile, 'blockedTablesProfile')
+            ?? normalizeBlockedProfile(env[POLICY_ENV.blockedTablesProfile], `${POLICY_ENV.blockedTablesProfile} value`);
+        if (blockedTablesProfile !== undefined) {
+            sources.blockedTablesProfile =
+                config.blockedTablesProfile !== undefined ? 'config' : 'env';
+        }
+        // Destination-profile tiering — tighten only, never loosen:
+        let effectiveExecution = allowExecution ?? POLICY_DEFAULTS.allowExecution;
+        let effectiveBatchWrites = allowBatchWrites ?? POLICY_DEFAULTS.allowBatchWrites;
+        let effectiveDebugger = allowDebugger ?? POLICY_DEFAULTS.allowDebugger;
+        if (profile === 'qa') {
+            // Unset knobs default to closed on QA systems; explicit values stand.
+            if (sources.allowExecution === 'default')
+                effectiveExecution = false;
+            if (sources.allowBatchWrites === 'default')
+                effectiveBatchWrites = false;
+            if (sources.allowDebugger === 'default')
+                effectiveDebugger = false;
+        }
+        if (profile === 'prd') {
+            // HARD deny — an explicit true must not open execution, generic batch
+            // writes, or the debugger on production (fail-closed; the assert
+            // methods carry the prd-specific message).
+            effectiveExecution = false;
+            effectiveBatchWrites = false;
+            effectiveDebugger = false;
+        }
         return new AdtPolicy({
             enableTransports: enableTransports ?? POLICY_DEFAULTS.enableTransports,
             allowedTransports: allowedTransportsRaw ?? POLICY_DEFAULTS.allowedTransports,
             allowTransportableEdits: allowTransportableEdits ?? POLICY_DEFAULTS.allowTransportableEdits,
             allowedPackages: allowedPackagesRaw ?? POLICY_DEFAULTS.allowedPackages,
-            allowExecution: allowExecution ?? POLICY_DEFAULTS.allowExecution,
-            allowBatchWrites: allowBatchWrites ?? POLICY_DEFAULTS.allowBatchWrites,
+            allowExecution: effectiveExecution,
+            allowBatchWrites: effectiveBatchWrites,
+            allowDebugger: effectiveDebugger,
+            allowDebugVariables: allowDebugVariables ?? POLICY_DEFAULTS.allowDebugVariables,
+            profile,
+            blockedTablesProfile: blockedTablesProfile ?? POLICY_DEFAULTS.blockedTablesProfile,
+            blockedTables,
+            allowedTables,
             sources,
         });
     }
@@ -257,6 +395,11 @@ export class AdtPolicy {
     }
     /** Rule: program/class execution must be enabled (adt_execute). */
     assertExecutionAllowed(context) {
+        if (this.profile === 'prd') {
+            throw new AdtPolicyError('allowExecution', `${context}: executing programs/classes is hard-denied on profile: prd destinations — ` +
+                'the prd tier cannot be opened up by configuration (fail-closed). ' +
+                'Run the program on a dev/qa destination instead.');
+        }
         if (!this.allowExecution) {
             throw new AdtPolicyError('allowExecution', `${context}: executing programs/classes is disabled on this destination ` +
                 `(set ${POLICY_ENV.allowExecution}=true or allowExecution: true to permit)`);
@@ -264,10 +407,61 @@ export class AdtPolicy {
     }
     /** Rule: write parts inside adt_batch must be explicitly allowed. */
     assertBatchWritesAllowed(context) {
+        if (this.profile === 'prd') {
+            throw new AdtPolicyError('allowBatchWrites', `${context}: adt_batch write parts are hard-denied on profile: prd destinations — ` +
+                'the prd tier cannot be opened up by configuration (fail-closed). ' +
+                'Use dedicated write tools on a dev/qa destination instead.');
+        }
         if (!this.allowBatchWrites) {
             throw new AdtPolicyError('allowBatchWrites', `${context}: adt_batch write parts are disabled (read-only GET fan-out is always allowed). ` +
                 `A generic embedded POST/PUT bypasses per-object policy checks; set ${POLICY_ENV.allowBatchWrites}=true ` +
                 'or use the dedicated write tools (adt_write_object / adt_write_structure), which ARE policy-checked');
+        }
+    }
+    /**
+     * Rule: a row-returning read of these tables must not hit the blocked-table
+     * catalog (read-side governance, `blockedTablesProfile`). A deny throws
+     * BEFORE any backend request is sent and always names the category and
+     * reason. Tables exempt via `allowedTables` pass and are returned in
+     * `exempted` so the caller can surface the audit note.
+     */
+    assertTableReadsAllowed(tables, context) {
+        if (this.blockedTablesProfile === 'off')
+            return { exempted: [] };
+        const exempted = [];
+        for (const raw of tables) {
+            const table = raw.toUpperCase();
+            if (matchesAny(this.allowedTables, table)) {
+                exempted.push(table);
+                continue;
+            }
+            const hit = findBlockedTable(table, this.blockedTablesProfile, this.blockedTables);
+            if (hit) {
+                throw new AdtPolicyError('blockedTables', `${context}: blockedTables: ${hit.table} — ${hit.category}: ${hit.why} ` +
+                    `(profile: ${this.blockedTablesProfile}; refused before any request was sent — ` +
+                    'DDIC metadata reads stay allowed; exempt a table with allowedTables, or read a ' +
+                    'released CDS view that masks the sensitive fields)');
+            }
+        }
+        return { exempted };
+    }
+    /** Rule: the debugger tool family must be explicitly enabled (adt_debug_*). */
+    assertDebuggerAllowed(context) {
+        if (this.profile === 'prd') {
+            throw new AdtPolicyError('allowDebugger', `${context}: the debugger is hard-denied on profile: prd destinations — ` +
+                'debugging holds a system session and can change program state; run it on a dev/qa destination');
+        }
+        if (!this.allowDebugger) {
+            throw new AdtPolicyError('allowDebugger', `${context}: the ABAP debugger is disabled on this destination ` +
+                `(set ${POLICY_ENV.allowDebugger}=true or allowDebugger: true to permit — it holds a stateful ` +
+                'session and stops live processes)');
+        }
+    }
+    /** Rule: writing debuggee variables needs the extra knob (double opt-in). */
+    assertDebugVariablesAllowed(context) {
+        if (!this.allowDebugVariables) {
+            throw new AdtPolicyError('allowDebugVariables', `${context}: changing variable VALUES in the debugger is disabled ` +
+                `(set ${POLICY_ENV.allowDebugVariables}=true or allowDebugVariables: true; requires allowDebugger too)`);
         }
     }
     /** Snapshot for the `adt_permissions` introspection tool. */
@@ -279,6 +473,12 @@ export class AdtPolicy {
             allowedPackages: this.allowedPackages,
             allowExecution: this.allowExecution,
             allowBatchWrites: this.allowBatchWrites,
+            allowDebugger: this.allowDebugger,
+            allowDebugVariables: this.allowDebugVariables,
+            profile: this.profile,
+            blockedTablesProfile: this.blockedTablesProfile,
+            blockedTables: this.blockedTables,
+            allowedTables: this.allowedTables,
             sources: { ...this.sources },
             defaults: { ...POLICY_DEFAULTS },
         };

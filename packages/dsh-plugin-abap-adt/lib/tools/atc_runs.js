@@ -1,4 +1,4 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, ATC_AGGREGATES_SCHEMA, ATC_COUNTS_SCHEMA, ATC_FINDINGS_SCHEMA, atcAggregatesSuffix, atcFindingOutput, renderAtcFindings, DESTINATION_PARAM, destinationOf, text, } from './common.js';
 /**
  * ATC run-introspection tools: list existing ATC runs on the system and fetch

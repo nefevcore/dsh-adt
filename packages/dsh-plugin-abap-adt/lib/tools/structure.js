@@ -16,7 +16,7 @@
  * Writes go through the same permission gates as every edit (package
  * whitelist, transport policy incl. backend-assigned CORRNR rollback).
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { AdtError, } from '@nefevcore/abap-adt-protocol';
 import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, PACKAGE_HINT_PARAM, assertExplicitTransport, assertObjectEditable, destinationOf, optStr, resolveToolObject, text, } from './common.js';
 const KINDS = ['MSAG', 'DOMA', 'DTEL', 'TTYP'];

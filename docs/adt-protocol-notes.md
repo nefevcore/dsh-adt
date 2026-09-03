@@ -26,6 +26,11 @@
 3. 写请求带 `x-csrf-token` + `Cookie`
 4. 403（含 "CSRF"）/ 401（写操作）→ 丢弃 token+cookie 重取重试一次
 
+**预热语义（已核实，P0-5）**：token 是懒取的，但取的动作发生在**首个写请求发出之前**
+（`request()` 内 `await ensureCsrfToken()` 先于 attempt 循环）——不存在"首请求裸奔"窗口，
+无需 abap-mcp 式的显式 connect() 预热。`quirks.test.ts` 的两个 CSRF 测试锁定该顺序
+（首写必先探针、缓存复用、403 失效后重探重试一次）。
+
 ### 会话头
 - `sap-adt-connection-id: <uuid>` — 所有请求
 - `x-sap-adt-sessiontype: stateful` — 写链（锁定/激活/写入）；7.40 旧系统上会导致锁进会话内存（423），需可关闭

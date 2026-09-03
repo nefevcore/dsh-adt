@@ -1,4 +1,17 @@
-import type { Context } from '@deepseek-ai/cordis';
+/**
+ * adt_write_object — replace an object's whole source (lock → write → unlock,
+ * with policy enforcement and lock-ledger tracking); optional `activate`
+ * fires the activation in the same call so the common write-then-activate
+ * loop is one round-trip.
+ *
+ * adt_edit_object — replace exactly ONE block of an existing source (class
+ * method, FORM, FUNCTION, MODULE, or any marker-delimited block) without
+ * uploading the whole object. Block matching mirrors the semantics of the
+ * DSH `edit` tool: markers are matched against comment-stripped lines, and
+ * an AMBIGUOUS marker (multiple candidate lines) is an error listing the
+ * candidates — never a silent first-match.
+ */
+import { type ToolHost } from '../tooldef.js';
 import { type ToolDeps } from './common.js';
 export interface ReplaceBlockOptions {
     /** 1-based index among the start marker's matches (for duplicate lines). */
@@ -54,5 +67,5 @@ export declare function replaceSourceBlock(source: string, startText: string, en
 export declare function replaceSourceText(source: string, oldText: string, newText: string, options?: {
     occurrence?: number;
 }): ReplaceBlockResult;
-export declare function writeTools(deps: ToolDeps, ctx: Context): import("@deepseek-ai/dsh-tools").ToolDefinition[];
+export declare function writeTools(deps: ToolDeps, ctx: ToolHost): import("../tooldef.js").DefinedTool[];
 //# sourceMappingURL=write.d.ts.map

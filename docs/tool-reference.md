@@ -1,6 +1,6 @@
 # adt_* 工具清单 — 入参 / 返回参考
 
-> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **38 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代）。
+> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **46 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代）。
 > 标记约定：🛡 = 经过**目标目的地**的权限策略校验；⏱ = 自定义超时；🔒 = 声明 `isConcurrencySafe`（可并发/只读）。
 > 通用参数 `destination`（string，可省略 = 默认目的地）适用于除 `adt_local_check` / `adt_permissions` / `adt_list_destinations` / `adt_list_gui_connections` / `adt_create_destination` 外的所有工具，下表不再重复。
 > 通用对象引用三元组：`objectUri`（精确 URI，优先）/ `name` / `type`（短码或 ADT 形式，如 CLAS 或 CLAS/OC）。
@@ -45,7 +45,9 @@
 ### adt_permissions 🔒
 策略自省：**全局默认 + 每个目的地的生效策略**（目的地 `policy:` 块逐键覆盖全局）及每项来源。
 - **入参**：无。
-- **返回**：`enableTransports, allowedTransports[], allowTransportableEdits, allowedPackages[], sources{}, defaults{}, perDestination{ <name>: {同前四项 + sources} }`。
+- **返回**：`enableTransports, allowedTransports[], allowTransportableEdits, allowedPackages[], allowExecution, allowBatchWrites, allowDebugger, allowDebugVariables, profile(dev|qa|prd), blockedTablesProfile, blockedTables[], allowedTables[], sources{}, defaults{}, perDestination{ <name>: {同前 + sources} }`。
+- **profile 语义**：目的地级 `profile: dev|qa|prd`（默认 dev）——qa 把 allowExecution/allowBatchWrites（qa 连 allowDebugger）**未显式配置时默认收 false**；prd 对执行/批量写/调试器**硬拒**（显式开也拒，报错含 `profile: prd`）。
+- **读侧治理**：`blockedTablesProfile`（off/minimal/standard/strict，默认 off）+ `blockedTables[]`（自定义追加，`*` = `[A-Z0-9_]*`）+ `allowedTables[]`（豁免，审计留痕——工具输出 note + logger）。
 
 ### adt_selfcheck 🔒（能力巡检 sweep）
 对一个目的地做**只读能力扫描**（绝不写、绝不执行代码）：对每个只读能力用一个探针对象实跑并给出判定——`answered / empty（真空，非故障）/ absent（后端无此服务，404/405）/ refused（策略拒绝）/ dead（返回空而独立 oracle 证明有内容——本工具存在的理由）/ broken（我们的错误）/ skipped（无探针输入）`。探针对象默认取搜索 `Z*` 的第一个类，也可显式传 `name`(+`type`)。
@@ -110,8 +112,9 @@
 
 ### adt_create_object 🛡
 新建对象。支持的类型：CLAS / INTF / PROG / DDLS / TABL / STRU / **DOMA / DTEL / TTYP** / MSAG / FUNC / DEVC。
-- **入参**：`type`*（12 种枚举）；`name`*；`description`*；`packageName`*（`$TMP` = 本地）；`transport`（需要传输时）。
-- **返回**：`success, uri, name, type, messages[] { severity, text }`。
+- **入参**：`type`*（12 种枚举）；`name`*；`description`*；`packageName`*（`$TMP` = 本地）；`transport`（需要传输时）；**TABL 一步建表**：`fields[]`（每项 `{name*, type*, length?, decimals?, isKey?, notNull?, description?}`——type 为内建码 CHAR/NUMC/RAW/DEC/CURR/QUAN/INT1..8/FLTP/STRING/RAWSTRING/DATS/TIMS/UTCLONG/UUID/CHARnn/NUMCnn 或数据元素名）、`deliveryClass`（默认 A）、`tableCategory`（默认 TRANSPARENT）。
+- **返回**：`success, uri, name, type, messages[] { severity, text }, activated?, ddlSource?`（TABL 一步流：激活结果 + 生成的 DDIC 2.0 DDL 全文）。
+- **TABL 一步流**：fields → 生成 DDIC 2.0 DDL（`define table`，自动 MANDT 键 `key client : abap.clnt not null`、`@AbapCatalog.*` 注解、`@EndUserText.label` 字段标签）→ blueSource 创建 → 锁内写源 → 解锁 → **激活**，一条龙；`success` 即激活成功（未激活的表对消费者不存在）。无 fields 时保持占位创建现状；空 fields 数组是错误不是静默占位。
 - **特殊**：后端 500-but-created 探测；建后锁卫生（自动锁无 handle 时记入锁账本）。
 
 ### adt_delete_object 🛡
@@ -253,22 +256,96 @@
 - **入参**：对象三元组；`kind`；按类型提供 `description` / `messages[]`（MSAG 全量替换，缺号即删）/ `properties{}`（DOMA/DTEL/TTYP 局部补丁）/ `fixedValues[]`（DOMA 全量替换）/ `labels{}`（DTEL 局部补丁）；`transport`；`packageName`（策略 hint）。
 - **返回**：`name, kind, changed[]（应用的字段）, transport?, data（写后生效结构）`。
 
+## 8c. 文本元素（1）
+
+### adt_read_textelements 🔒
+读程序的**文本元素**（标准 ADT 端点，无 Z 组件）：文本符号（I，键 001/002… 带 max length）/ 选择文本（S，参数与选择屏幕字段名）/ 列表标题（H，listHeader/columnHeader_N）。行结构即经典 TEXTPOOL（`READ TEXTPOOL` 同款 ID/KEY/ENTRY/LENGTH）。
+- **入参**：`name`*（**主程序**名——include 的文本元素挂在其主程序上）；`type`（PROG 或 REPT，默认 PROG）。
+- **返回**：`program, elements[] { id: I|S|H, key, entry, length? }, counts { symbols, selections, headings }, note?`（全空时 note 提示"程序未定义或后端不暴露该服务"）。
+- **写侧暂缓**：改动文本元素暂不支持（端点 PUT 格式需先在真实系统验证）；用 SE32/SE38 或传输处理。
+
+## 8d. 协变分析（1）
+
+### adt_cochange 🔒
+传输共变分析（"什么通常一起变更"——vsp graph 的低成本切片）：读每个输入对象的版本历史取其传输号，展开这些请求的条目清单，按**共享传输数**排序共现对象。改前评估回归范围/评审清单。
+- **入参**：`objects`*（1..10 项，`{name*, type?}`）；`top`（默认 20，钳 1–50）；`maxTransports`（展开的传输数上限，默认 30，钳 1–50——超出截断并在 note 说明）。
+- **返回**：`inputs[], coChanges[] { name, type?, sharedTransports, transports[], description? }, analyzedTransports[], totalCandidates, note?`。
+- **数据面**：版本 feed + 传输条目（同 adt_object_versions / adt_get_transport），无 E070/E071 SQL；局限——保存历史未记录传输的对象不可见（新对象、他系统纯传输）。
+- **策略**：enableTransports 门（版本 feed 泄漏传输号，同 adt_object_versions）。
+
 ## 9. 数据预览（1）
 
 ### adt_data_preview 🔒
-读表 / CDS 视图行数据，或跑 freestyle SELECT。`kind` 枚举**与其他工具的类型码完全一致**（TABL/VIEW/STRU/DDLS，对齐 ADT URI 命名空间 /ddic/tables、/ddic/views、/ddic/structures、/ddls），模型无需切换命名体系。
+读表 / CDS 视图行数据，或跑 freestyle SELECT（SE16/SE16N 式数据浏览器）。`kind` 枚举**与其他工具的类型码完全一致**（TABL/VIEW/STRU/DDLS，对齐 ADT URI 命名空间 /ddic/tables、/ddic/views、/ddic/structures、/ddls），模型无需切换命名体系。
 - **入参**：`name`（大写实体名）+ `kind`（enum TABL/VIEW/STRU/DDLS，默认 TABL），或 `sql`（二选一）；`length`（行数窗口，默认 100，钳 1–5000；旧别名 `top`）；`offset`（跳过前 N 行——行范围 = offset..offset+length，客户端分页，SQL 路径同样生效）。
 - **返回**：`source, name, offset, totalRows, note?, queryExecutionTime?, columns[] { name, type, description?, length? }, rows[], rawXml?`。
 - ABAP Cloud 阻止直连 DB 表（CDS/SQL 可用）；无 datapreview 服务的 profile 给明确错误。
+- **读侧治理（blockedTables）**：目的地启用 `blockedTablesProfile` 后，两条路径都在**发请求前**解析目标表（SQL 走 FROM/JOIN 提取器）并过敏感表目录——命中即 `[POLICY] blockedTables: <表> — <类别>: <理由>` 拒绝（**零请求**，deny 无豁免通道）；`allowedTables` 豁免的读取照常并带审计 note。目录分层：minimal（银行/客户供应商 PII/地址/认证/HR/税务）⊂ standard（+交易单据等受保护业务数据）⊂ strict（+审计日志/通信工作流/`Z*` 命名空间）。
 
 ---
 
+## 10. 调试器（5）— 标准 ADT REST，零服务端安装
+
+> 全族经 `/sap/bc/adt/debugger/*`（新式 ABAP 调试器），**策略总闸 `allowDebugger`（默认 false）**——调试持有有状态会话并可能停掉生产进程；prd profile 目的地硬拒。会话身份（terminalId/ideId）是**插件级**状态（src/debugger.ts）：一个 ADT 会话只能持一个调试会话，detach 后不能重 attach（重 listen 用全新身份）；插件卸载时自动 detach 全部监听器。断点为外部作用域（对目标用户生效）；标准代码断点常不触发（SAP 默认只停客户代码）。
+
+### adt_debug_session 🛡⏱
+管理调试会话：`listen`（注册监听器并**长轮询等待**断点命中；空响应 = 等待窗内无命中，监听器保持注册）/ `status`（本地会话 + 后端监听器注册表）/ `detach`（结束会话——之后需重新 listen）。
+- **入参**：`action`*（listen/status/detach）；`username`（调试目标用户，默认目的地用户）；`timeoutSeconds`（listen 等待窗 1–240s，默认 30）。
+- **返回**：`action, destination, hit?, timedOut?, conflict?, debuggee? { id, program, include, line, user, kind, … }, session?, backendListeners?, detached?, note?`。
+
+### adt_debug_breakpoint 🛡
+设/删**行断点**（外部作用域）。set 支持对象三元组解析 URI（自动补 `/source/main`），返回断点 id 供 delete。
+- **入参**：`action`*（set/delete）；set：对象三元组 + `line`*（1 起行号）；delete：`id`*（set 返回的断点号）；`username`。
+- **返回**：`action, destination, breakpoints?[] { id, uri, line, kind }, deleted?`。
+
+### adt_debug_step 🛡⏱
+单步停止的 debuggee：stepInto(F5) / stepOver(F6) / stepReturn(F7) / stepContinue(F8，跑到下个断点) / terminateDebuggee（终止调试进程）。
+- **入参**：`step`*（五选一）。
+- **返回**：`step, destination, result { step, debugSessionId?, program?, include?, line?, isSteppingPossible?, isTerminationPossible?, isDebuggeeChanged?, reachedBreakpoints[] }`。
+
+### adt_debug_inspect 🛡
+检查停止的 debuggee：`variables` 读指定变量值（`LV_COUNT`/`WA_MARA`/`IT_TABLE`…）；`stack` 读调用栈（program/include/line 逐帧；BASIS < ~7.51 无 `/debugger/stack` 端点——探测一次后本地回答 `unavailable` + 说明）。
+- **入参**：`action`*（variables/stack）；variables：`variables`*（非空名数组）。
+- **返回**：`action, destination, variables?[] { name, value?, declaredTypeName?, readOnly?, … }, stack? { entries[] { stackPosition, programName, includeName, line, … }, cursorIndex?, unavailable?, note? }`。
+
+### adt_debug_set_variable 🛡
+**改** debuggee 变量值（高危）。**双重 opt-in**：`allowDebugger` **且** `allowDebugVariables`（均默认 false）；只读变量被后端拒绝。
+- **入参**：`name`*（大写变量名）；`value`*（ABAP 字面量文本，如 `42` 或 `NEWTEXT`）。
+- **返回**：`name, value, destination`。
+
+---
+
+## 11. Compact CRUD 门面（1）
+
+### adt_crud 🛡
+**动词×类型的紧凑门面**：传 `verb`（create/read/update/delete）+ `type` + 对象引用，调用路由到拥有该 verb×type 的**专用工具**原样执行——权限策略、OCC 快照校验、写后持久性验证、传输管控全部走专用工具的原链路（门面零第二实现，因此**零策略绕过**）；每个应答的 `routedTool` 指明实际执行者（也是发现专用工具的路径）。不传 `verb` 返回能力矩阵状态卡；不支持的 verb×type 报错并列出该类型**支持什么**（绝不裸"no handler"）。
+- **入参**：`verb`（enum，可省略 = 矩阵卡）；`type`（13 类型短码）；对象三元组（`name`/`objectUri`）；create：`description`*、`packageName`*、`transport`、TABL 的 `fields`/`deliveryClass`/`tableCategory`；update：源码对象 `source`/`sourceFile`，结构化对象 `properties`/`messages`/`fixedValues`/`labels`；共用 `activate`、`transport`。
+- **返回**：所路由工具的全部输出字段 + `routedTool` + `verb` + `type`（透传扁平结构）；无 verb 时 `{ matrix, routedTool }`。
+- **矩阵即单一事实源**：下表由 `src/crudmatrix.ts` 渲染，`crudmatrix.test.ts` 锁定文档与代码一致；`adt_create_object` 的类型枚举也由它派生。**长尾规则**：将来新增对象类型（RAP BDEF/SRVD/SRVB、屏幕、DDLX…）超过 ~5 类时，只在此矩阵 + 协议端点落一行，经本门面暴露，**不再加细粒度工具**。
+
+| type | create | read | update | delete |
+|---|---|---|---|---|
+| CLAS | adt_create_object | adt_read_object | adt_write_object | adt_delete_object |
+| INTF | adt_create_object | adt_read_object | adt_write_object | adt_delete_object |
+| PROG | adt_create_object | adt_read_object | adt_write_object | adt_delete_object |
+| INCL | — | adt_read_object | adt_write_object | adt_delete_object |
+| FUNC | adt_create_object | adt_read_object | adt_write_object | adt_delete_object |
+| DDLS | adt_create_object | adt_read_object | adt_write_object | adt_delete_object |
+| TABL | adt_create_object (fields) | adt_read_object | adt_write_object | adt_delete_object |
+| STRU | adt_create_object | adt_read_object | adt_write_object | adt_delete_object |
+| DOMA | adt_create_object | adt_read_structure (structured) | adt_write_structure (structured) | adt_delete_object |
+| DTEL | adt_create_object | adt_read_structure (structured) | adt_write_structure (structured) | adt_delete_object |
+| TTYP | adt_create_object | adt_read_structure (structured) | adt_write_structure (structured) | adt_delete_object |
+| MSAG | adt_create_object | adt_read_structure (structured) | adt_write_structure (structured) | adt_delete_object |
+| DEVC | adt_create_object | adt_package_content (packageContent) | — | adt_delete_object |
+
 ## 附：权限策略的 per-destination 语义
 
-六个开关（enableTransports / allowedTransports / allowTransportableEdits / allowedPackages / allowExecution / allowBatchWrites）：
+十一个开关（enableTransports / allowedTransports / allowTransportableEdits / allowedPackages / allowExecution / allowBatchWrites / **blockedTablesProfile / blockedTables / allowedTables** / **allowDebugger / allowDebugVariables**）+ 目的地级 **profile（dev|qa|prd）**：
 - **顶层**（settings `abap-adt:` 段或插件行 config）= 全局默认；
-- 每个 destination 的 `policy:` 块**逐键覆盖**全局（如 prd 禁传输 + 只许 $TMP + 禁执行，dev 放开）；
-- `SAP_*` 环境变量只参与全局层的兜底解析；
+- 每个 destination 的 `policy:` 块**逐键覆盖**全局（如 prd 禁传输 + 只许 $TMP + 禁执行 + strict 读侧，dev 放开）；
+- 目的地级 `profile`（policy 块外、与 url 平级）：dev = 原语义；qa = allowExecution/allowBatchWrites/allowDebugger 未显式配置时默认 false（显式开仍可用）；prd = 三者**硬拒**（显式开也拒）；
+- `SAP_*` 环境变量只参与全局层的兜底解析（新增 SAP_BLOCKED_TABLES_PROFILE / SAP_BLOCKED_TABLES / SAP_ALLOWED_TABLES / SAP_ALLOW_DEBUGGER / SAP_ALLOW_DEBUG_VARIABLES）；
 - 每个编辑类/执行类工具按**调用目标目的地**的策略断言（写 dev 用 dev 的策略，写 prd 用 prd 的策略）；
 - `adt_permissions` 输出全局默认 + perDestination 全量快照。
 

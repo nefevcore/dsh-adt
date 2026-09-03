@@ -36,7 +36,9 @@ import type { PolicyKey } from './policy.js';
 
 /**
  * Per-destination permission-policy override (all keys optional; each
- * overrides the global top-level value for THIS destination only).
+ * overrides the global top-level value for THIS destination only). Includes
+ * the read-side governance keys (blockedTablesProfile / blockedTables /
+ * allowedTables — see tableblocklist.ts).
  */
 const policySchema = z.object({
   enableTransports: z.boolean(),
@@ -45,6 +47,11 @@ const policySchema = z.object({
   allowedPackages: z.string(),
   allowExecution: z.boolean(),
   allowBatchWrites: z.boolean(),
+  blockedTablesProfile: z.union(['off', 'minimal', 'standard', 'strict']),
+  blockedTables: z.array(z.string()),
+  allowedTables: z.array(z.string()),
+  allowDebugger: z.boolean(),
+  allowDebugVariables: z.boolean(),
 });
 
 const destinationSchema = z.object({
@@ -62,6 +69,12 @@ const destinationSchema = z.object({
   passwordEnv: z.string(),
   strictSSL: z.boolean().default(true),
   timeoutMs: z.number().default(60_000),
+  /**
+   * Environment profile of this destination (see policy.ts): `dev` (default)
+   * keeps the plain knob semantics; `qa` defaults execution/batch writes to
+   * off; `prd` hard-denies them regardless of configuration.
+   */
+  profile: z.union(['dev', 'qa', 'prd']),
   /** Destination-level policy overrides (see policy.ts for semantics). */
   policy: policySchema,
 });
@@ -97,6 +110,16 @@ export const Config = z.object({
   allowExecution: z.boolean(),
   /** Allow write parts (POST/PUT) inside adt_batch — off by default (env: SAP_ALLOW_BATCH_WRITES). */
   allowBatchWrites: z.boolean(),
+  /** Read-side governance profile for row reads (off|minimal|standard|strict; default off; env: SAP_BLOCKED_TABLES_PROFILE). */
+  blockedTablesProfile: z.union(['off', 'minimal', 'standard', 'strict']),
+  /** Extra blocked table names/patterns added on top of the catalog (env: SAP_BLOCKED_TABLES, comma-separated). */
+  blockedTables: z.array(z.string()),
+  /** Exemptions from the blocked-table catalog — audited on every use (env: SAP_ALLOWED_TABLES, comma-separated). */
+  allowedTables: z.array(z.string()),
+  /** Allow the ABAP debugger tool family (adt_debug_*) — off by default (env: SAP_ALLOW_DEBUGGER). */
+  allowDebugger: z.boolean(),
+  /** Allow changing debuggee variable values in the debugger — double opt-in (env: SAP_ALLOW_DEBUG_VARIABLES). */
+  allowDebugVariables: z.boolean(),
   destinations: z.array(destinationSchema),
 });
 
@@ -115,6 +138,11 @@ export interface EffectiveConfig {
   allowedPackages?: string;
   allowExecution?: boolean;
   allowBatchWrites?: boolean;
+  blockedTablesProfile?: string;
+  blockedTables?: string[];
+  allowedTables?: string[];
+  allowDebugger?: boolean;
+  allowDebugVariables?: boolean;
   /** Explicitly configured external file (informational; lowest layer that sets it wins). */
   configFile?: string;
   /** Path of the external file that contributed config (for the startup log). */
@@ -167,6 +195,9 @@ type ScalarKey = 'demo' | 'demoPort' | 'defaultDestination' | PolicyKey;
 
 const SCALAR_KEYS: readonly ScalarKey[] = ['demo', 'demoPort', 'defaultDestination', ...POLICY_KEYS];
 
+/** Values a scalar layer key may carry (table lists ride the same loop). */
+type ScalarValue = string | number | boolean | string[];
+
 const KNOWN_TOP_LEVEL_KEYS = new Set<string>([...SCALAR_KEYS, 'destinations', 'configFile']);
 const KNOWN_DESTINATION_KEYS = new Set<string>([
   'name',
@@ -178,6 +209,7 @@ const KNOWN_DESTINATION_KEYS = new Set<string>([
   'passwordEnv',
   'strictSSL',
   'timeoutMs',
+  'profile',
   'policy',
 ]);
 const KNOWN_POLICY_KEYS = new Set<string>(POLICY_KEYS);
@@ -221,7 +253,7 @@ export function composeLayers(layers: Array<Partial<PluginConfig> | undefined>):
   const merged = builtinDefaults();
   // Scalar assignment goes through a widened record view: the loop variable
   // key is a union, so a direct `merged[key] = value` would be `never`.
-  const target = merged as unknown as Record<ScalarKey, string | number | boolean>;
+  const target = merged as unknown as Record<ScalarKey, ScalarValue>;
   const byName = new Map<string, DestinationConfig>();
   for (const layer of layers) {
     if (!layer) continue;

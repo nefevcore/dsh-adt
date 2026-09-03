@@ -6,5 +6,5 @@ import { type ToolDeps } from './common.js';
  * effective policy per destination (a destination-level `policy:` block
  * overrides the global keys for that system only).
  */
-export declare function policyTools(deps: ToolDeps): import("@deepseek-ai/dsh-tools").ToolDefinition[];
+export declare function policyTools(deps: ToolDeps): import("../tooldef.js").DefinedTool[];
 //# sourceMappingURL=policy.d.ts.map

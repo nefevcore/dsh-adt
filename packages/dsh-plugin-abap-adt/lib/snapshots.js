@@ -77,7 +77,7 @@ function snapshotPaths(destination, ref) {
 }
 /** Load the tracked snapshot for an object; undefined when absent/corrupt/no fs. */
 export async function loadSnapshot(ctx, destination, ref) {
-    // Optional service (audit D1): no dsh-fs → no snapshots, callers degrade.
+    // Optional service (audit D1): no host fs → no snapshots, callers degrade.
     const fs = ctx.get('fs');
     if (!fs)
         return undefined;
@@ -98,11 +98,11 @@ export async function loadSnapshot(ctx, destination, ref) {
 }
 /** Save/refresh the snapshot; returns the file path. */
 export async function saveSnapshot(ctx, destination, ref, source) {
-    // Optional service (audit D1): snapshotting needs dsh-fs; callers treat a
+    // Optional service (audit D1): snapshotting needs a host fs; callers treat a
     // throw here as "no snapshot available", not a read failure.
     const fs = ctx.get('fs');
     if (!fs)
-        throw new Error('adt: snapshotting requires the dsh filesystem service (ctx.get(\'fs\'))');
+        throw new Error("adt: snapshotting requires a host filesystem service (ctx.get('fs'))");
     const { file, sidecar } = snapshotPaths(destination, ref);
     const meta = {
         destination,

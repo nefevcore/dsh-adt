@@ -1,4 +1,4 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd,
   DESTINATION_PARAM,
   OBJECTS_PARAM,
@@ -92,7 +92,7 @@ export function lifecycleTools(deps: ToolDeps) {
   const activate = defineTool({
     name: 'adt_activate',
     description:
-      'Activate ABAP development objects on the system. Returns per-object status; syntax errors block activation. ' +
+      'Activate ABAP development objects (CLAS, INTF, PROG + includes, FUGR, DDLS, TABL, …) on the system. Returns per-object status; syntax errors block activation. ' +
       'IMPORTANT: activate ALL related objects in ONE call — `objects` accepts a list. Most backends do NOT cascade ' +
       'activation from a PROG main program (or FUGR) to its includes (TOP/SCR/...): a successful result for the main ' +
       'object alone does NOT mean the program is fully active. Pass the main object AND its includes together, and ' +

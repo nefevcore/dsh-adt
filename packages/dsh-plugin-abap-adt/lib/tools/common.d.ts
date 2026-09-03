@@ -1,6 +1,7 @@
 import { AdtError, type AdtClient, type AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 import type { AdtRegistry, RegistryDestination } from '../registry.js';
 import type { LockLedger } from '../locks.js';
+import type { DebuggerManager } from '../debugger.js';
 import type { AdtPolicy } from '../policy.js';
 /**
  * Policy pre-check for an explicitly-passed transport (shared by every tool
@@ -326,6 +327,12 @@ export interface ToolDeps {
     registry: AdtRegistry;
     /** Persistent lock ledger (see src/locks.ts). */
     ledger: LockLedger;
+    /**
+     * Plugin-level debugger session manager (see src/debugger.ts). Optional in
+     * the type so lightweight harnesses work; the adt_debug_* tools require it
+     * at registration time (they are useless without session state).
+     */
+    debugger?: DebuggerManager;
 }
 /** Render a simple text block. */
 export declare function text(content: string): Array<{

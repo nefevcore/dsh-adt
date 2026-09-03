@@ -18,7 +18,7 @@
  * oracle says content exists and the capability returns nothing, that is a
  * dead feature, not an empty answer.
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
 import { AdtPolicyError } from '../policy.js';
 import { sessionCwd, DESTINATION_PARAM, destinationOf, optStr, text, type ToolDeps } from './common.js';
@@ -56,9 +56,16 @@ const COVERED_TOOLS = new Set([
 export const UNPROBED_TOOLS: readonly string[] = [
   'adt_activate',
   'adt_check',
+  'adt_cochange',
   'adt_create_destination',
   'adt_create_object',
+  'adt_crud',
   'adt_data_preview',
+  'adt_debug_breakpoint',
+  'adt_debug_inspect',
+  'adt_debug_session',
+  'adt_debug_set_variable',
+  'adt_debug_step',
   'adt_delete_object',
   'adt_edit_object',
   'adt_execute',
@@ -73,6 +80,7 @@ export const UNPROBED_TOOLS: readonly string[] = [
   'adt_permissions',
   'adt_push_object',
   'adt_read_structure',
+  'adt_read_textelements',
   'adt_release_gate',
   'adt_run_atc',
   'adt_run_unit_tests',

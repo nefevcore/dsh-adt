@@ -1,6 +1,4 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
-import type { Context } from '@deepseek-ai/cordis';
-import type { FileSystem } from '@deepseek-ai/dsh-fs';
+import { defineTool, type AdtFileSystem, type ToolHost } from '../tooldef.js';
 import type { AdtBatchRequestPart } from '@nefevcore/abap-adt-protocol';
 import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, optStr, text, type ToolDeps } from './common.js';
 import { resolveObject } from '../resolve.js';
@@ -105,7 +103,7 @@ function validateBatchPart(part: AdtBatchRequestPart, index: number, allowWrites
   }
 }
 
-export function batchTools(deps: ToolDeps, ctx: Context) {
+export function batchTools(deps: ToolDeps, ctx: ToolHost) {
   const { registry } = deps;
 
   /**
@@ -132,13 +130,13 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
   const batch = defineTool({
     name: 'adt_batch',
     description:
-      'Protocol-level $batch: execute several ADT requests in ONE HTTP round-trip (multipart embedded ' +
-      'HTTP, POST /sap/bc/adt/$batch). The agent-scale way to fan out reads — e.g. pull the sources of 20 ' +
-      'objects, or object metadata + versions + lock state together — without N sequential calls. ' +
-      'Read-only by design: GET parts always work; POST/PUT parts additionally need allowWrites:true AND ' +
-      'the destination policy knob allowBatchWrites (generic embedded writes bypass per-object policy ' +
-      'checks — prefer the dedicated write tools). Transport release / deletion paths are always blocked. ' +
-      'Each request: {method, path, body?, contentType?, accept?}.',
+      'Execute several ADT requests in ONE HTTP round-trip (protocol-level $batch: multipart embedded ' +
+      'HTTP, POST /sap/bc/adt/$batch) — the agent-scale way to fan out READS, e.g. pull the sources of 20 ' +
+      'objects (CLAS/INTF/PROG/DDLS/TABL …) or object metadata + versions + lock state together, without N ' +
+      'sequential calls. Read-only by design: GET parts always work; POST/PUT parts additionally need ' +
+      'allowWrites:true AND the destination policy knob allowBatchWrites (generic embedded writes bypass ' +
+      'per-object policy checks — prefer the dedicated write tools). Transport release / deletion paths ' +
+      'are always blocked. Each request: {method, path, body?, contentType?, accept?}.',
     parameters: {
       requests: {
         type: 'array',
@@ -280,7 +278,8 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
   const exportObjects = defineTool({
     name: 'adt_export_objects',
     description:
-      'Export the sources of ABAP objects (by package or explicit list) into a local folder as .abap files — ' +
+      'Export the sources of ABAP objects (CLAS, INTF, PROG, FUGR/FUNC, DDLS, TABL, STRU, DOMA, DTEL, TTYP, ' +
+      'MSAG — by package DEVC or explicit list) into a local folder as abaplint-compatible .abap files — ' +
       'enabling git-style versioning, offline review and backups. Writes through the DSH filesystem (sandbox-aware).',
     parameters: {
       objects: {
@@ -349,16 +348,16 @@ export function batchTools(deps: ToolDeps, ctx: Context) {
       const entry = await registry.require(destinationOf(args), sessionCwd(exec));
       // Optional service (audit D1): without dsh-fs the tool degrades with a
       // clear error instead of blocking the whole plugin from loading.
-      const fs = ctx.get('fs');
-      if (!fs) throw new Error('adt_export_objects requires the dsh filesystem service');
+      const fs = ctx.get('fs') as AdtFileSystem | undefined;
+      if (!fs) throw new Error('adt_export_objects requires a host filesystem service');
 
       // Stamp the calling session's sandbox policy onto every write, exactly
       // like DSH's own fs tools: without it the fs backend falls back to a
       // session-less policy whose writable roots deny everything.
-      let sandboxPolicy: Parameters<FileSystem['writeText']>[4];
+      let sandboxPolicy: Parameters<AdtFileSystem['writeText']>[4];
       try {
         const service = ctx.get('sandboxPolicy') as
-          | { resolve?: (o: unknown) => Parameters<FileSystem['writeText']>[4] }
+          | { resolve?: (o: unknown) => Parameters<AdtFileSystem['writeText']>[4] }
           | undefined;
         sandboxPolicy = service?.resolve?.(
           exec.agent ? { session: (exec.agent as { session?: unknown }).session } : {},

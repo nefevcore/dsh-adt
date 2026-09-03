@@ -7,7 +7,7 @@
 #   SAP GUI 连接列表导入）。本段适合放**全局兜底**的目的地与权限策略。
 #
 # 解析优先级（就近覆盖）：工作区文件 > 本段（settings 用户层）> 插件行内联
-# config（预设/patch 的 composition base）> schema 默认值；权限六开关在以上
+# config（预设/patch 的 composition base）> schema 默认值；权限开关在以上
 # 均未设置时看 SAP_* 环境变量。destinations 跨层按名字合并，
 # 高层的同名条目覆盖低层，新名字追加。
 #
@@ -22,7 +22,7 @@ abap-adt:
   defaultDestination: dev
 
   # --- 权限管控：全局默认（可选；不写则看 SAP_* 环境变量，再不写用默认）---
-  # 六个开关也可以在每个 destination 里用 policy: 块按系统覆盖（见下）；
+  # 各开关也可以在每个 destination 里用 policy: 块按系统覆盖（见下）；
   # 生效值 = 全局默认 + 该目的地 policy 覆盖，逐键就近生效。
   # enableTransports: true              # false = 禁用传输工具族与一切传输写入
   # allowedTransports: 'D01K96*'        # 允许的传输号 glob，逗号分隔；'*' = 全部
@@ -30,6 +30,12 @@ abap-adt:
   # allowedPackages: 'Z*,$TMP'          # 允许编辑的开发包 glob；'$TMP' 需显式列出
   # allowExecution: true                # false = 禁用 adt_execute（运行任意 ABAP 可改系统状态）
   # allowBatchWrites: false             # true = 允许 adt_batch 的 POST/PUT 内嵌写（默认只读扇出）
+  # allowDebugger: false                # true = 启用 adt_debug_* 调试器族（持会话、停活动进程）
+  # allowDebugVariables: false          # true = 允许调试中改变量值（双重 opt-in 的第二道）
+  # --- 读侧治理（adt_data_preview 的敏感表黑名单，opt-in）---
+  # blockedTablesProfile: standard      # off（默认）/minimal/standard/strict 四档
+  # blockedTables: ['ZHR*']             # 自定义追加（'*' = [A-Z0-9_]*，大小写不敏感）
+  # allowedTables: ['KNA1']             # 豁免（每次使用在工具输出留审计 note）
 
   # --- 目的地列表 ---
   destinations:
@@ -41,10 +47,14 @@ abap-adt:
       passwordEnv: ADT_DEV_PASSWORD        # 密码走环境变量（推荐）
       strictSSL: false                     # 自签名证书（SAP 内网常见）时必须 false
       # timeoutMs: 60000                   # 可选，默认 60s
+      # 环境分级（可选）：dev（默认，原语义）/ qa（execution/batchWrites/debugger
+      # 未显式配置时默认收 false）/ prd（三者硬拒——显式开也拒，fail-closed）：
+      # profile: dev
       # 按系统收紧权限（可选，逐键覆盖全局默认）：
       # policy:
       #   allowedTransports: 'D01K96*'     # dev 只允许这一批传输号
       #   allowTransportableEdits: true
+      #   blockedTablesProfile: standard   # dev 也可以开读侧治理
 
     # 第二个系统照抄一段即可（可以更保守——比如 QAS 只读 + 不碰传输）：
     # - name: qas
@@ -54,8 +64,19 @@ abap-adt:
     #   username: DEVELOPER
     #   passwordEnv: ADT_QAS_PASSWORD
     #   strictSSL: false
+    #   profile: qa                        # execution/batchWrites/debugger 默认收 false
     #   policy:
     #     enableTransports: false           # qas 上禁用整个传输工具族
     #     allowedPackages: '$TMP'           # qas 上只能编辑本地对象
     #     allowExecution: false             # qas 上禁止运行程序/类
     #     allowBatchWrites: false           # qas 上 $batch 保持只读
+
+    # 生产系统：profile: prd 即只读式收紧（执行/批量写/调试器硬拒）：
+    # - name: prd
+    #   url: https://sap-prd.example.com:44300
+    #   client: '100'
+    #   username: AUDITOR
+    #   passwordEnv: ADT_PRD_PASSWORD
+    #   profile: prd
+    #   policy:
+    #     blockedTablesProfile: strict      # 读侧也上最严档（含 Z* 命名空间）

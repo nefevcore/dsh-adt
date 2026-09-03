@@ -176,6 +176,100 @@ export interface AdtDataPreview {
   rawXml?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Debugger (standard ADT REST debugger, /sap/bc/adt/debugger/*)
+// ---------------------------------------------------------------------------
+
+/** One debugger breakpoint as the backend reports it. */
+export interface AdtDebugBreakpoint {
+  id: string;
+  /** ADT source URI the breakpoint points at. */
+  uri: string;
+  /** 1-based line within that source. */
+  line?: number;
+  kind?: string;
+}
+
+/** A debuggee caught by a listener (listen response; `STPDA_DEBUGGEE`). */
+export interface AdtDebuggee {
+  id: string;
+  user?: string;
+  client?: string;
+  /** Program / include / line where the debuggee stopped. */
+  program?: string;
+  include?: string;
+  line?: number;
+  kind?: string;
+  appServer?: string;
+  systemId?: string;
+  rfcDest?: string;
+  isAttachable?: boolean;
+}
+
+/** One call-stack entry of a stopped debuggee. */
+export interface AdtDebugStackEntry {
+  stackPosition: number;
+  programName?: string;
+  includeName?: string;
+  line?: number;
+  eventType?: string;
+  eventName?: string;
+  uri?: string;
+}
+
+/** The call stack of a stopped debuggee. */
+export interface AdtDebugStack {
+  entries: AdtDebugStackEntry[];
+  /** Index of the debug cursor into `entries`, when reported. */
+  cursorIndex?: number;
+  serverName?: string;
+}
+
+/** One variable value inside a stopped debuggee. */
+export interface AdtDebugVariable {
+  /** Variable name (request and response key). */
+  name: string;
+  value?: string;
+  declaredTypeName?: string;
+  actualTypeName?: string;
+  kind?: string;
+  technicalType?: string;
+  length?: number;
+  tableLines?: number;
+  readOnly?: boolean;
+  isValueIncomplete?: boolean;
+  isException?: boolean;
+}
+
+/** State after a debugger step or breakpoint hit (`dbg:step`). */
+export interface AdtDebugStepResult {
+  step: string;
+  debugSessionId?: string;
+  program?: string;
+  include?: string;
+  line?: number;
+  isSteppingPossible?: boolean;
+  isTerminationPossible?: boolean;
+  isDebuggeeChanged?: boolean;
+  isPostMortem?: boolean;
+  serverName?: string;
+  reachedBreakpoints: AdtDebugBreakpoint[];
+  /** Raw body excerpt for diagnostics. */
+  rawXml?: string;
+}
+
+/** Result of a debugger listen call (long-poll). */
+export interface AdtDebugListenResult {
+  /** A debuggee was caught and is now stopped in this session. */
+  debuggee?: AdtDebuggee;
+  /** No breakpoint was hit inside the wait window. */
+  timedOut: boolean;
+  /** Another debugger holds this user's session (listener conflict). */
+  conflict?: string;
+  /** Raw body excerpt for diagnostics. */
+  rawXml?: string;
+}
+
 /** Lock state of an object, when the backend exposes it. */
 export interface AdtObjectLockInfo {
   /** True/False when the backend reports a lock; undefined when not exposed. */
@@ -208,6 +302,20 @@ export interface AdtActivationResult {
   success: boolean;
   /** Per-object outcome. */
   items: AdtActivationItem[];
+}
+
+/** Result of the one-step table creation (create → DDL write → activate). */
+export interface AdtCreateTableResult {
+  uri: string;
+  name: string;
+  /** `true` only when the activation succeeded — an inactive table does not exist for consumers. */
+  activated: boolean;
+  /** The generated DDIC 2.0 DDL source (transparency: callers see the wire format). */
+  ddlSource: string;
+  /** Transport the create was recorded into (explicit or backend-assigned). */
+  transport?: string;
+  /** Activation problems (syntax/consistency errors) when not activated. */
+  messages: AdtMessage[];
 }
 
 export interface AdtActivationItem {

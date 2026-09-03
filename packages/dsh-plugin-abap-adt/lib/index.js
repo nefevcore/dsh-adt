@@ -15,30 +15,9 @@ import { Config, composeLayers, resolveEffectiveConfig } from './config.js';
 import { credentialResolverOf } from './credentials.js';
 import { AdtRegistry } from './registry.js';
 import { LockLedger } from './locks.js';
+import { DebuggerManager } from './debugger.js';
 import { deepCompact } from './tools/common.js';
-import { systemTools } from './tools/system.js';
-import { searchTools } from './tools/search.js';
-import { readTools } from './tools/read.js';
-import { writeTools } from './tools/write.js';
-import { objectTools } from './tools/objects.js';
-import { lifecycleTools } from './tools/lifecycle.js';
-import { testingTools } from './tools/testing.js';
-import { atcRunTools } from './tools/atc_runs.js';
-import { transportTools } from './tools/transports.js';
-import { packageTools } from './tools/packages.js';
-import { batchTools } from './tools/batch.js';
-import { localTools } from './tools/local.js';
-import { whereUsedTools } from './tools/whereused.js';
-import { dataPreviewTools } from './tools/datapreview.js';
-import { lockTools } from './tools/lock.js';
-import { versionTools } from './tools/versions.js';
-import { gateTools } from './tools/gate.js';
-import { policyTools } from './tools/policy.js';
-import { dumpTools } from './tools/dumps.js';
-import { executeTools } from './tools/execute.js';
-import { structureTools } from './tools/structure.js';
-import { destinationTools } from './tools/destinations.js';
-import { selfcheckTools } from './tools/selfcheck.js';
+import { assembleAdtTools } from './agent.js';
 const name = 'abap-adt';
 // Only `tools` is a hard dependency (audit D1): without it the plugin has no
 // reason to load at all. `fs` is deliberately OPTIONAL — resolved per call
@@ -85,6 +64,10 @@ async function apply(ctx, config) {
     const registry = await AdtRegistry.create(composeLayers([config]), {
         credentialResolver: credentialResolverOf(ctx),
     });
+    // Plugin-level debugger session manager (see src/debugger.ts): the listener
+    // identity outlives single tool calls, and the disposer detaches every
+    // registered listener so an unloaded plugin leaks no debug sessions.
+    const debuggerManager = new DebuggerManager(registry);
     async function rebuild() {
         rebuildChain = rebuildChain.then(async () => {
             if (disposed)
@@ -124,49 +107,33 @@ async function apply(ctx, config) {
             void rebuild();
         },
     });
-    const deps = { registry, ledger };
-    const tools = [
-        ...systemTools(deps),
-        ...destinationTools(deps, ctx),
-        ...searchTools(deps),
-        ...readTools(deps, ctx),
-        ...writeTools(deps, ctx),
-        ...objectTools(deps),
-        ...lifecycleTools(deps),
-        ...testingTools(deps),
-        ...atcRunTools(deps),
-        ...transportTools(deps),
-        ...packageTools(deps),
-        ...batchTools(deps, ctx),
-        ...localTools(deps, ctx),
-        ...whereUsedTools(deps),
-        ...dataPreviewTools(deps),
-        ...lockTools(deps),
-        ...versionTools(deps),
-        ...gateTools(deps),
-        ...policyTools(deps),
-        ...dumpTools(deps),
-        ...executeTools(deps),
-        ...structureTools(deps),
-        ...selfcheckTools(deps),
-    ];
+    const deps = { registry, ledger, debugger: debuggerManager };
+    // Full catalog assembly lives in the host-neutral agent entry (also the
+    // seam non-DSH hosts consume) — this wrapper only adds the DSH registry
+    // boundary behavior below.
+    const tools = assembleAdtTools(deps, ctx);
     for (const tool of tools) {
         // Sanitize every tool's output at the registry boundary: strip `undefined`
         // property values so the value passes the DSH lossless-JSON validation
-        // (the registry rejects undefined anywhere in the returned value).
-        const { execute, ...rest } = tool;
+        // (the registry rejects undefined anywhere in the returned value). The
+        // presentResult cast only crosses vocabulary: our ToolResultView record
+        // vs. the DSH presentation union (the produced shapes are the DSH cards).
+        const { execute, presentResult, ...rest } = tool;
         ctx.tools.register({
             ...rest,
+            ...(presentResult ? { presentResult: presentResult } : {}),
             execute: async (args, exec) => deepCompact(await execute(args, exec)),
         });
     }
     info(`plugin active: ${tools.length} tools registered`);
     // Fiber disposer: flag the plugin as disposed FIRST (kills every queued
-    // rebuild), let the in-flight one settle, then close the mock server and
-    // drop the clients.
+    // rebuild), let the in-flight one settle, detach every debug listener (the
+    // sessions belong to this Fiber), then close the mock server and drop the
+    // clients.
     return async () => {
         disposed = true;
         await rebuildChain.catch(() => undefined);
+        await debuggerManager.dispose();
         await registry.dispose();
     };
 }

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { extractTablesFromSql } from '../lib/tableblocklist.js';
 import {
   AdtPolicy,
   AdtPolicyError,
@@ -80,6 +81,11 @@ test('resolve: built-in defaults when nothing is configured', () => {
   assert.deepEqual(p.allowedPackages, ['*']);
   assert.equal(p.allowExecution, true);
   assert.equal(p.allowBatchWrites, false);
+  // Read-side governance is opt-in: off with no lists.
+  assert.equal(p.blockedTablesProfile, 'off');
+  assert.deepEqual(p.blockedTables, []);
+  assert.deepEqual(p.allowedTables, []);
+  assert.equal(p.profile, 'dev');
   assert.deepEqual(p.sources, {
     enableTransports: 'default',
     allowedTransports: 'default',
@@ -87,6 +93,12 @@ test('resolve: built-in defaults when nothing is configured', () => {
     allowedPackages: 'default',
     allowExecution: 'default',
     allowBatchWrites: 'default',
+    blockedTablesProfile: 'default',
+    blockedTables: 'default',
+    allowedTables: 'default',
+    allowDebugger: 'default',
+    allowDebugVariables: 'default',
+    profile: 'default',
   });
 });
 
@@ -113,6 +125,12 @@ test('resolve: SAP_* environment variables override defaults', () => {
     allowedPackages: 'env',
     allowExecution: 'env',
     allowBatchWrites: 'env',
+    blockedTablesProfile: 'default',
+    blockedTables: 'default',
+    allowedTables: 'default',
+    allowDebugger: 'default',
+    allowDebugVariables: 'default',
+    profile: 'default',
   });
 });
 
@@ -247,4 +265,143 @@ test('describe: exposes the effective policy snapshot', () => {
   assert.deepEqual(snap.allowedPackages, ['Z*', '$TMP']);
   assert.equal(snap.sources.allowedTransports, 'config');
   assert.equal(snap.defaults.allowedTransports, '*');
+  assert.equal(snap.blockedTablesProfile, 'off');
+  assert.equal(snap.profile, 'dev');
+});
+
+// ---------------------------------------------------------------------------
+// Destination environment profile (P0-2: dev | qa | prd tiering)
+// ---------------------------------------------------------------------------
+
+test('profile: dev keeps the plain knob semantics', () => {
+  const p = AdtPolicy.resolve({ profile: 'dev' }, {});
+  assert.equal(p.profile, 'dev');
+  assert.equal(p.allowExecution, true); // default true, qa would close it
+  assert.equal(p.allowBatchWrites, false);
+  assert.equal(p.sources.profile, 'config');
+});
+
+test('profile: qa defaults execution and batch writes to closed; explicit config still opens them', () => {
+  const qa = AdtPolicy.resolve({ profile: 'qa' }, {});
+  assert.equal(qa.profile, 'qa');
+  assert.equal(qa.allowExecution, false, 'unset allowExecution defaults to false on qa');
+  assert.equal(qa.allowBatchWrites, false);
+  assert.equal(qa.sources.allowExecution, 'default');
+
+  const opened = AdtPolicy.resolve({ profile: 'qa', allowExecution: true, allowBatchWrites: true }, {});
+  assert.equal(opened.allowExecution, true, 'an explicit config value stands on qa');
+  assert.equal(opened.allowBatchWrites, true);
+
+  const viaEnv = AdtPolicy.resolve({ profile: 'qa' }, { [POLICY_ENV.allowExecution]: 'true' });
+  assert.equal(viaEnv.allowExecution, true, 'an explicit env value stands on qa');
+});
+
+test('profile: prd hard-denies execution and batch writes even when explicitly enabled', () => {
+  const prd = AdtPolicy.resolve(
+    { profile: 'prd', allowExecution: true, allowBatchWrites: true },
+    { [POLICY_ENV.allowExecution]: 'true' },
+  );
+  assert.equal(prd.profile, 'prd');
+  assert.equal(prd.allowExecution, false, 'prd forces the effective flag closed');
+  assert.equal(prd.allowBatchWrites, false);
+  assert.throws(() => prd.assertExecutionAllowed('adt_execute'), (e) => {
+    assert.ok(e instanceof AdtPolicyError);
+    assert.equal(e.rule, 'allowExecution');
+    assert.match(e.message, /profile: prd/);
+    return true;
+  });
+  assert.throws(() => prd.assertBatchWritesAllowed('adt_batch'), (e) => {
+    assert.ok(e instanceof AdtPolicyError);
+    assert.equal(e.rule, 'allowBatchWrites');
+    assert.match(e.message, /profile: prd/);
+    return true;
+  });
+  // Reads stay allowed on prd (fail-closed on writes/execution, not on reads).
+  assert.doesNotThrow(() => prd.assertTableReadsAllowed(['MARA'], 'adt_data_preview'));
+  assert.doesNotThrow(() => prd.assertTransportsEnabled('adt_list_transports'));
+});
+
+test('profile: invalid values are rejected loudly, not silently defaulted', () => {
+  assert.throws(() => AdtPolicy.resolve({ profile: 'production' }, {}), /profile/);
+  assert.throws(() => AdtPolicy.resolve({ profile: 'QA!' }, {}), /profile/);
+});
+
+// ---------------------------------------------------------------------------
+// Read-side blocked-table governance (P0-1)
+// ---------------------------------------------------------------------------
+
+test('blockedTables: off (default) never blocks; invalid profiles are rejected', () => {
+  const off = AdtPolicy.resolve({}, {});
+  assert.doesNotThrow(() => off.assertTableReadsAllowed(['KNA1', 'USR02'], 'adt_data_preview'));
+  assert.throws(() => AdtPolicy.resolve({ blockedTablesProfile: 'loud' }, {}), /invalid blockedTablesProfile/);
+  assert.throws(
+    () => AdtPolicy.resolve({}, { [POLICY_ENV.blockedTablesProfile]: 'loud' }),
+    /invalid SAP_BLOCKED_TABLES_PROFILE/,
+  );
+});
+
+test('blockedTables: deny names the category and reason, and can never be exempted into by config-less callers', () => {
+  const p = AdtPolicy.resolve({ blockedTablesProfile: 'standard' }, {});
+  assert.throws(() => p.assertTableReadsAllowed(['KNA1'], 'adt_data_preview'), (e) => {
+    assert.ok(e instanceof AdtPolicyError);
+    assert.equal(e.rule, 'blockedTables');
+    assert.match(e.message, /^\[POLICY\] adt_data_preview: blockedTables: KNA1 — /);
+    assert.match(e.message, /Customer \/ vendor \/ BP master PII/);
+    return true;
+  });
+  // Tier semantics: minimal covers direct PII only; standard adds the
+  // transactional documents; strict adds logs, communication, and Z*.
+  const minimal = AdtPolicy.resolve({ blockedTablesProfile: 'minimal' }, {});
+  assert.doesNotThrow(() => minimal.assertTableReadsAllowed(['BSEG'], 'x'), 'BSEG is tier standard');
+  assert.doesNotThrow(() => minimal.assertTableReadsAllowed(['MARA'], 'x'), 'MARA is not cataloged');
+  const standard = AdtPolicy.resolve({ blockedTablesProfile: 'standard' }, {});
+  assert.throws(() => standard.assertTableReadsAllowed(['BSEG'], 'x'), /blockedTables/);
+  // strict adds audit logs, communication, and the Z* pattern.
+  const strict = AdtPolicy.resolve({ blockedTablesProfile: 'strict' }, {});
+  assert.throws(() => strict.assertTableReadsAllowed(['ZMY_TABLE'], 'x'), /Z\*|Customer namespace/);
+  assert.doesNotThrow(() => standard.assertTableReadsAllowed(['ZMY_TABLE'], 'x'), 'Z* only blocked on strict');
+});
+
+test('blockedTables: custom patterns and allowedTables exemptions', () => {
+  const p = AdtPolicy.resolve({ blockedTablesProfile: 'minimal', blockedTables: ['ZSECRET*'] }, {});
+  assert.throws(() => p.assertTableReadsAllowed(['ZSECRET_DATA'], 'x'), /User-extended blocklist/);
+  // Custom lists only take effect when a profile is active (master switch).
+  const off = AdtPolicy.resolve({ blockedTables: ['ZSECRET*'] }, {});
+  assert.doesNotThrow(() => off.assertTableReadsAllowed(['ZSECRET_DATA'], 'x'));
+
+  const exempt = AdtPolicy.resolve(
+    { blockedTablesProfile: 'standard', allowedTables: ['KNA1', 'ZREPORT*'] },
+    {},
+  );
+  const check = exempt.assertTableReadsAllowed(['KNA1', 'kna1'], 'x');
+  assert.deepEqual(check.exempted, ['KNA1', 'KNA1'], 'exemptions are case-insensitive and audited back');
+  // A deny in the same list still throws even when other tables are exempt.
+  assert.throws(() => exempt.assertTableReadsAllowed(['KNA1', 'USR02'], 'x'), /USR02/);
+  // The exemption is the sanctioned bypass for custom entries too (audited).
+  const customExempt = AdtPolicy.resolve(
+    { blockedTablesProfile: 'minimal', blockedTables: ['ZSECRET*'], allowedTables: ['ZSECRET_DATA'] },
+    {},
+  );
+  const customCheck = customExempt.assertTableReadsAllowed(['ZSECRET_DATA'], 'x');
+  assert.deepEqual(customCheck.exempted, ['ZSECRET_DATA']);
+});
+
+test('blockedTables: the SQL path checks every FROM/JOIN target (extract + assert)', () => {
+  const p = AdtPolicy.resolve({ blockedTablesProfile: 'standard' }, {});
+  assert.deepEqual(
+    extractTablesFromSql('select mandt, matnr from MARA join BUT000 on 1=1'),
+    ['MARA', 'BUT000'],
+    'the extractor feeds the checker — this is the adt_data_preview (sql) path',
+  );
+  assert.throws(
+    () => p.assertTableReadsAllowed(extractTablesFromSql('select mandt, matnr from MARA join BUT000 on 1=1'), 'adt_data_preview (sql)'),
+    /BUT000/,
+  );
+  assert.throws(
+    () => p.assertTableReadsAllowed(extractTablesFromSql('select * from VBRK'), 'x'),
+    /VBRK/,
+  );
+  assert.doesNotThrow(() =>
+    p.assertTableReadsAllowed(extractTablesFromSql('select * from MARA where matnr = 1'), 'x'),
+  );
 });

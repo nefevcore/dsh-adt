@@ -7,5 +7,5 @@ export type SweepVerdict = 'answered' | 'empty' | 'dead' | 'absent' | 'refused' 
  * out by principle (rule 2); the rest need inputs the sweep cannot invent.
  */
 export declare const UNPROBED_TOOLS: readonly string[];
-export declare function selfcheckTools(deps: ToolDeps): import("@deepseek-ai/dsh-tools").ToolDefinition[];
+export declare function selfcheckTools(deps: ToolDeps): import("../tooldef.js").DefinedTool[];
 //# sourceMappingURL=selfcheck.d.ts.map

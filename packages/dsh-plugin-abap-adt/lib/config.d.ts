@@ -40,6 +40,12 @@ declare const destinationSchema: z<Schemastery.ObjectS<{
     passwordEnv: z<string, string>;
     strictSSL: z<boolean, boolean>;
     timeoutMs: z<number, number>;
+    /**
+     * Environment profile of this destination (see policy.ts): `dev` (default)
+     * keeps the plain knob semantics; `qa` defaults execution/batch writes to
+     * off; `prd` hard-denies them regardless of configuration.
+     */
+    profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd">;
     /** Destination-level policy overrides (see policy.ts for semantics). */
     policy: z<Schemastery.ObjectS<{
         enableTransports: z<boolean, boolean>;
@@ -48,6 +54,11 @@ declare const destinationSchema: z<Schemastery.ObjectS<{
         allowedPackages: z<string, string>;
         allowExecution: z<boolean, boolean>;
         allowBatchWrites: z<boolean, boolean>;
+        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+        blockedTables: z<string[], string[]>;
+        allowedTables: z<string[], string[]>;
+        allowDebugger: z<boolean, boolean>;
+        allowDebugVariables: z<boolean, boolean>;
     }>, Schemastery.ObjectT<{
         enableTransports: z<boolean, boolean>;
         allowedTransports: z<string, string>;
@@ -55,6 +66,11 @@ declare const destinationSchema: z<Schemastery.ObjectS<{
         allowedPackages: z<string, string>;
         allowExecution: z<boolean, boolean>;
         allowBatchWrites: z<boolean, boolean>;
+        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+        blockedTables: z<string[], string[]>;
+        allowedTables: z<string[], string[]>;
+        allowDebugger: z<boolean, boolean>;
+        allowDebugVariables: z<boolean, boolean>;
     }>>;
 }>, Schemastery.ObjectT<{
     name: z<string, string>;
@@ -71,6 +87,12 @@ declare const destinationSchema: z<Schemastery.ObjectS<{
     passwordEnv: z<string, string>;
     strictSSL: z<boolean, boolean>;
     timeoutMs: z<number, number>;
+    /**
+     * Environment profile of this destination (see policy.ts): `dev` (default)
+     * keeps the plain knob semantics; `qa` defaults execution/batch writes to
+     * off; `prd` hard-denies them regardless of configuration.
+     */
+    profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd">;
     /** Destination-level policy overrides (see policy.ts for semantics). */
     policy: z<Schemastery.ObjectS<{
         enableTransports: z<boolean, boolean>;
@@ -79,6 +101,11 @@ declare const destinationSchema: z<Schemastery.ObjectS<{
         allowedPackages: z<string, string>;
         allowExecution: z<boolean, boolean>;
         allowBatchWrites: z<boolean, boolean>;
+        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+        blockedTables: z<string[], string[]>;
+        allowedTables: z<string[], string[]>;
+        allowDebugger: z<boolean, boolean>;
+        allowDebugVariables: z<boolean, boolean>;
     }>, Schemastery.ObjectT<{
         enableTransports: z<boolean, boolean>;
         allowedTransports: z<string, string>;
@@ -86,6 +113,11 @@ declare const destinationSchema: z<Schemastery.ObjectS<{
         allowedPackages: z<string, string>;
         allowExecution: z<boolean, boolean>;
         allowBatchWrites: z<boolean, boolean>;
+        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+        blockedTables: z<string[], string[]>;
+        allowedTables: z<string[], string[]>;
+        allowDebugger: z<boolean, boolean>;
+        allowDebugVariables: z<boolean, boolean>;
     }>>;
 }>>;
 export declare const Config: z<Schemastery.ObjectS<{
@@ -119,6 +151,16 @@ export declare const Config: z<Schemastery.ObjectS<{
     allowExecution: z<boolean, boolean>;
     /** Allow write parts (POST/PUT) inside adt_batch — off by default (env: SAP_ALLOW_BATCH_WRITES). */
     allowBatchWrites: z<boolean, boolean>;
+    /** Read-side governance profile for row reads (off|minimal|standard|strict; default off; env: SAP_BLOCKED_TABLES_PROFILE). */
+    blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+    /** Extra blocked table names/patterns added on top of the catalog (env: SAP_BLOCKED_TABLES, comma-separated). */
+    blockedTables: z<string[], string[]>;
+    /** Exemptions from the blocked-table catalog — audited on every use (env: SAP_ALLOWED_TABLES, comma-separated). */
+    allowedTables: z<string[], string[]>;
+    /** Allow the ABAP debugger tool family (adt_debug_*) — off by default (env: SAP_ALLOW_DEBUGGER). */
+    allowDebugger: z<boolean, boolean>;
+    /** Allow changing debuggee variable values in the debugger — double opt-in (env: SAP_ALLOW_DEBUG_VARIABLES). */
+    allowDebugVariables: z<boolean, boolean>;
     destinations: z<({
         name?: string | null | undefined;
         url?: string | null | undefined;
@@ -129,6 +171,7 @@ export declare const Config: z<Schemastery.ObjectS<{
         passwordEnv?: string | null | undefined;
         strictSSL?: boolean | null | undefined;
         timeoutMs?: number | null | undefined;
+        profile?: "dev" | "qa" | "prd" | null | undefined;
         policy?: ({
             enableTransports?: boolean | null | undefined;
             allowedTransports?: string | null | undefined;
@@ -136,6 +179,11 @@ export declare const Config: z<Schemastery.ObjectS<{
             allowedPackages?: string | null | undefined;
             allowExecution?: boolean | null | undefined;
             allowBatchWrites?: boolean | null | undefined;
+            blockedTablesProfile?: "off" | "minimal" | "standard" | "strict" | null | undefined;
+            blockedTables?: string[] | null | undefined;
+            allowedTables?: string[] | null | undefined;
+            allowDebugger?: boolean | null | undefined;
+            allowDebugVariables?: boolean | null | undefined;
         } & import("@deepseek-ai/cosmokit").Dict) | null | undefined;
     } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<{
         name: z<string, string>;
@@ -152,6 +200,12 @@ export declare const Config: z<Schemastery.ObjectS<{
         passwordEnv: z<string, string>;
         strictSSL: z<boolean, boolean>;
         timeoutMs: z<number, number>;
+        /**
+         * Environment profile of this destination (see policy.ts): `dev` (default)
+         * keeps the plain knob semantics; `qa` defaults execution/batch writes to
+         * off; `prd` hard-denies them regardless of configuration.
+         */
+        profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd">;
         /** Destination-level policy overrides (see policy.ts for semantics). */
         policy: z<Schemastery.ObjectS<{
             enableTransports: z<boolean, boolean>;
@@ -160,6 +214,11 @@ export declare const Config: z<Schemastery.ObjectS<{
             allowedPackages: z<string, string>;
             allowExecution: z<boolean, boolean>;
             allowBatchWrites: z<boolean, boolean>;
+            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+            blockedTables: z<string[], string[]>;
+            allowedTables: z<string[], string[]>;
+            allowDebugger: z<boolean, boolean>;
+            allowDebugVariables: z<boolean, boolean>;
         }>, Schemastery.ObjectT<{
             enableTransports: z<boolean, boolean>;
             allowedTransports: z<string, string>;
@@ -167,6 +226,11 @@ export declare const Config: z<Schemastery.ObjectS<{
             allowedPackages: z<string, string>;
             allowExecution: z<boolean, boolean>;
             allowBatchWrites: z<boolean, boolean>;
+            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+            blockedTables: z<string[], string[]>;
+            allowedTables: z<string[], string[]>;
+            allowDebugger: z<boolean, boolean>;
+            allowDebugVariables: z<boolean, boolean>;
         }>>;
     }>[]>;
 }>, Schemastery.ObjectT<{
@@ -200,6 +264,16 @@ export declare const Config: z<Schemastery.ObjectS<{
     allowExecution: z<boolean, boolean>;
     /** Allow write parts (POST/PUT) inside adt_batch — off by default (env: SAP_ALLOW_BATCH_WRITES). */
     allowBatchWrites: z<boolean, boolean>;
+    /** Read-side governance profile for row reads (off|minimal|standard|strict; default off; env: SAP_BLOCKED_TABLES_PROFILE). */
+    blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+    /** Extra blocked table names/patterns added on top of the catalog (env: SAP_BLOCKED_TABLES, comma-separated). */
+    blockedTables: z<string[], string[]>;
+    /** Exemptions from the blocked-table catalog — audited on every use (env: SAP_ALLOWED_TABLES, comma-separated). */
+    allowedTables: z<string[], string[]>;
+    /** Allow the ABAP debugger tool family (adt_debug_*) — off by default (env: SAP_ALLOW_DEBUGGER). */
+    allowDebugger: z<boolean, boolean>;
+    /** Allow changing debuggee variable values in the debugger — double opt-in (env: SAP_ALLOW_DEBUG_VARIABLES). */
+    allowDebugVariables: z<boolean, boolean>;
     destinations: z<({
         name?: string | null | undefined;
         url?: string | null | undefined;
@@ -210,6 +284,7 @@ export declare const Config: z<Schemastery.ObjectS<{
         passwordEnv?: string | null | undefined;
         strictSSL?: boolean | null | undefined;
         timeoutMs?: number | null | undefined;
+        profile?: "dev" | "qa" | "prd" | null | undefined;
         policy?: ({
             enableTransports?: boolean | null | undefined;
             allowedTransports?: string | null | undefined;
@@ -217,6 +292,11 @@ export declare const Config: z<Schemastery.ObjectS<{
             allowedPackages?: string | null | undefined;
             allowExecution?: boolean | null | undefined;
             allowBatchWrites?: boolean | null | undefined;
+            blockedTablesProfile?: "off" | "minimal" | "standard" | "strict" | null | undefined;
+            blockedTables?: string[] | null | undefined;
+            allowedTables?: string[] | null | undefined;
+            allowDebugger?: boolean | null | undefined;
+            allowDebugVariables?: boolean | null | undefined;
         } & import("@deepseek-ai/cosmokit").Dict) | null | undefined;
     } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<{
         name: z<string, string>;
@@ -233,6 +313,12 @@ export declare const Config: z<Schemastery.ObjectS<{
         passwordEnv: z<string, string>;
         strictSSL: z<boolean, boolean>;
         timeoutMs: z<number, number>;
+        /**
+         * Environment profile of this destination (see policy.ts): `dev` (default)
+         * keeps the plain knob semantics; `qa` defaults execution/batch writes to
+         * off; `prd` hard-denies them regardless of configuration.
+         */
+        profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd">;
         /** Destination-level policy overrides (see policy.ts for semantics). */
         policy: z<Schemastery.ObjectS<{
             enableTransports: z<boolean, boolean>;
@@ -241,6 +327,11 @@ export declare const Config: z<Schemastery.ObjectS<{
             allowedPackages: z<string, string>;
             allowExecution: z<boolean, boolean>;
             allowBatchWrites: z<boolean, boolean>;
+            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+            blockedTables: z<string[], string[]>;
+            allowedTables: z<string[], string[]>;
+            allowDebugger: z<boolean, boolean>;
+            allowDebugVariables: z<boolean, boolean>;
         }>, Schemastery.ObjectT<{
             enableTransports: z<boolean, boolean>;
             allowedTransports: z<string, string>;
@@ -248,6 +339,11 @@ export declare const Config: z<Schemastery.ObjectS<{
             allowedPackages: z<string, string>;
             allowExecution: z<boolean, boolean>;
             allowBatchWrites: z<boolean, boolean>;
+            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+            blockedTables: z<string[], string[]>;
+            allowedTables: z<string[], string[]>;
+            allowDebugger: z<boolean, boolean>;
+            allowDebugVariables: z<boolean, boolean>;
         }>>;
     }>[]>;
 }>>;
@@ -265,6 +361,11 @@ export interface EffectiveConfig {
     allowedPackages?: string;
     allowExecution?: boolean;
     allowBatchWrites?: boolean;
+    blockedTablesProfile?: string;
+    blockedTables?: string[];
+    allowedTables?: string[];
+    allowDebugger?: boolean;
+    allowDebugVariables?: boolean;
     /** Explicitly configured external file (informational; lowest layer that sets it wins). */
     configFile?: string;
     /** Path of the external file that contributed config (for the startup log). */

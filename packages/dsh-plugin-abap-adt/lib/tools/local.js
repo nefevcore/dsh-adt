@@ -11,10 +11,10 @@
  * `.abaplint.json` in the export directory to tune the rules.
  */
 import { Config, MemoryFile, Registry } from '@abaplint/core';
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { join } from 'node:path';
 import { text } from './common.js';
-/** Adapter over the DSH filesystem service — reads stay sandbox-aware like adt_export_objects. */
+/** Adapter over a host filesystem service — reads stay sandbox-aware like adt_export_objects. */
 function fsReaderFromCtx(fs, signal) {
     return {
         async readDir(absPath) {
@@ -280,7 +280,7 @@ export function localTools(_deps, ctx) {
                 // Optional service (audit D1): resolved at call time, not injected.
                 const fs = ctx.get('fs');
                 if (!fs)
-                    throw new Error('adt_local_check requires the dsh filesystem service');
+                    throw new Error('adt_local_check requires a host filesystem service');
                 return runLocalCheck(String(args.dir), {
                     severity: typeof args.severity === 'string' ? args.severity : undefined,
                     maxFiles: typeof args.maxFiles === 'number' ? args.maxFiles : undefined,

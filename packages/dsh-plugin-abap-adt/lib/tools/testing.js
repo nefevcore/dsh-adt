@@ -1,11 +1,12 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, ATC_AGGREGATES_SCHEMA, ATC_COUNTS_SCHEMA, ATC_FINDINGS_SCHEMA, atcAggregatesSuffix, atcFindingOutput, renderAtcFindings, DESTINATION_PARAM, OBJECTS_PARAM, destinationOf, requireObjectList, text, } from './common.js';
 import { resolveObjects } from '../resolve.js';
 export function testingTools(deps) {
     const { registry } = deps;
     const runUnitTests = defineTool({
         name: 'adt_run_unit_tests',
-        description: 'Run ABAP Unit tests for the given objects. Reports per-class and per-method results (passed/failed/skipped) with durations.',
+        description: 'Run ABAP Unit tests (aUnit; ADT "Run as Unit Test", transaction SAUNIT/SE80) for the given objects ' +
+            '(test classes in CLAS/PROG). Reports per-class and per-method results (passed/failed/skipped) with durations.',
         parameters: {
             ...OBJECTS_PARAM,
             ...DESTINATION_PARAM,
@@ -96,7 +97,8 @@ export function testingTools(deps) {
     });
     const runAtc = defineTool({
         name: 'adt_run_atc',
-        description: 'Run ABAP Test Cockpit (ATC) checks on the given objects. Returns findings with severity, check and source ' +
+        description: 'Run ABAP Test Cockpit checks (ATC / SLIN-based, transaction ATC) on the given objects. Returns findings ' +
+            'with severity, check and source ' +
             'position, plus the result displayId (the run is STORED on the backend — it shows up in adt_list_atc_runs, ' +
             'usually titled "External Request + timestamp" for tool-triggered runs). `durationMs` is the wall-clock time ' +
             'of the whole run. POSITION MAPPING: findings can be reported under the MAIN program name while `line` counts ' +

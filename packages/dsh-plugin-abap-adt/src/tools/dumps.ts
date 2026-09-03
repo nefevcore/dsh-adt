@@ -10,7 +10,7 @@
  * runtime error the agent can pull the actual dump — exception type, program,
  * user, error analysis text — without leaving the tool family.
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, optStr, showingUnknownTotal, text, type ToolDeps } from './common.js';
 
 /** `YYYYMMDD` / `YYYYMMDDHHMMSS` sanity for the time-range filters. */

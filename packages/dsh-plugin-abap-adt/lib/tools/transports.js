@@ -1,4 +1,4 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, VERSION_FEED_META_PROPERTIES, destinationOf, isAdtServiceUnavailable, resolveToolObject, text } from './common.js';
 /** Transport item (contained object) schema shared by adt_list_transports and adt_get_transport. */
 const TRANSPORT_ITEM_SCHEMA = {
@@ -132,7 +132,7 @@ export function transportTools(deps) {
     };
     const listTransports = defineTool({
         name: 'adt_list_transports',
-        description: 'List transport requests (CTO) of the current user: number, status, category, owner and (optionally) contained objects. ' +
+        description: 'List transport requests (CTO, Transport Organizer / SE10 / SE09) of the current user: number, status, category, owner and (optionally) contained objects. ' +
             'Use `status: "modifiable"` (or the backend code "D") to show only open (unreleased) requests — the ones still being worked on. ' +
             'Useful before activation or release operations. Semantic status words are translated to the backend letter codes, and ' +
             'the result is additionally filtered client-side; when a backend rejects the server-side status parameter the list is ' +
@@ -181,7 +181,7 @@ export function transportTools(deps) {
     });
     const getTransport = defineTool({
         name: 'adt_get_transport',
-        description: 'Get one transport request including its contained objects (items). NOTE: version histories (adt_object_versions) ' +
+        description: 'Get one transport request (SE10/SE09) including its contained objects (items). NOTE: version histories (adt_object_versions) ' +
             'record TASK-level numbers; querying a task number here returns its PARENT request — compare `number` in the ' +
             'output with what you asked for and use the returned parent number for follow-ups.',
         parameters: {

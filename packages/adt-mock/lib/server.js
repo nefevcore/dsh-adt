@@ -117,6 +117,18 @@ function lockResultXml(handle, corrnr) {
   </asx:values>
 </asx:abap>`);
 }
+/** Initial variable view of a caught debuggee (deterministic). */
+function mockDebugVariables() {
+    return new Map([
+        ['LV_COUNT', { value: '41', type: 'I', readOnly: false }],
+        ['LV_NAME', { value: 'MOCK', type: 'C', readOnly: false }],
+        ['LT_ROWS', { value: '<3 rows>', type: 'hTABLE', readOnly: false }],
+        ['LV_LOCKED', { value: 'untouchable', type: 'C', readOnly: true }],
+    ]);
+}
+function freshDebuggerState() {
+    return { listeners: new Map(), breakpoints: new Map(), bpCounter: 0, pendingHit: false };
+}
 /** Deterministic stored ATC runs exposed by the results collection. */
 const ATC_SAMPLE_RUNS = [
     {
@@ -152,6 +164,7 @@ export function createMockAdtServer(options = {}) {
         sessions: new Set(),
         unitRuns: new Map(),
         atcRunIds: new Set(),
+        debugger: freshDebuggerState(),
     };
     const systemId = options.systemId ?? 'MOCK';
     const release = options.release ?? '757';
@@ -586,6 +599,242 @@ async function hStructuredPut(ctx) {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/xml');
     res.end(adtXml(`<adtcore:objectReferences xmlns:adtcore="${NS_ADT}"/>`));
+}
+// ---- Debugger (standard ADT REST debugger state machine) ---------------------
+const NS_DBG = 'http://www.sap.com/adt/debugger';
+const DEBUGGER_BREAKPOINT_URI_RE = /adtcore:uri="([^"#]+)(?:#start=(\d+))?"/;
+const DEBUGGER_VARIABLE_REQUEST_RE = /<ID>([^<]+)<\/ID>/g;
+/** ABAP-XML document wrapper (`asx:abap … asx:values … DATA …`). */
+function abapXml(dataInner) {
+    return adtXml(`<asx:abap xmlns:asx="${NS_ASX}" version="1.0"><asx:values><DATA>${dataInner}</DATA></asx:values></asx:abap>`);
+}
+/** The debuggee document a listener gets when a breakpoint is hit. */
+function debuggeeXml(session, terminalId, ideId, systemId) {
+    return abapXml(`<STPDA_DEBUGGEE>` +
+        `<CLIENT>000</CLIENT>` +
+        `<DEBUGGEE_ID>${session.debuggeeId}</DEBUGGEE_ID>` +
+        `<TERMINAL_ID>${terminalId}</TERMINAL_ID>` +
+        `<IDE_ID>${ideId}</IDE_ID>` +
+        `<DEBUGGEE_USER>${session.user}</DEBUGGEE_USER>` +
+        `<PRG_CURR>${session.program}</PRG_CURR>` +
+        `<INCL_CURR>${session.include}</INCL_CURR>` +
+        `<LINE_CURR>${session.line}</LINE_CURR>` +
+        `<RFCDEST></RFCDEST><APPLSERVER>mock_server</APPLSERVER><SYSID>${systemId}</SYSID>` +
+        `<DBGEE_KIND>DIALOG</DBGEE_KIND><IS_ATTACH_IMPOSSIBLE></IS_ATTACH_IMPOSSIBLE>` +
+        `<IS_SAME_SERVER>X</IS_SAME_SERVER>` +
+        `</STPDA_DEBUGGEE>`);
+}
+/** One `dbg:step` document mirroring the current session state. */
+function debugStepXml(session, step) {
+    const running = !session || session.running;
+    return adtXml(`<dbg:step xmlns:dbg="${NS_DBG}" debugSessionId="${session?.debuggeeId ?? ''}" ` +
+        `programName="${session?.program ?? ''}" includeName="${session?.include ?? ''}" line="${session?.line ?? 0}" ` +
+        `isSteppingPossible="${!running}" isTerminationPossible="true" ` +
+        `isDebuggeeChanged="${step === 'stepContinue' || step === 'terminateDebuggee' ? 'true' : 'false'}" ` +
+        `isPostMortem="false" serverName="mock_server"/>`);
+}
+/** Listener registration / status / detach (`/debugger/listeners`). */
+async function hDebuggerListeners({ req, res, state, url, opts }) {
+    const dbg = state.debugger;
+    const terminalId = url.searchParams.get('terminalId') ?? '';
+    const ideId = url.searchParams.get('ideId') ?? '';
+    const user = (url.searchParams.get('requestUser') ?? parseBasicAuth(req)?.username ?? 'DEMO').toUpperCase();
+    if (req.method === 'GET') {
+        res.setHeader('Content-Type', 'application/xml');
+        const listeners = [...dbg.listeners.entries()]
+            .map(([tid, l]) => `<dbg:listener terminalId="${tid}" ideId="${l.ideId}" user="${l.user}"/>`)
+            .join('\n  ');
+        res.end(adtXml(`<dbg:listeners xmlns:dbg="${NS_DBG}">\n  ${listeners}\n</dbg:listeners>`));
+        return;
+    }
+    if (req.method === 'DELETE') {
+        dbg.listeners.delete(terminalId);
+        // Detach releases the stopped debuggee and ends the session; a re-attach
+        // is impossible without a fresh listener (real ADT semantics, vsp pitfall).
+        if (dbg.session?.terminalId === terminalId)
+            dbg.session = undefined;
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/xml');
+        res.end();
+        return;
+    }
+    // POST: register and wait. Deterministic hit: the next listen after a
+    // breakpoint was set catches a debuggee immediately (empty body = timeout).
+    dbg.listeners.set(terminalId, { ideId, user });
+    if (dbg.pendingHit && !dbg.session && dbg.breakpoints.size > 0) {
+        dbg.pendingHit = false;
+        const firstBp = [...dbg.breakpoints.values()][0];
+        // Derive the program name from the breakpoint's source URI: strip the
+        // /source/main suffix, then take the final path segment (the object name).
+        const base = firstBp.uri.replace(/\/source\/main$/, '');
+        const program = (base.split('/').pop() || 'ZPROG_DEMO').toUpperCase();
+        dbg.session = {
+            debuggeeId: randomUUID(),
+            terminalId,
+            program,
+            include: program,
+            line: firstBp.line,
+            user,
+            variables: mockDebugVariables(),
+            running: false,
+        };
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(debuggeeXml(dbg.session, terminalId, ideId, opts.systemId));
+        return;
+    }
+    // Wait window elapsed without a hit — empty body, HTTP 200.
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/xml');
+    res.end();
+}
+/** Breakpoint collection (`/debugger/breakpoints` + `/debugger/breakpoints/<id>`). */
+async function hDebuggerBreakpoints({ req, res, state, path }) {
+    const dbg = state.debugger;
+    if (req.method === 'POST') {
+        const body = await readBody(req);
+        const match = DEBUGGER_BREAKPOINT_URI_RE.exec(body);
+        if (!match) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/xml');
+            res.end(errorXml('Breakpoint request missing adtcore:uri'));
+            return;
+        }
+        const uri = match[1];
+        const line = Number(match[2] ?? 1) || 1;
+        const id = `BP${String(++dbg.bpCounter).padStart(4, '0')}`;
+        dbg.breakpoints.set(id, { uri, line });
+        // External breakpoints persist; the mock makes the NEXT listen catch.
+        dbg.pendingHit = true;
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(adtXml(`<dbg:breakpoints xmlns:dbg="${NS_DBG}" xmlns:adtcore="${NS_ADT}" scope="external">` +
+            `<dbg:breakpoint id="${id}" kind="line" adtcore:uri="${xmlEscape(uri)}#start=${line}"/>` +
+            `</dbg:breakpoints>`));
+        return;
+    }
+    // DELETE /debugger/breakpoints/<id>
+    const id = path.split('/').pop() ?? '';
+    if (!dbg.breakpoints.has(id)) {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(errorXml(`Breakpoint ${id} does not exist`));
+        return;
+    }
+    dbg.breakpoints.delete(id);
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/xml');
+    res.end();
+}
+/** The debug loop (`/debugger?method=…`): steps, variables, setVariableValue. */
+async function hDebuggerLoop({ req, res, state, url }) {
+    const method = url.searchParams.get('method') ?? '';
+    const session = state.debugger.session;
+    const requireStopped = () => {
+        if (!session) {
+            throw new MockHttpError(409, 'no active debug session — listen for a breakpoint hit first');
+        }
+        if (session.running) {
+            throw new MockHttpError(409, 'debuggee is running (continued) — wait for the next breakpoint hit');
+        }
+        return session;
+    };
+    if (method === 'getVariables') {
+        const stopped = requireStopped();
+        const body = await readBody(req);
+        const wanted = [...body.matchAll(DEBUGGER_VARIABLE_REQUEST_RE)].map((m) => m[1].toUpperCase());
+        const vars = wanted
+            .map((name) => {
+            const v = stopped.variables.get(name);
+            if (!v)
+                return '';
+            return (`<STPDA_ADT_VARIABLE><ID>${name}</ID><NAME>${name}</NAME>` +
+                `<DECLARED_TYPE_NAME>${v.type}</DECLARED_TYPE_NAME><ACTUAL_TYPE_NAME>${v.type}</ACTUAL_TYPE_NAME>` +
+                `<KIND>V</KIND><VALUE>${xmlEscape(v.value)}</VALUE>` +
+                `<READ_ONLY>${v.readOnly ? 'X' : ''}</READ_ONLY>` +
+                (name.startsWith('LT_') ? `<TABLE_LINES>3</TABLE_LINES>` : '') +
+                `</STPDA_ADT_VARIABLE>`);
+        })
+            .join('');
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(abapXml(vars));
+        return;
+    }
+    if (method === 'setVariableValue') {
+        const stopped = requireStopped();
+        const name = (url.searchParams.get('variableName') ?? '').toUpperCase();
+        const value = await readBody(req);
+        const v = stopped.variables.get(name);
+        if (!v) {
+            throw new MockHttpError(404, `variable ${name} not found in this frame`);
+        }
+        if (v.readOnly) {
+            throw new MockHttpError(403, `variable ${name} is read-only`);
+        }
+        v.value = value;
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(abapXml(`<RESULT>OK</RESULT>`));
+        return;
+    }
+    // stepInto / stepOver / stepReturn / stepContinue / terminateDebuggee
+    const stopped = requireStopped();
+    switch (method) {
+        case 'stepInto':
+        case 'stepOver':
+            stopped.line += 1;
+            break;
+        case 'stepReturn':
+            stopped.line += 2;
+            break;
+        case 'stepContinue':
+            stopped.running = true; // debuggee runs free until the next hit
+            break;
+        case 'terminateDebuggee':
+            state.debugger.session = undefined; // session ends with the debuggee
+            break;
+        default:
+            throw new MockHttpError(400, `unsupported debugger method '${method}'`);
+    }
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(debugStepXml(state.debugger.session, method));
+}
+/** The call stack (`/debugger/stack?method=getStack`). */
+function hDebuggerStack({ res, state }) {
+    const session = state.debugger.session;
+    if (!session || session.running) {
+        res.statusCode = 409;
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(errorXml('no stopped debuggee — the stack is only readable while paused at a breakpoint'));
+        return;
+    }
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(adtXml(`<dbg:stack xmlns:dbg="${NS_DBG}" debugCursorStackIndex="0" serverName="mock_server">` +
+        `<dbg:stackEntry stackPosition="1" programName="${session.program}" includeName="${session.include}" ` +
+        `line="${session.line}" eventType="PROGRAM" eventName="${session.program}"/>` +
+        `<dbg:stackEntry stackPosition="2" programName="SAPLMOCK_CALLER" includeName="SAPLMOCK_CALLER" line="99" ` +
+        `eventType="FUNCTION" eventName="MOCK_CALLER"/>` +
+        `</dbg:stack>`));
+}
+// ---- Text elements (plain-text custom format, read-only) ---------------------
+/** Textelements subsources served for PROG objects (deterministic fixture). */
+function textElementsFixture(subsource) {
+    if (subsource === 'symbols') {
+        return '@MaxLength:20\r\n001=Demo text symbol\r\n\r\n@MaxLength:30\r\n002=Second symbol';
+    }
+    if (subsource === 'selections') {
+        return 'P_DATE =Processing date\r\n\r\nSO_CARR=Carrier ID';
+    }
+    return 'listHeader=Demo list header\r\n\r\ncolumnHeader_1=Column one\r\ncolumnHeader_2=Column two';
+}
+function hTextElements({ res, state, path }) {
+    const match = /^\/textelements\/programs\/([^/]+)\/source\/(symbols|selections|headings)$/.exec(path);
+    const program = decodeURIComponent(match[1]).toUpperCase();
+    if (!findObjectByName(state, program) || findObjectByName(state, program).category !== 'PROG') {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(errorXml(`Program ${program} does not exist`));
+        return;
+    }
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.end(textElementsFixture(match[2]));
 }
 // ---- Object version history (Atom feed) ----
 function hVersions({ res, state, path }) {
@@ -1098,6 +1347,7 @@ const UNIT_RUN_RE = /^\/abapunit\/runs\/([^/]+)$/;
 const UNIT_RESULT_RE = /^\/abapunit\/results\/([^/]+)$/;
 const ATC_RUN_RE = /^\/atc\/runs\/([^/]+)$/;
 const ATC_RESULT_RE = /^\/atc\/results\/([^/]+)$/;
+const DEBUGGER_BREAKPOINT_ID_RE = /^\/debugger\/breakpoints\/[^/]+$/;
 /** Object base URI: strips a trailing `/source/main` (source-form URIs). */
 const objectPath = (path) => path.endsWith('/source/main') ? path.slice(0, -'/source/main'.length) : path;
 const ROUTES = [
@@ -1181,6 +1431,50 @@ const ROUTES = [
     { method: 'GET', match: (c) => ATC_RUN_RE.test(c.path), handler: hAtcStatus },
     { method: 'GET', match: (c) => c.path === '/atc/results', handler: hAtcResultsList },
     { method: 'GET', match: (c) => ATC_RESULT_RE.test(c.path), handler: hAtcResultDetail },
+    // Debugger (standard ADT REST debugger state machine)
+    {
+        method: 'POST',
+        csrf: true,
+        match: (c) => c.path === '/debugger/listeners',
+        handler: hDebuggerListeners,
+    },
+    { method: 'GET', match: (c) => c.path === '/debugger/listeners', handler: hDebuggerListeners },
+    {
+        method: 'DELETE',
+        csrf: true,
+        match: (c) => c.path === '/debugger/listeners',
+        handler: hDebuggerListeners,
+    },
+    {
+        method: 'POST',
+        csrf: true,
+        match: (c) => c.path === '/debugger/breakpoints',
+        handler: hDebuggerBreakpoints,
+    },
+    {
+        method: 'DELETE',
+        csrf: true,
+        match: (c) => DEBUGGER_BREAKPOINT_ID_RE.test(c.path),
+        handler: hDebuggerBreakpoints,
+    },
+    {
+        method: 'POST',
+        csrf: true,
+        match: (c) => c.path === '/debugger' && c.url.searchParams.has('method'),
+        handler: hDebuggerLoop,
+    },
+    {
+        method: 'POST',
+        csrf: true,
+        match: (c) => c.path === '/debugger/stack' && c.url.searchParams.get('method') === 'getStack',
+        handler: hDebuggerStack,
+    },
+    // Text elements (read-only plain-text subsources)
+    {
+        method: 'GET',
+        match: (c) => /^\/textelements\/programs\/[^/]+\/source\/(symbols|selections|headings)$/.test(c.path),
+        handler: hTextElements,
+    },
 ];
 // --- Structured metadata editors (MSAG / DOMA / DTEL / TTYP) -----------------
 /** Media types of the structured kinds (mirrors @nefevcore/abap-adt-protocol). */

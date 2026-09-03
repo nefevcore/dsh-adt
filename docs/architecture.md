@@ -11,20 +11,20 @@ flowchart TB
     subgraph PLG["@nefevcore/abap-adt-dsh-plugin"]
       CFG["配置分层 config.ts<br/>① schema 默认 → ② 内联 config → ⑦ SAP_* env<br/>→ ③ 旧文件 → ④ settings → ⑤ configFile → ⑥ 工作区文件"]
       REG["AdtRegistry registry.ts<br/>destinations ×N · viewFor(cwd) · clientCache ≤64"]
-      POL["AdtPolicy 权限门禁 policy.ts<br/>六开关 · fail-closed · [POLICY]"]
-      SNAP["snapshots.ts OCC 快照 · locks.ts 锁账本<br/>credentials.ts 密码分层 · sapgui.ts 连接发现"]
-      TOOLS["37 × adt_* 工具（22 个文件按职责分组）"]
+      POL["AdtPolicy 治理 policy.ts + tableblocklist.ts<br/>写侧6开关 + 读侧黑名单 · profile dev/qa/prd · fail-closed"]
+      SNAP["snapshots OCC 快照 · locks 锁账本 · credentials 密码分层<br/>crudmatrix CRUD 矩阵 · debugger 会话管理 · contextprologue 契约序言"]
+      TOOLS["46 × adt_* 工具（28 个文件按职责分组 · 计数由测试锁定）"]
     end
   end
   subgraph PROTO["@nefevcore/abap-adt-protocol"]
-    AC["AdtClient<br/>Basic + CSRF · LOCK→PUT→UNLOCK · 激活<br/>ABAP Unit / ATC 轮询 · $batch · DDIC XML"]
+    AC["AdtClient<br/>Basic + CSRF · LOCK→PUT→UNLOCK · 激活<br/>ABAP Unit / ATC 轮询 · $batch · DDIC XML · 调试器"]
   end
   MOCK["@nefevcore/abap-adt-mock<br/>进程内 Mock ADT 服务器 127.0.0.1:8123"]
   SAP["SAP ABAP 前端服务器<br/>/sap/bc/adt/*（ADT REST · HTTPS）"]
 
   AG -->|"模型工具调用 adt_*"| TOOLS
   CFG -->|"resolveEffectiveConfig · 热生效 reload()"| REG
-  TOOLS -->|"deps = { registry, ledger }"| REG
+  TOOLS -->|"deps = { registry, ledger, debugger }"| REG
   TOOLS -.->|"写前检查 / OCC 校验"| POL
   REG -->|"每目的地一个 AdtClient"| AC
   AC -->|"HTTP（demo 目的地）"| MOCK
@@ -49,7 +49,8 @@ flowchart TB
 - 包**不声明** `dsh.bundle`：安装只是放进 profile 依赖；启用走**预设行**——`abap-adt-preset` CLI 从 `standard` 预设拷贝生成 `~/.dsh/.agent-presets/<id>/`(剔除 `tool-cordis`/`skill-filesystem` 行)并追加本插件的行,只有该预设的会话加载 `adt_*` 工具
 - `apply(ctx, config)`：构建 registry（含 `AdtPolicy` 权限策略）→ 注册全部工具 → 返回 fiber disposer（卸载时关闭 mock）;仅硬依赖 `tools` 服务,`fs` 为可选服务(逐调用 `ctx.get('fs')`,缺失时文件系统能力优雅降级)
 - **权限管控（`policy.ts`）**：所有修改类工具在执行前断言策略规则（传输开关 / 允许的传输号 glob / 可传输编辑开关 / 允许的包 glob / 代码执行开关 / batch 写开关），生效值来自 config > `SAP_*` 环境变量 > 默认值；拒绝时抛 `[POLICY]` 错误并自动回滚（如写操作解锁、create 删除回建对象）。包名解析以**后端搜索精确命中**为准，调用方 `packageName` hint 仅在后端查不到时兜底，无法确定时失败关闭；write/edit/push/delete/activate/write_structure 解析对象时强制精确命中（拼错名报错列候选，绝不模糊落到别的对象）
-- 工具按职责分文件（system/destinations/search/read/write/objects/lifecycle/testing/atc_runs/transport/packages/batch/local/whereused/datapreview/lock/versions/gate/policy/dumps/execute/structure），统一通过 `defineTool` 声明参数/输出 schema 与 render；共享参数规格与对象解析/权限门助手收敛在 `tools/common.ts`
+- 工具按职责分文件（system/destinations/search/read/write/objects/lifecycle/testing/atc_runs/transport/packages/batch/local/whereused/datapreview/lock/versions/gate/policy/dumps/execute/structure/crud/debugger/selfcheck/textelements/cochange，共 28 个），统一通过 `defineTool` 声明参数/输出 schema 与 render；共享参数规格与对象解析/权限门助手收敛在 `tools/common.ts`
+- **v0.5.0 代理体验升级**：方法级读取/编辑（`method` 窗口 + 依赖契约序言 `context:true`，`abap.ts`/`contextprologue.ts`）；`adt_crud` verb×type 门面（`crudmatrix.ts` 单一事实源，路由到 owner 工具原样执行——策略/OCC 链不绕过，`routedTool` 回显）；`adt_debug_*` 五件套走**标准 ADT REST 调试器**（`/sap/bc/adt/debugger/*` 零服务端安装；`DebuggerManager` 插件级会话身份——一个 ADT 会话一个调试会话、detach 后不可重 attach；`allowDebugger` 默认关 + 写变量值再需 `allowDebugVariables` 双重 opt-in；`profile: prd` 硬拒整族）；读侧治理（`tableblocklist.ts` 敏感表四档 minimal/standard/strict/off + `blockedTables` 自定义 + `allowedTables` 豁免带审计 note）；目的地 `profile: dev|qa|prd` 环境分级（qa 收紧未显式配置的 execution/batchWrites/debugger，prd 硬拒三者）；TABL 一步建表（`fields` 清单 → DDIC 2.0 DDL · blueSource 流）；`adt_selfcheck` 只读能力巡检（oracle 交叉验证，未巡检工具显式列出）；`adt_cochange` 传输共变分析；`adt_read_textelements` 文本元素读取（写侧待真实系统验证）
 
 ## 关键设计决策
 
@@ -58,7 +59,7 @@ flowchart TB
 3. **异步 run 流程**：ABAP Unit / ATC 都是"提交 → 轮询 → 取结果"，客户端完整实现轮询循环与超时
 4. **协议正确性优先**：错误处理覆盖 ADT 特有语义（激活错误在 200 body、exc:exception 错误体、403 CSRF/锁冲突区分、412 ETag）
 5. **沙箱感知**：导出工具走可选的 `ctx.get('fs')` 服务，遵守 DSH 文件沙箱策略（无该服务的精简 profile 上优雅降级，不影响其余工具）
-6. **权限管控（fail-closed）**：修改类工具先过策略再动 SAP；后端在 lock 时自动分配的传输号（CORRNR）同样受 `allowedTransports` 约束，不匹配即回滚；包名无法确定时拒绝而不是放行
+6. **权限管控（fail-closed）**：修改类工具先过策略再动 SAP；后端在 lock 时自动分配的传输号（CORRNR）同样受 `allowedTransports` 约束，不匹配即回滚；包名无法确定时拒绝而不是放行。读侧同理——`adt_data_preview` 发请求前过敏感表黑名单（拒绝写明类别与原因，无逐调用逃生口）；目的地 `profile: prd` 对 execution / batchWrites / debugger 硬拒（显式开启也拒）
 
 ## 批量与门禁功能（代理尺度）
 

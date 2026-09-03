@@ -1,5 +1,4 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
-import type { JsonValue, ToolResultView } from '@deepseek-ai/dsh-tools';
+import { defineTool, type JsonValue, type ToolResultView } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text, type ToolDeps } from './common.js';
 
 /** Upper bound for presentation metadata: past this the UI falls back to the
@@ -56,8 +55,11 @@ export function searchTools(deps: ToolDeps) {
     defineTool({
       name: 'adt_search',
       description:
-        'Search ABAP development objects and source code on the SAP system. Returns objects whose ' +
-        'name/description match and (for full-text search) source excerpts. Use `operation` to narrow: ' +
+        'Search ABAP development objects and source code on the SAP system (Repository Information System, ' +
+        'SE84/SE80-style). Returns objects whose ' +
+        'name/description match — classes (CLAS), interfaces (INTF), programs/includes (PROG), CDS views (DDLS), ' +
+        'tables (TABL), domains (DOMA), data elements (DTEL), packages (DEVC), … — and (for full-text search) source excerpts. ' +
+        'Use `operation` to narrow: ' +
         '"quickSearch" (both, default), "objectSearch" (names only), "quickSearchSource" (source text only); ' +
         'use `packageName` to restrict object hits to one package and `offset`/`maxResults` to page.',
       parameters: {

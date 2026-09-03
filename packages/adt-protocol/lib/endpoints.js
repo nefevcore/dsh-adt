@@ -38,6 +38,10 @@ export const MEDIA = {
     lockResult: 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result',
     /** Generic source (XML-wrapped). */
     source: 'application/vnd.sap.adt.source.v1+xml',
+    /** Debugger variables request/response (ABAP XML). */
+    debuggerVariables: 'application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.debugger.Variables',
+    /** Debugger debuggee/step/listener documents (ABAP XML / dbg namespace). */
+    debugger: 'application/vnd.sap.as+xml',
 };
 /** Build a query string from parameters (ADT style: repeated keys allowed). */
 export function toQuery(params) {
@@ -128,5 +132,21 @@ export const ENDPOINTS = {
     classRun: (className) => `${ADT_BASE}/oo/classrun/${encodeURIComponent(className)}`,
     /** Protocol-level `$batch` (multipart/mixed embedded HTTP requests). */
     batch: () => `${ADT_BASE}/$batch`,
+    /** Debugger core resource (steps / variable access via `?method=`). */
+    debugger: (query) => `${ADT_BASE}/debugger${toQuery(query)}`,
+    /** Debugger listener registration (POST listen / GET status / DELETE detach). */
+    debuggerListeners: (query) => `${ADT_BASE}/debugger/listeners${toQuery(query)}`,
+    /** Debugger breakpoint collection (external scope). */
+    debuggerBreakpoints: (query) => `${ADT_BASE}/debugger/breakpoints${toQuery(query)}`,
+    /** One debugger breakpoint by id. */
+    debuggerBreakpoint: (id, query) => `${ADT_BASE}/debugger/breakpoints/${encodeURIComponent(id)}${toQuery(query)}`,
+    /** Debugger call stack (absent on older backends, e.g. 7.50 → 404). */
+    debuggerStack: (query) => `${ADT_BASE}/debugger/stack${toQuery(query)}`,
+    /**
+     * Textelements subsources of a program (plain-text custom format):
+     * `symbols` (text symbols I), `selections` (selection texts S),
+     * `headings` (list headings H).
+     */
+    textElements: (programName, subsource) => `${ADT_BASE}/textelements/programs/${encodeURIComponent(programName)}/source/${subsource}`,
 };
 //# sourceMappingURL=endpoints.js.map

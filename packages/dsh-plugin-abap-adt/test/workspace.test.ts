@@ -518,6 +518,52 @@ test('adt_create_destination: policy knobs land in the entry policy block and ta
   }
 });
 
+test('adt_create_destination: read-side knobs and the environment profile land and take effect', async () => {
+  const ws = mkdtempSync(join(tmpdir(), 'abap-adt-tool-'));
+  const registry = await AdtRegistry.create({ ...builtinDefaults(), demo: false });
+  try {
+    const create = destinationTools({ registry, ledger: new LockLedger() }, { get: () => undefined } as never).find((t) => t.name === 'adt_create_destination')!;
+    const exec = { signal: undefined, agent: { session: { header: { cwd: ws } } } } as never;
+    const result = (await create.execute(
+      {
+        name: 'qa2',
+        url: 'https://qa2.example.com',
+        profile: 'qa',
+        blockedTablesProfile: 'standard',
+        blockedTables: ['ZSECRET*'],
+        allowedTables: ['KNA1'],
+      } as never,
+      exec,
+    )) as { destination: { profile?: string; policy?: Record<string, unknown> } };
+    // The profile rides as a destination-level key; read-side knobs in policy.
+    assert.equal(result.destination.profile, 'qa');
+    assert.deepEqual(result.destination.policy, {
+      blockedTablesProfile: 'standard',
+      blockedTables: ['ZSECRET*'],
+      allowedTables: ['KNA1'],
+    });
+    // Effective policy: qa tier closes the unset execution knob…
+    const entry = await registry.require('qa2', ws);
+    assert.equal(entry.policy.profile, 'qa');
+    assert.equal(entry.policy.allowExecution, false, 'qa defaults execution to closed');
+    assert.equal(entry.policy.blockedTablesProfile, 'standard');
+    assert.throws(() => entry.policy.assertTableReadsAllowed(['USR02'], 'x'), /blockedTables/);
+    assert.doesNotThrow(() => entry.policy.assertTableReadsAllowed(['KNA1'], 'x'));
+    // The file: profile as a real line, read-side keys inside the policy block.
+    const raw = readFileSync(join(ws, '.dsh-abap-adt', 'destinations.yaml'), 'utf8');
+    assert.match(raw, /^ {4}profile: qa$/m);
+    assert.match(raw, /^ {6}blockedTablesProfile: standard$/m);
+    // Invalid profile values are refused before anything is written.
+    await assert.rejects(
+      () => create.execute({ name: 'bad', url: 'https://bad.example.com', profile: 'prod' } as never, exec),
+      /profile/,
+    );
+  } finally {
+    await registry.dispose();
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test('adt_create_destination: import from a GUI reference entry (client/user/language carried over)', async () => {
   const ws = mkdtempSync(join(tmpdir(), 'abap-adt-tool-'));
   const landscape = join(ws, 'SAPUILandscape.xml');

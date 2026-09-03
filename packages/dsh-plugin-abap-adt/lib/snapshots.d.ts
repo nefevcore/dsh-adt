@@ -1,4 +1,4 @@
-import type { Context } from '@deepseek-ai/cordis';
+import type { ToolHost } from './tooldef.js';
 /** Thrown when the server source no longer matches the snapshot's base hash. */
 export declare class SnapshotConflictError extends Error {
     readonly objectName: string;
@@ -35,13 +35,13 @@ export declare function hashSource(source: string): string;
  */
 export declare function sourcesEquivalent(written: string, readBack: string): boolean;
 /** Load the tracked snapshot for an object; undefined when absent/corrupt/no fs. */
-export declare function loadSnapshot(ctx: Context, destination: string, ref: {
+export declare function loadSnapshot(ctx: ToolHost, destination: string, ref: {
     name: string;
     type: string;
     uri: string;
 }): Promise<ObjectSnapshot | undefined>;
 /** Save/refresh the snapshot; returns the file path. */
-export declare function saveSnapshot(ctx: Context, destination: string, ref: {
+export declare function saveSnapshot(ctx: ToolHost, destination: string, ref: {
     name: string;
     type: string;
     uri: string;

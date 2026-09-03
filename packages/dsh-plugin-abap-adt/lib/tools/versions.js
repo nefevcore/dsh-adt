@@ -11,7 +11,7 @@
  * Historical versions can be compared explicitly via versionFrom/versionTo
  * (ids from adt_object_versions / the `versions` array of this output).
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, OBJECT_REF_PARAMS, VERSION_FEED_META_PROPERTIES, destinationOf, isAdtServiceUnavailable, optStr, resolveToolObject, text } from './common.js';
 /**
  * Line diff. Uses common prefix/suffix trimming with the middle emitted as a

@@ -59,6 +59,19 @@ function scalar(value: unknown): string {
   return stringify(value).trim();
 }
 
+/**
+ * Serialize a value as YAML lines under `key` at the given indent: scalars
+ * inline, arrays as a block sequence (`key:\n  - item`) — inline sequences
+ * (`key: - item`) are NOT valid YAML.
+ */
+function yamlValueLines(key: string, value: unknown, indent: string): string[] {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [`${indent}${key}: []`];
+    return [`${indent}${key}:`, ...value.map((item) => `${indent}  - ${scalar(item)}`)];
+  }
+  return [`${indent}${key}: ${scalar(value)}`];
+}
+
 /** A commented template line under construction: `key: value` + its purpose. */
 interface KeyTemplate {
   label: string;
@@ -79,7 +92,7 @@ function templateWidth(templates: KeyTemplate[]): number {
   return Math.min(Math.max(0, ...templates.map((t) => t.label.length)), TEMPLATE_PAD_CAP);
 }
 
-/** One-line purposes of the six policy keys (full semantics in policy.ts). */
+/** One-line purposes of the policy keys (full semantics in policy.ts). */
 const POLICY_DESCRIPTIONS: Record<PolicyKey, string> = {
   enableTransports: 'allow the transport tool family and transport usage',
   allowedTransports: 'comma-separated glob allowlist of transport numbers',
@@ -87,6 +100,12 @@ const POLICY_DESCRIPTIONS: Record<PolicyKey, string> = {
   allowedPackages: 'glob allowlist of editable packages',
   allowExecution: 'allow running programs/classes via adt_execute',
   allowBatchWrites: 'allow write parts inside adt_batch',
+  blockedTablesProfile: 'read-side governance of adt_data_preview row reads (off|minimal|standard|strict)',
+  blockedTables: 'extra blocked table names/patterns (SAP-name globs) added on top of the catalog',
+  allowedTables: 'exemptions from the blocked-table catalog — audited on every use',
+  allowDebugger: 'allow the ABAP debugger tool family (adt_debug_*) — holds a stateful session',
+  allowDebugVariables: 'allow changing debuggee variable values in the debugger — double opt-in',
+  profile: 'destination environment profile (dev|qa|prd) — only meaningful inside a destinations entry',
 };
 
 const POLICY_KEY_SET = new Set<string>(POLICY_KEYS);
@@ -102,7 +121,7 @@ function renderWorkspaceConfig(layer: Partial<PluginConfig>): string {
   const lines: string[] = [];
   const templates: KeyTemplate[] = [];
   const emit = (key: string, template: KeyTemplate): void => {
-    if (record[key] !== undefined) lines.push(`${key}: ${scalar(record[key])}`);
+    if (record[key] !== undefined) lines.push(...yamlValueLines(key, record[key], ''));
     else templates.push(template);
   };
 
@@ -120,7 +139,7 @@ function renderWorkspaceConfig(layer: Partial<PluginConfig>): string {
   // (No undefined check needed: the writer feeds a JSON-round-tripped layer.)
   for (const key of Object.keys(record)) {
     if (key === 'destinations' || key === 'defaultDestination' || POLICY_KEY_SET.has(key)) continue;
-    lines.push(`${key}: ${scalar(record[key])}`);
+    lines.push(...yamlValueLines(key, record[key], ''));
   }
   for (const template of templates) lines.push(templateLine('', template, templateWidth(templates)));
 
@@ -165,6 +184,10 @@ function renderDestination(dest: DestinationConfig, lines: string[]): void {
     description: 'verify TLS certificates — false for self-signed intranet certificates',
   });
   emit('timeoutMs', { label: `timeoutMs: ${scalar(60_000)}`, description: 'request timeout in milliseconds' });
+  emit('profile', {
+    label: `profile: ${scalar('dev')}`,
+    description: 'environment tier: dev plain knobs, qa defaults execution/batchWrites/debugger off, prd hard-denies them',
+  });
   renderDestPolicy(record.policy, lines, templates);
   const width = templateWidth(templates);
   for (const template of templates) lines.push(templateLine('    ', template, width));
@@ -191,7 +214,7 @@ function renderDestPolicy(policy: unknown, lines: string[], templates: KeyTempla
   lines.push('    policy:');
   const inner: KeyTemplate[] = [];
   for (const key of POLICY_KEYS) {
-    if (policyRecord[key] !== undefined) lines.push(`      ${key}: ${scalar(policyRecord[key])}`);
+    if (policyRecord[key] !== undefined) lines.push(...yamlValueLines(key, policyRecord[key], '      '));
     else inner.push({ label: `${key}: ${scalar(POLICY_DEFAULTS[key])}`, description: POLICY_DESCRIPTIONS[key] });
   }
   const width = templateWidth(inner);

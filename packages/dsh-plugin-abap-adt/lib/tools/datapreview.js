@@ -10,8 +10,9 @@
  * work there; minimal ADT profiles may not expose the datapreview service at
  * all — the tool then fails with a clear message instead of a raw 404/405.
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { AdtError } from '@nefevcore/abap-adt-protocol';
+import { extractTablesFromSql } from '../tableblocklist.js';
 import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, optStr, text } from './common.js';
 /** Map the shared type-code namespace onto the two preview API modes. */
 const KIND_TO_MODE = {
@@ -43,15 +44,33 @@ function pageRows(rows, offset, length, notes) {
         notes.push(`more rows available: raise offset to ${offset + length}`);
     return window;
 }
-export function dataPreviewTools(deps) {
+export function dataPreviewTools(deps, ctx) {
     const { registry } = deps;
+    const audit = (message) => {
+        // Read-governance audit trail: tool output note AND the plugin logger
+        // (abap-mcp logs to stderr; we own both surfaces here).
+        (ctx?.logger?.('abap-adt')?.info ?? console.info)(`abap-adt: ${message}`);
+    };
+    /** Read-side governance, shared by the entity and sql paths: refuse blocked
+     *  tables BEFORE any request is sent (deny = zero traffic to SAP) and
+     *  surface allowedTables exemptions as audited notes. */
+    const applyReadGovernance = (policy, tables, context, notes) => {
+        const { exempted } = policy.assertTableReadsAllowed(tables, context);
+        if (exempted.length > 0) {
+            const note = `allowedTables exemption (audited): ${exempted.join(', ')}`;
+            notes.push(note);
+            audit(note);
+        }
+    };
     return [
         defineTool({
             name: 'adt_data_preview',
-            description: 'Read rows from a table / CDS view (or run a freestyle SELECT) via the ADT Data Preview API. ' +
-                'Provide `name` + `kind` (same type codes as everywhere: TABL, VIEW, STRU for DDIC entities, ' +
-                'DDLS for CDS views; default TABL) or `sql` (freestyle — SELECT statements only; anything else is rejected). ' +
-                '`top`/`offset` page the rows. Read-only. ' +
+            description: 'Read rows from a database table / CDS view (SE16/SE16N-style data browser) or run a freestyle SELECT ' +
+                'via the ADT Data Preview API. Provide `name` + `kind` (same type codes as everywhere: TABL, VIEW, STRU ' +
+                'for DDIC entities, DDLS for CDS views; default TABL) or `sql` (freestyle — SELECT statements only; ' +
+                'anything else is rejected). `top`/`offset` page the rows. Read-only. Read governance: destinations may ' +
+                'set blockedTablesProfile — reads of sensitive tables (e.g. customer/bank/HR data like KNA1, LFA1, ' +
+                'BUT000, USR02) are then refused with the reason BEFORE any request is sent. ' +
                 'Note: ABAP Cloud (BTP) blocks direct database-table preview; CDS views and freestyle SQL work there. ' +
                 'Freestyle SQL restriction: the SELECT list must NOT include the client column (mandt) — the backend ' +
                 'SQL parser rejects cross-client field access with HTTP 400; select the business columns only.',
@@ -172,6 +191,10 @@ export function dataPreviewTools(deps) {
                         throw new Error('adt_data_preview: `sql` accepts a SELECT statement only (the data-preview API is read-only). ' +
                             `Got: ${sql.trim().slice(0, 60)}${sql.trim().length > 60 ? '…' : ''}`);
                     }
+                    // Read-side governance: every FROM/JOIN target is resolved and
+                    // checked BEFORE the request is sent — a blocked table answers
+                    // [POLICY] with zero traffic to SAP.
+                    applyReadGovernance(entry.policy, extractTablesFromSql(sql), 'adt_data_preview (sql)', notes);
                     // Fetch offset+length rows (within the cap) and slice, so the SQL
                     // path honors the same offset/length row-range as entity previews.
                     const paging = resolveRowWindow(args, notes);
@@ -187,6 +210,10 @@ export function dataPreviewTools(deps) {
                 if (!mode) {
                     throw new Error(`adt_data_preview: unsupported kind '${kindCode}' (expected TABL, VIEW, STRU or DDLS)`);
                 }
+                // Read-side governance, entity path: the previewed entity name is the
+                // read target (for a CDS view this checks the VIEW name — its base
+                // tables cannot be resolved client-side; exempt or mask at view level).
+                applyReadGovernance(entry.policy, [name], 'adt_data_preview', notes);
                 if (typeof args.length === 'number' && typeof args.top === 'number' && args.length !== args.top) {
                     notes.push('both `length` and `top` given; `length` wins (`top` is a deprecated alias)');
                 }

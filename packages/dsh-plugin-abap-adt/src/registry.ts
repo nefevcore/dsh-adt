@@ -64,6 +64,7 @@ function clientCacheKey(
     ssl: dest.strictSSL,
     t: dest.timeoutMs,
     pol: dest.policy,
+    prof: dest.profile,
     gi: inputs,
   });
 }
@@ -127,7 +128,7 @@ export class AdtRegistry {
     }
 
     // Global policy inputs (top-level keys) — each destination overlays its
-    // own `policy:` block on these.
+    // own `policy:` block and its `profile` tier on these.
     this.globalPolicyInputs = {
       enableTransports: config.enableTransports,
       allowedTransports: config.allowedTransports,
@@ -135,6 +136,11 @@ export class AdtRegistry {
       allowedPackages: config.allowedPackages,
       allowExecution: config.allowExecution,
       allowBatchWrites: config.allowBatchWrites,
+      blockedTablesProfile: config.blockedTablesProfile,
+      blockedTables: config.blockedTables,
+      allowedTables: config.allowedTables,
+      allowDebugger: config.allowDebugger,
+      allowDebugVariables: config.allowDebugVariables,
     };
 
     // Rebuild the non-mock destinations (fresh clients; dropped names go away).
@@ -245,8 +251,9 @@ export class AdtRegistry {
       config: adtDest,
       mock: false,
       client: new AdtClient(adtDest),
-      // Global defaults overlaid with the destination's own policy block.
-      policy: AdtPolicy.resolve({ ...policyInputs, ...dest.policy }),
+      // Global defaults overlaid with the destination's own policy block and
+      // its environment profile (qa/prd tighten; see policy.ts).
+      policy: AdtPolicy.resolve({ ...policyInputs, ...dest.policy, profile: dest.profile }),
     };
     if (cacheKey !== undefined) {
       this.clientCache.set(cacheKey, entry);
@@ -276,7 +283,7 @@ export class AdtRegistry {
         workspaceFile = loaded.path;
         const workspaceInputs: PolicyInputs = { ...this.globalPolicyInputs };
         const layer = loaded.layer as Partial<
-          Record<PolicyKey, boolean | string>
+          Record<PolicyKey, boolean | string | string[]>
         >;
         for (const key of POLICY_KEYS) {
           const value = layer[key];

@@ -1,4 +1,4 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, destinationOf, text } from './common.js';
 export function systemTools(deps) {
     const { registry } = deps;

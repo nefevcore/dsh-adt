@@ -12,7 +12,7 @@
  * is guarded by its own policy knob (`allowExecution`, default on — the kill
  * switch for read-only destinations).
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, destinationOf, optStr, text } from './common.js';
 /** Console output beyond this is truncated in the tool output (audit P3:
  * an endless WRITE loop used to flood the whole context). */
@@ -23,11 +23,11 @@ export function executeTools(deps) {
         defineTool({
             name: 'adt_execute',
             description: 'Run ABAP code on the SAP system and return its console output. `kind=PROG` runs an executable ' +
-                'program (F8 equivalent); `kind=CLAS` runs a class implementing if_oo_adt_classrun (its main( ) ' +
+                'program (SA38/F8 equivalent); `kind=CLAS` runs a class implementing if_oo_adt_classrun (its main( ) ' +
                 'executes; out->write lines come back as text). The write→activate→execute→observe loop is how an ' +
                 'agent verifies behavior end-to-end. Execution can change system state — guarded by the ' +
-                '`allowExecution` policy knob (see adt_permissions). Output beyond 20k chars is truncated — ' +
-                'filter inside the ABAP (write only what you need).',
+                '`allowExecution` policy knob (see adt_permissions); prd-profile destinations hard-deny it. ' +
+                'Output beyond 20k chars is truncated — filter inside the ABAP (write only what you need).',
             parameters: {
                 kind: {
                     type: 'string',

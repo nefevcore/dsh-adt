@@ -19,6 +19,8 @@ import { randomUUID } from 'node:crypto';
 import { ADT_BASE as ADT_BASE_PATH, ENDPOINTS, MEDIA, toQuery } from './endpoints.js';
 import { attr, child, children, childText, parseXml } from './xml.js';
 import { parseStructure, patchStructureXml, structureMediaType } from './structure.js';
+import { generateTableDdl } from './tableddl.js';
+import { parseSymbolsSource, parseSelectionsSource, parseHeadingsSource } from './textelements.js';
 /** Error raised for HTTP-level or protocol-level failures. */
 export class AdtError extends Error {
     status;
@@ -145,6 +147,8 @@ export class AdtClient {
     destination;
     cookies = new Map();
     csrfToken;
+    /** Cached "/debugger/stack not available on this release" note (probed once). */
+    stackUnavailable;
     base;
     fetchImpl;
     /** Connection identifier sent as `sap-adt-connection-id` on every request. */
@@ -1417,6 +1421,82 @@ export class AdtClient {
         };
     }
     /**
+     * Create a DDIC table WITH fields in one flow (DDIC 2.0 DDL, the format the
+     * ADT table editor itself uses): create via blueSource → lock → write the
+     * generated `define table` DDL → unlock → activate. The DDL generator
+     * (tableddl.ts) auto-adds the MANDT client key; vsp-verified semantics.
+     *
+     * Returns the generated DDL so callers can surface it, plus the activation
+     * outcome — a table that did not activate does not exist for consumers.
+     */
+    async createTable(request, options = {}) {
+        const ddlSource = generateTableDdl(request);
+        const name = request.name.toUpperCase();
+        const query = this.baseQuery({
+            package: request.packageName || '$TMP',
+            ...(request.transport ? { corrNr: request.transport } : {}),
+        });
+        // 1. Create the table object with blueSource metadata (the DDIC editor
+        //    format — strict backends reject the generic object XML here).
+        const body = `<?xml version="1.0" encoding="UTF-8"?>\n` +
+            `<blue:blueSource xmlns:blue="http://www.sap.com/wbobj/blue" xmlns:adtcore="http://www.sap.com/adt/core" ` +
+            `adtcore:name="${escapeXml(name)}" adtcore:type="TABL/DT" adtcore:description="${escapeXml(request.description)}">\n` +
+            `  <adtcore:packageRef adtcore:name="${escapeXml(request.packageName || '$TMP')}"/>\n` +
+            `</blue:blueSource>`;
+        const res = await this.request({
+            method: 'POST',
+            path: `${ENDPOINTS.createByType.TABL()}${toQuery(query)}`,
+            body,
+            contentType: createContentType('TABL'),
+            accept: 'application/xml',
+            stateful: true,
+            timeoutMs: 120_000,
+            signal: options.signal,
+        });
+        const envelopeMessages = parseErrorBody(res.text).filter((m) => m.severity === 'E' || m.severity === 'A');
+        if (envelopeMessages.length > 0) {
+            throw new AdtError(`creating table ${name}: ${envelopeMessages.map((m) => m.text).join(' | ')}`, res.status, envelopeMessages, res.text);
+        }
+        const uri = res.headers.get('location') ?? parseCreatedUri(res.text) ?? uriForCreated('TABL', name);
+        const transport = request.transport ?? parseCorrNr(res.text);
+        // 2. Lock → write the DDL source → unlock.
+        const lock = await this.lock(uri, { signal: options.signal });
+        try {
+            await this.writeSource(uri, ddlSource, {
+                lockHandle: lock.handle,
+                transport: request.transport,
+                signal: options.signal,
+            });
+        }
+        finally {
+            // Cleanup deliberately runs WITHOUT the caller signal: a failed write
+            // must still release the lock it acquired.
+            await this.unlock(uri, lock.handle).catch(() => undefined);
+        }
+        // 3. Activate (the refusal is an HTTP 200 with chkl:messages errors — a
+        // table that did not activate must be reported as such).
+        const activation = await this.activate([{ uri, name, type: 'TABL/DT' }], {
+            transport: request.transport,
+            signal: options.signal,
+        });
+        const messages = [];
+        for (const item of activation.items) {
+            for (const syntax of item.syntaxErrors)
+                messages.push(syntax);
+            if (item.message && item.severity && item.severity !== 'S') {
+                messages.push({ severity: item.severity, text: `${item.name}: ${item.message}` });
+            }
+        }
+        return {
+            uri,
+            name,
+            activated: activation.success,
+            ddlSource,
+            transport,
+            messages,
+        };
+    }
+    /**
      * Delete an object. Prefers the modern deletion service
      * (`POST /sap/bc/adt/deletion/delete`, response media type
      * `deletion.response.v1+xml`) and falls back to the legacy
@@ -1706,6 +1786,281 @@ export class AdtClient {
             unlocked = await this.unlock(uri, handle).then(() => true, () => false);
         }
         return { ...outcome, unlocked };
+    }
+    // ---------------------------------------------------------------------------
+    // Debugger (standard ADT REST debugger — zero server-side installation)
+    // ---------------------------------------------------------------------------
+    /**
+     * Register a debugger listener and WAIT for a debuggee (long-poll). The
+     * request rides the STATEFUL session (`x-sap-adt-sessiontype` + the
+     * `sap-contextid` cookie the backend sets): every follow-up debugger call
+     * (steps, variables, stack) MUST go through the same client instance or the
+     * backend answers 403 — the debug loop is bound to the HTTP session that
+     * registered the listener (vsp field note).
+     *
+     * Empty response body = the wait window elapsed without a breakpoint hit.
+     * A conflict (another debugger holds this user's session) is surfaced as
+     * `conflict` instead of an error.
+     */
+    async debuggerListen(options = { user: '', terminalId: '', ideId: '' }) {
+        const timeoutSeconds = Math.min(Math.max(options.timeoutSeconds ?? 30, 1), 240);
+        const params = this.baseQuery({
+            debuggingMode: 'user',
+            ...(options.user ? { requestUser: options.user } : {}),
+            terminalId: options.terminalId,
+            ideId: options.ideId,
+            timeout: timeoutSeconds,
+            checkConflict: true,
+            isNotifiedOnConflict: true,
+        });
+        try {
+            const res = await this.request({
+                method: 'POST',
+                path: ENDPOINTS.debuggerListeners(params),
+                accept: MEDIA.debugger,
+                stateful: true,
+                timeoutMs: (timeoutSeconds + 30) * 1000,
+                signal: options.signal,
+            });
+            if (res.text.trim() === '')
+                return { timedOut: true };
+            const root = tryParseXml(res.text);
+            const debuggeeEl = root ? findTextElementByName(root, 'STPDA_DEBUGGEE') : undefined;
+            if (!debuggeeEl) {
+                // Non-debuggee answer (e.g. a resource-unavailable notice).
+                return { timedOut: false, rawXml: res.text.slice(0, 400) };
+            }
+            const field = (name) => childText(debuggeeEl, name) || undefined;
+            const id = field('DEBUGGEE_ID');
+            if (!id)
+                return { timedOut: false, rawXml: res.text.slice(0, 400) };
+            return {
+                timedOut: false,
+                debuggee: {
+                    id,
+                    user: field('DEBUGGEE_USER'),
+                    client: field('CLIENT'),
+                    program: field('PRG_CURR'),
+                    include: field('INCL_CURR'),
+                    line: numText(field('LINE_CURR')),
+                    kind: field('DBGEE_KIND'),
+                    appServer: field('APPLSERVER'),
+                    systemId: field('SYSID'),
+                    rfcDest: field('RFCDEST'),
+                    isAttachable: field('IS_ATTACH_IMPOSSIBLE') !== 'X',
+                },
+                rawXml: res.text.slice(0, 400),
+            };
+        }
+        catch (error) {
+            if (error instanceof AdtError && error.status === 409) {
+                return { timedOut: false, conflict: error.message };
+            }
+            throw error;
+        }
+    }
+    /** Read the listener registry of the backend (session status). */
+    async debuggerListenerStatus(options = {}) {
+        const params = this.baseQuery({
+            debuggingMode: 'user',
+            ...(options.user ? { requestUser: options.user } : {}),
+        });
+        const res = await this.request({
+            path: ENDPOINTS.debuggerListeners(params),
+            accept: 'application/xml',
+            signal: options.signal,
+        });
+        return { rawXml: res.text };
+    }
+    /**
+     * Detach the listener (DELETE). Failures are swallowed by the CALLER-side
+     * manager when the backend is already detached; here a backend error is an
+     * error. Note: after a detach the session CANNOT be re-attached — a fresh
+     * listen (with a fresh terminal id) is the only way back in.
+     */
+    async debuggerDetach(options) {
+        const params = this.baseQuery({
+            debuggingMode: 'user',
+            requestUser: options.user,
+            terminalId: options.terminalId,
+            ideId: options.ideId,
+            checkConflict: false,
+            notifyConflict: true,
+        });
+        await this.request({
+            method: 'DELETE',
+            path: ENDPOINTS.debuggerListeners(params),
+            accept: 'application/xml',
+            stateful: true,
+            signal: options.signal,
+        });
+    }
+    /** Set an external (session-independent) line breakpoint; returns its id. */
+    async setDebugBreakpoint(options) {
+        const bpUri = `${options.sourceUri}#start=${options.line}`;
+        const body = `<?xml version="1.0" encoding="UTF-8"?>\n` +
+            `<dbg:breakpoints scope="external" debuggingMode="user" requestUser="${escapeXml(options.user)}" ` +
+            `terminalId="${escapeXml(options.terminalId)}" ideId="${escapeXml(options.ideId)}" systemDebugging="false" ` +
+            `deactivated="false" xmlns:dbg="http://www.sap.com/adt/debugger">` +
+            `<syncScope mode="full"></syncScope>` +
+            `<breakpoint xmlns:adtcore="http://www.sap.com/adt/core" kind="line" clientId="${escapeXml(options.ideId)}" ` +
+            `skipCount="0" adtcore:uri="${escapeXml(bpUri)}"/>` +
+            `</dbg:breakpoints>`;
+        const res = await this.request({
+            method: 'POST',
+            path: ENDPOINTS.debuggerBreakpoints(),
+            body,
+            contentType: 'application/xml',
+            accept: 'application/xml',
+            stateful: true,
+            signal: options.signal,
+        });
+        return parseDebugBreakpointResponse(res.text);
+    }
+    /** Delete a breakpoint by id (external scope). */
+    async deleteDebugBreakpoint(options) {
+        const params = this.baseQuery({
+            scope: 'external',
+            debuggingMode: 'user',
+            requestUser: options.user,
+            terminalId: options.terminalId,
+            ideId: options.ideId,
+        });
+        await this.request({
+            method: 'DELETE',
+            path: ENDPOINTS.debuggerBreakpoint(options.id, params),
+            accept: 'application/xml',
+            stateful: true,
+            signal: options.signal,
+        });
+    }
+    /** One debugger step (stepInto/stepOver/stepReturn/stepContinue/terminateDebuggee). */
+    async debuggerStep(options) {
+        const res = await this.request({
+            method: 'POST',
+            path: ENDPOINTS.debugger(this.baseQuery({ method: options.step })),
+            accept: 'application/xml',
+            stateful: true,
+            timeoutMs: 60_000,
+            signal: options.signal,
+        });
+        return parseDebugStepResponse(res.text, options.step);
+    }
+    /** Read variable values of the stopped debuggee (POST method=getVariables). */
+    async debuggerVariables(options) {
+        const vars = options.names
+            .map((name) => `<STPDA_ADT_VARIABLE><ID>${escapeXml(name)}</ID></STPDA_ADT_VARIABLE>`)
+            .join('');
+        const body = `<?xml version="1.0" encoding="UTF-8" ?><asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">` +
+            `<asx:values><DATA>${vars}</DATA></asx:values></asx:abap>`;
+        const res = await this.request({
+            method: 'POST',
+            path: ENDPOINTS.debugger(this.baseQuery({ method: 'getVariables' })),
+            body,
+            contentType: MEDIA.debuggerVariables,
+            accept: MEDIA.debuggerVariables,
+            stateful: true,
+            signal: options.signal,
+        });
+        return parseDebugVariablesResponse(res.text);
+    }
+    /** Change one variable of the stopped debuggee (POST method=setVariableValue). */
+    async debuggerSetVariable(options) {
+        await this.request({
+            method: 'POST',
+            path: ENDPOINTS.debugger(this.baseQuery({ method: 'setVariableValue', variableName: options.name })),
+            body: options.value,
+            contentType: 'text/plain; charset=utf-8',
+            accept: 'application/xml',
+            stateful: true,
+            signal: options.signal,
+        });
+    }
+    /**
+     * Read the call stack of the stopped debuggee. Backends before ~7.51 do not
+     * expose the `/debugger/stack` resource at all (404, vsp pitfall) — the
+     * fact is probed once per client and then answered locally, so every stack
+     * call on such a system returns `{ unavailable: true }` with an explanation
+     * instead of a raw 404.
+     */
+    async debuggerStack(options = {}) {
+        if (this.stackUnavailable) {
+            return { entries: [], unavailable: true, note: this.stackUnavailable };
+        }
+        try {
+            const res = await this.request({
+                method: 'POST',
+                path: ENDPOINTS.debuggerStack(this.baseQuery({ method: 'getStack', emode: '_', semanticURIs: true })),
+                accept: 'application/xml',
+                stateful: true,
+                signal: options.signal,
+            });
+            return parseDebugStackResponse(res.text);
+        }
+        catch (error) {
+            // A caller-initiated abort must not be cached as "unsupported".
+            if (options.signal?.aborted)
+                throw error;
+            if (error instanceof AdtError && error.status === 404) {
+                this.stackUnavailable =
+                    'this backend does not expose /sap/bc/adt/debugger/stack (known for BASIS < ~7.51) — ' +
+                        'stepping and variables still work';
+                return { entries: [], unavailable: true, note: this.stackUnavailable };
+            }
+            throw error;
+        }
+    }
+    /**
+     * Read the text elements of a program (text symbols I, selection texts S,
+     * list headings H) via the standard ADT textelements subsources. The wire
+     * format is SAP's plain-text custom format (see textelements.ts); the
+     * result is textpool-shaped rows (ID/KEY/ENTRY/LENGTH).
+     *
+     * A 404/405 on the service itself surfaces with guidance (restricted ADT
+     * profiles may not expose it); a failing SUBSOURCE degrades to empty with
+     * a note instead of failing the whole read.
+     */
+    async readTextElements(programName, options = {}) {
+        const program = programName.toUpperCase();
+        const fetch = async (subsource) => {
+            try {
+                const res = await this.request({
+                    path: ENDPOINTS.textElements(program, subsource),
+                    accept: 'text/plain',
+                    signal: options.signal,
+                });
+                return res.text;
+            }
+            catch (error) {
+                if (options.signal?.aborted)
+                    throw error;
+                if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+                    // Distinguish "service absent" from "program unknown": a 404 on
+                    // the FIRST subsource with an empty result elsewhere is reported
+                    // by the caller; here we degrade per-subsource.
+                    return undefined;
+                }
+                throw error;
+            }
+        };
+        const [symbolsBody, selectionsBody, headingsBody] = await Promise.all([
+            fetch('symbols'),
+            fetch('selections'),
+            fetch('headings'),
+        ]);
+        const symbols = symbolsBody !== undefined ? parseSymbolsSource(symbolsBody) : [];
+        const selections = selectionsBody !== undefined ? parseSelectionsSource(selectionsBody) : [];
+        const headings = headingsBody !== undefined ? parseHeadingsSource(headingsBody) : [];
+        return {
+            program,
+            elements: [...symbols, ...selections, ...headings],
+            counts: { symbols: symbols.length, selections: selections.length, headings: headings.length },
+            raw: {
+                ...(symbolsBody !== undefined ? { symbols: symbolsBody } : {}),
+                ...(selectionsBody !== undefined ? { selections: selectionsBody } : {}),
+                ...(headingsBody !== undefined ? { headings: headingsBody } : {}),
+            },
+        };
     }
     // ---------------------------------------------------------------------------
     // Diagnostics
@@ -3080,6 +3435,135 @@ function parseBatchResponseParts(body, boundary) {
             headers,
             body: responseBody.trim(),
             contentType: headers['content-type'],
+        });
+    }
+    return out;
+}
+// --- Debugger response parsing ------------------------------------------------
+/** Numeric text (`'42'` → 42; anything else → undefined). */
+function numText(value) {
+    if (value === undefined || value === '')
+        return undefined;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : undefined;
+}
+/** Depth-first search for the first element with the given local name. */
+function findTextElementByName(root, name) {
+    if (root.name === name)
+        return root;
+    for (const childNode of root.children) {
+        const hit = findTextElementByName(childNode, name);
+        if (hit)
+            return hit;
+    }
+    return undefined;
+}
+/** Collect every element with the given local name (depth-first). */
+function collectElementsByName(root, name, out = []) {
+    if (root.name === name)
+        out.push(root);
+    for (const childNode of root.children)
+        collectElementsByName(childNode, name, out);
+    return out;
+}
+/**
+ * Parse the breakpoint-set response: SAP answers the external-scope POST with
+ * the resulting breakpoint list; ids are the `id` attributes of `breakpoint`
+ * elements (abap-mcp/vsp both extract them this way).
+ */
+function parseDebugBreakpointResponse(xml) {
+    const root = tryParseXml(xml);
+    if (!root)
+        return [];
+    const out = [];
+    for (const bp of collectElementsByName(root, 'breakpoint')) {
+        const id = attr(bp, 'id');
+        if (!id)
+            continue;
+        const uri = attr(bp, 'uri') ?? '';
+        const lineMatch = /#start=(\d+)/.exec(uri);
+        out.push({
+            id,
+            uri: uri.split('#')[0] ?? uri,
+            line: lineMatch ? Number(lineMatch[1]) : numAttr(bp, 'line'),
+            kind: attr(bp, 'kind') ?? 'line',
+        });
+    }
+    return out;
+}
+/** Parse a `dbg:step` document (step result / breakpoint-hit state). */
+function parseDebugStepResponse(xml, step) {
+    const root = tryParseXml(xml);
+    if (!root || root.name !== 'step') {
+        return { step, reachedBreakpoints: [], rawXml: xml.slice(0, 400) };
+    }
+    const reached = [];
+    for (const bp of collectElementsByName(root, 'breakpoint')) {
+        const id = attr(bp, 'id');
+        if (id)
+            reached.push({ id, uri: attr(bp, 'uri') ?? '', kind: attr(bp, 'kind') ?? 'line' });
+    }
+    return {
+        step,
+        debugSessionId: attr(root, 'debugSessionId'),
+        program: attr(root, 'programName'),
+        include: attr(root, 'includeName'),
+        line: numAttr(root, 'line'),
+        isSteppingPossible: attr(root, 'isSteppingPossible') === 'true',
+        isTerminationPossible: attr(root, 'isTerminationPossible') === 'true',
+        isDebuggeeChanged: attr(root, 'isDebuggeeChanged') === 'true',
+        isPostMortem: attr(root, 'isPostMortem') === 'true',
+        serverName: attr(root, 'serverName'),
+        reachedBreakpoints: reached,
+        rawXml: xml.slice(0, 400),
+    };
+}
+/** Parse a `dbg:stack` document. */
+function parseDebugStackResponse(xml) {
+    const root = tryParseXml(xml);
+    if (!root || root.name !== 'stack')
+        return { entries: [] };
+    const entries = collectElementsByName(root, 'stackEntry').map((entry, index) => ({
+        stackPosition: numAttr(entry, 'stackPosition') ?? index + 1,
+        programName: attr(entry, 'programName'),
+        includeName: attr(entry, 'includeName'),
+        line: numAttr(entry, 'line'),
+        eventType: attr(entry, 'eventType'),
+        eventName: attr(entry, 'eventName'),
+        uri: attr(entry, 'uri') ?? attr(entry, 'stackUri'),
+    }));
+    return {
+        entries,
+        cursorIndex: numAttr(root, 'debugCursorStackIndex'),
+        serverName: attr(root, 'serverName'),
+    };
+}
+/**
+ * Parse a getVariables answer: ABAP XML (`asx:abap`) whose DATA section
+ * repeats `STPDA_ADT_VARIABLE` elements with UPPERCASE element names.
+ */
+function parseDebugVariablesResponse(xml) {
+    const root = tryParseXml(xml);
+    if (!root)
+        return [];
+    const out = [];
+    for (const el of collectElementsByName(root, 'STPDA_ADT_VARIABLE')) {
+        const field = (name) => childText(el, name) || undefined;
+        const name = field('NAME') ?? field('ID') ?? '';
+        if (!name)
+            continue;
+        out.push({
+            name,
+            value: field('VALUE'),
+            declaredTypeName: field('DECLARED_TYPE_NAME'),
+            actualTypeName: field('ACTUAL_TYPE_NAME'),
+            kind: field('KIND'),
+            technicalType: field('TECHNICAL_TYPE'),
+            length: numText(field('LENGTH')),
+            tableLines: numText(field('TABLE_LINES')),
+            readOnly: field('READ_ONLY') === 'X',
+            isValueIncomplete: field('IS_VALUE_INCOMPLETE') === 'X',
+            isException: field('IS_EXCEPTION') === 'X',
         });
     }
     return out;

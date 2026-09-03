@@ -177,3 +177,81 @@ test('systemInfo falls back to alternative release feature keys', async () => {
   const info = await client.systemInfo();
   assert.equal(info.release, '758');
 });
+
+// --- CSRF lifecycle (P0-5 verification) --------------------------------------
+//
+// abap-mcp warms the CSRF token before the first tool request to dodge SAP's
+// first-request 403. Our client resolves tokens lazily INSIDE request(): the
+// probe runs (and its cookies are stored) before the first state-changing
+// request is ever sent — so a naked write cannot leave the client. This test
+// locks that ordering in; if someone "optimizes" the probe away, it fails.
+
+test('first state-changing request is preceded by the CSRF token probe — no naked writes', async () => {
+  const seen: Array<{ method: string; csrf: string | undefined; url: string }> = [];
+  const fetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    seen.push({ method: init?.method ?? 'GET', csrf: headers['X-CSRF-Token'], url: String(url) });
+    if (headers['X-CSRF-Token'] === 'fetch') {
+      // The probe: discovery GET answered with the token + session cookie.
+      return new Response('<service xmlns="http://www.w3.org/2007/app"/>', {
+        status: 200,
+        headers: { 'content-type': 'application/atomsvc+xml', 'x-csrf-token': 'TOKEN-1' },
+      });
+    }
+    if (init?.method === 'PUT') return new Response('', { status: 200 });
+    return xml('<service xmlns="http://www.w3.org/2007/app"/>', 'application/atomsvc+xml');
+  };
+  const client = new AdtClient(destination, fetch as unknown as typeof fetch);
+
+  await client.writeSource('/sap/bc/adt/programs/programs/zfoo', 'REPORT zfoo.\n', {
+    lockHandle: 'H1',
+  });
+  // Second write: the cached token is reused, no second probe.
+  await client.writeSource('/sap/bc/adt/programs/programs/zfoo', 'REPORT zfoo.\nWRITE / 1.\n', {
+    lockHandle: 'H2',
+  });
+
+  // The very first outbound request is the token probe (GET + fetch header)…
+  assert.equal(seen[0]!.method, 'GET');
+  assert.equal(seen[0]!.csrf, 'fetch');
+  // …every state-changing request carries the issued token — none is naked…
+  const writes = seen.filter((r) => r.method !== 'GET');
+  assert.ok(writes.length >= 2, 'two writes happened');
+  assert.ok(writes.every((r) => r.csrf === 'TOKEN-1'), 'all writes carry the token');
+  // …and the probe ran exactly once for both writes (cached, not re-fetched).
+  assert.equal(seen.filter((r) => r.csrf === 'fetch').length, 1);
+});
+
+test('an invalidated CSRF session is re-probed once and the write retried with the fresh token', async () => {
+  let issued = 0;
+  const seen: Array<{ method: string; csrf: string | undefined }> = [];
+  const fetch = async (_url: string | URL, init?: RequestInit): Promise<Response> => {
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const method = init?.method ?? 'GET';
+    seen.push({ method, csrf: headers['X-CSRF-Token'] });
+    if (headers['X-CSRF-Token'] === 'fetch') {
+      issued += 1;
+      return new Response('<service/>', {
+        status: 200,
+        headers: { 'content-type': 'application/xml', 'x-csrf-token': `TOKEN-${issued}` },
+      });
+    }
+    // TOKEN-1 has been invalidated server-side: the write answers 403 + hint.
+    if (method === 'PUT' && headers['X-CSRF-Token'] === 'TOKEN-1') {
+      return new Response('CSRF token invalid', { status: 403, headers: { 'x-csrf-token': 'Required' } });
+    }
+    if (method === 'PUT') return new Response('', { status: 200 });
+    return xml('<service xmlns="http://www.w3.org/2007/app"/>');
+  };
+  const client = new AdtClient(destination, fetch as unknown as typeof fetch);
+
+  await client.writeSource('/sap/bc/adt/programs/programs/zfoo', 'REPORT zfoo.\n', { lockHandle: 'H' });
+
+  const writes = seen.filter((r) => r.method === 'PUT');
+  assert.deepEqual(
+    writes.map((w) => w.csrf),
+    ['TOKEN-1', 'TOKEN-2'],
+    'first attempt with the stale token, retry with the re-probed one',
+  );
+  assert.equal(issued, 2, 'the session reset triggered exactly one fresh probe');
+});

@@ -13,5 +13,5 @@ export interface DiffOp {
 export declare function diffLines(from: string, to: string): DiffOp[];
 /** Render a line diff as unified diff with hunk headers and context. */
 export declare function unifiedDiff(from: string, to: string, context?: number): string;
-export declare function versionTools(deps: ToolDeps): import("@deepseek-ai/dsh-tools").ToolDefinition[];
+export declare function versionTools(deps: ToolDeps): import("../tooldef.js").DefinedTool[];
 //# sourceMappingURL=versions.d.ts.map

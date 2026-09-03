@@ -26,6 +26,11 @@ import { policyTools } from '../lib/tools/policy.js';
 import { dumpTools } from '../lib/tools/dumps.js';
 import { executeTools } from '../lib/tools/execute.js';
 import { structureTools } from '../lib/tools/structure.js';
+import { debuggerTools } from '../lib/tools/debugger.js';
+import { textElementTools } from '../lib/tools/textelements.js';
+import { cochangeTools } from '../lib/tools/cochange.js';
+import { crudTools } from '../lib/tools/crud.js';
+import { DebuggerManager } from '../lib/debugger.js';
 import { findMethodBlocks, extractDependencyCandidates, rankDependencies, extractContract } from '../lib/abap.js';
 import type { Context } from '@deepseek-ai/cordis';
 
@@ -49,7 +54,7 @@ after(async () => {
   await registry.dispose();
 });
 
-function tools(deps = { registry, ledger: new LockLedger() }, ctx: Context = fakeCtx) {
+function tools(deps = { registry, ledger: new LockLedger(), debugger: new DebuggerManager(registry) }, ctx: Context = fakeCtx) {
   const flat = [
     ...readTools(deps, ctx),
     ...writeTools(deps, ctx),
@@ -277,7 +282,7 @@ test('adt_selfcheck: mock destination answers, nothing dead or broken', async ()
 // ---------------------------------------------------------------------------
 
 test('tool catalog: every adt_* tool accounted for (published numbers)', async () => {
-  const deps = { registry, ledger: new LockLedger() };
+  const deps = { registry, ledger: new LockLedger(), debugger: new DebuggerManager(registry) };
   const all = [
     ...systemTools(deps),
     ...destinationTools(deps, fakeCtx),
@@ -302,10 +307,15 @@ test('tool catalog: every adt_* tool accounted for (published numbers)', async (
     ...executeTools(deps),
     ...structureTools(deps),
     ...selfcheckTools(deps),
+    ...debuggerTools(deps),
+    ...textElementTools(deps),
+    ...cochangeTools(deps),
+    // The compact CRUD facade is appended after the full catalog (index.ts).
+    ...crudTools(deps, new Map<string, never>() as never),
   ];
   const names = all.map((t) => t.name).sort();
   assert.equal(new Set(names).size, names.length, 'duplicate tool name registered');
-  assert.equal(names.length, 38, `catalog size drifted: ${names.length} — update README/docs badge and this pin together`);
+  assert.equal(names.length, 46, `catalog size drifted: ${names.length} — update README/docs badge and this pin together`);
   assert.ok(names.includes('adt_selfcheck'));
   // Sweep coverage statement stays honest: covered + unprobed = full catalog.
   const covered = new Set(SWEPT_TOOLS);

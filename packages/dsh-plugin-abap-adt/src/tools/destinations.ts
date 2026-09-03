@@ -14,9 +14,8 @@
  * `adt_*` call in the same workspace sees the new destination (the registry
  * resolves the workspace layer per call).
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool, type ToolHost } from '../tooldef.js';
 import { cwd as nodeCwd } from 'node:process';
-import type { Context } from '@deepseek-ai/cordis';
 import type { DestinationConfig } from '../config.js';
 import { passwordRefNames } from '../config.js';
 import { credentialsOf, isCredentialRefName } from '../credentials.js';
@@ -196,7 +195,7 @@ function connectionView(c: SapGuiConnection): GuiConnectionView {
   };
 }
 
-export function destinationTools(deps: ToolDeps, ctx: Context) {
+export function destinationTools(deps: ToolDeps, ctx: ToolHost) {
   const { registry } = deps;
 
   return [
@@ -347,8 +346,11 @@ export function destinationTools(deps: ToolDeps, ctx: Context) {
         'failure (e.g. 401) proves the url alive and only warns. ' +
         '(2) manual — pass at least `name` and `url`. Permission policy can be set per destination via ' +
         'enableTransports / allowedTransports / allowTransportableEdits / allowedPackages / allowExecution / ' +
-        'allowBatchWrites (written into the entry `policy:` block; keys not passed fall back to the global ' +
-        'config / SAP_* env vars / built-in defaults). Passwords: pass `password` and it is stored in the DSH ' +
+        'allowBatchWrites / allowDebugger / allowDebugVariables / blockedTablesProfile / blockedTables / ' +
+        'allowedTables (written into the entry `policy:` block; keys not passed fall back to the global ' +
+        'config / SAP_* env vars / built-in defaults). The environment tier travels as `profile` ' +
+        '(dev default; qa defaults execution/batchWrites/debugger to off; prd hard-denies them). ' +
+        'Passwords: pass `password` and it is stored in the DSH ' +
         'credential store (~/.dsh/.credentials.yaml, referenced from the file via `passwordEnv` — never written ' +
         'to destinations.yaml); when no credential service is available, or `passwordInFile: true`, the password ' +
         'is written plaintext into destinations.yaml (avoid committing that file). Without `password`, maintain ' +
@@ -429,6 +431,46 @@ export function destinationTools(deps: ToolDeps, ctx: Context) {
             'Policy for THIS destination: allow write parts inside adt_batch (unset: ' +
             'SAP_ALLOW_BATCH_WRITES / default false).',
         },
+        allowDebugger: {
+          type: 'boolean',
+          description:
+            'Policy for THIS destination: allow the ABAP debugger family adt_debug_* — holds a stateful session ' +
+            'and stops live processes (unset: SAP_ALLOW_DEBUGGER / default false).',
+        },
+        allowDebugVariables: {
+          type: 'boolean',
+          description:
+            'Policy for THIS destination: allow changing debuggee variable values — double opt-in next to ' +
+            'allowDebugger (unset: SAP_ALLOW_DEBUG_VARIABLES / default false).',
+        },
+        blockedTablesProfile: {
+          type: 'string',
+          enum: ['off', 'minimal', 'standard', 'strict'],
+          description:
+            'Policy for THIS destination: read-side governance of adt_data_preview row reads (unset: ' +
+            'SAP_BLOCKED_TABLES_PROFILE / default off).',
+        },
+        blockedTables: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Policy for THIS destination: extra blocked table names/patterns on top of the catalog ' +
+            "(unset: SAP_BLOCKED_TABLES / none).",
+        },
+        allowedTables: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Policy for THIS destination: exemptions from the blocked-table catalog — audited on every use ' +
+            '(unset: SAP_ALLOWED_TABLES / none).',
+        },
+        profile: {
+          type: 'string',
+          enum: ['dev', 'qa', 'prd'],
+          description:
+            'Environment tier of THIS destination: dev (default) keeps plain knob semantics; qa defaults ' +
+            'execution/batchWrites/debugger to off (explicit values still open them); prd HARD-DENIES them.',
+        },
         guiUuid: { type: 'string', description: 'uuid of a connection from adt_list_gui_connections to import.' },
         probe: {
           type: 'boolean',
@@ -473,6 +515,7 @@ export function destinationTools(deps: ToolDeps, ctx: Context) {
                 passwordEnv: { type: 'string' },
                 strictSSL: { type: 'boolean' },
                 timeoutMs: { type: 'integer' },
+                profile: { type: 'string', description: 'Environment tier (dev|qa|prd) when set.' },
                 policy: {
                   type: 'object',
                   additionalProperties: false,
@@ -484,6 +527,11 @@ export function destinationTools(deps: ToolDeps, ctx: Context) {
                     allowedPackages: { type: 'string' },
                     allowExecution: { type: 'boolean' },
                     allowBatchWrites: { type: 'boolean' },
+                    allowDebugger: { type: 'boolean' },
+                    allowDebugVariables: { type: 'boolean' },
+                    blockedTablesProfile: { type: 'string' },
+                    blockedTables: { type: 'array', items: { type: 'string' } },
+                    allowedTables: { type: 'array', items: { type: 'string' } },
                   },
                 },
               },
@@ -697,6 +745,7 @@ export function destinationTools(deps: ToolDeps, ctx: Context) {
           password?: string;
           strictSSL?: boolean;
           timeoutMs?: number;
+          profile?: string;
           policy?: PolicyInputs;
         } = { name, url: parsedUrl.toString().replace(/\/+$/, '') };
         if (client !== undefined) destOut.client = client;
@@ -716,11 +765,29 @@ export function destinationTools(deps: ToolDeps, ctx: Context) {
         if (typeof args.allowTransportableEdits === 'boolean') policy.allowTransportableEdits = args.allowTransportableEdits;
         if (typeof args.allowExecution === 'boolean') policy.allowExecution = args.allowExecution;
         if (typeof args.allowBatchWrites === 'boolean') policy.allowBatchWrites = args.allowBatchWrites;
+        if (typeof args.allowDebugger === 'boolean') policy.allowDebugger = args.allowDebugger;
+        if (typeof args.allowDebugVariables === 'boolean') policy.allowDebugVariables = args.allowDebugVariables;
+        const blockedTablesProfile = trimmedArgStr(args.blockedTablesProfile);
+        if (blockedTablesProfile !== undefined) policy.blockedTablesProfile = blockedTablesProfile;
+        if (Array.isArray(args.blockedTables) && args.blockedTables.length > 0) {
+          policy.blockedTables = args.blockedTables.map(String).filter(Boolean);
+        }
+        if (Array.isArray(args.allowedTables) && args.allowedTables.length > 0) {
+          policy.allowedTables = args.allowedTables.map(String).filter(Boolean);
+        }
         const allowedTransports = trimmedArgStr(args.allowedTransports);
         if (allowedTransports !== undefined) policy.allowedTransports = allowedTransports;
         const allowedPackages = trimmedArgStr(args.allowedPackages);
         if (allowedPackages !== undefined) policy.allowedPackages = allowedPackages;
         if (Object.keys(policy).length > 0) destOut.policy = policy;
+        // Environment tier (destination-level key, sibling of the policy block).
+        const profile = trimmedArgStr(args.profile)?.toLowerCase();
+        if (profile !== undefined) {
+          if (profile !== 'dev' && profile !== 'qa' && profile !== 'prd') {
+            throw new Error(`adt_create_destination: invalid profile '${profile}' (expected dev, qa or prd)`);
+          }
+          destOut.profile = profile;
+        }
 
         // --- Pre-save ping (explicit verification) ----------------------------
         // Pings the NOT-yet-saved config with the same password resolution a

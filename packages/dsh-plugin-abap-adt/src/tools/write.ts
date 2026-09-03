@@ -11,8 +11,7 @@
  * an AMBIGUOUS marker (multiple candidate lines) is an error listing the
  * candidates — never a silent first-match.
  */
-import { defineTool } from '@deepseek-ai/dsh-tools';
-import type { Context } from '@deepseek-ai/cordis';
+import { defineTool, type AdtFileSystem, type ToolHost } from '../tooldef.js';
 import type { AdtClient, AdtObjectRef } from '@nefevcore/abap-adt-protocol';
 import type { RegistryDestination } from '../registry.js';
 import type { LockLedger } from '../locks.js';
@@ -92,18 +91,18 @@ async function verifyPersisted(
   return { persisted: true, readBackSource: readBack.source };
 }
 
-/** Read a UTF-8 text file through the sandbox-aware DSH filesystem service. */
-async function readSourceFile(ctx: Context, filePath: string): Promise<string> {
+/** Read a UTF-8 text file through the sandbox-aware host filesystem service. */
+async function readSourceFile(ctx: ToolHost, filePath: string): Promise<string> {
   // Optional service (audit D1): resolved at call time, not injected.
-  const fs = ctx.get('fs');
-  if (!fs) throw new Error('adt: the dsh filesystem service is required to read `sourceFile`');
+  const fs = ctx.get('fs') as AdtFileSystem | undefined;
+  if (!fs) throw new Error('adt: a host filesystem service is required to read `sourceFile`');
   const target = await fs.resolve(filePath);
   return fs.readText(target);
 }
 
 /** Resolve the replacement source from args: `sourceFile` (local file, takes
  * precedence) or `source` (inline) — exactly one must be given. */
-async function resolveSourceInput(ctx: Context, args: Record<string, unknown>): Promise<string> {
+async function resolveSourceInput(ctx: ToolHost, args: Record<string, unknown>): Promise<string> {
   const inline = typeof args.source === 'string' ? args.source : undefined;
   const file = optStr(args.sourceFile);
   if (inline !== undefined && file !== undefined) {
@@ -200,7 +199,7 @@ function transportSourceOf(
  * working (push rejects earlier without fs anyway).
  */
 async function postWriteStatus(
-  ctx: Context,
+  ctx: ToolHost,
   entry: RegistryDestination,
   ref: AdtObjectRef,
   outcome: WriteStatus & { written?: string },
@@ -777,7 +776,7 @@ export function replaceSourceText(
   return pick(0);
 }
 
-export function writeTools(deps: ToolDeps, ctx: Context) {
+export function writeTools(deps: ToolDeps, ctx: ToolHost) {
   const { registry, ledger } = deps;
 
   const writeObject = defineTool({
@@ -1219,7 +1218,7 @@ export function writeTools(deps: ToolDeps, ctx: Context) {
         packageHint: optStr(args.packageName),
         signal: exec.signal,
       });
-      if (!ctx.get('fs')) throw new Error('adt_push_object requires the dsh filesystem service');
+      if (!ctx.get('fs')) throw new Error('adt_push_object requires a host filesystem service');
 
       const customPath = optStr(args.path);
       const snapshot = await loadSnapshot(ctx, entry.config.name, ref);
