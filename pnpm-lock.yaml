@@ -90,6 +90,9 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(f8724372086ccc1457fc84e7becee2e0)
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
 
 packages:
 
