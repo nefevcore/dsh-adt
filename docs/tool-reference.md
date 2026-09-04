@@ -11,7 +11,7 @@
 ## 1. 系统与连接（7）
 
 ### adt_list_destinations 🔒
-枚举配置的全部 ADT 目的地并逐个 ping（含**会话工作区文件** `.dsh-abap-adt/destinations.yaml` 叠加后的完整视图）。
+枚举配置的全部 ADT 目的地并逐个 ping（含**会话工作区文件** `<会话工作区>/<宿主配置目录>/destinations.yaml`——DSH 为 `.dsh-abap-adt`，目录随宿主声明——叠加后的完整视图）。
 - **入参**：无。
 - **返回**：`destinations[] { name, mock, ok, detail }`。
 
@@ -22,12 +22,12 @@
 - **返回**：`available, sources[], connections[] { uuid, name, kind(direct|group|reference), systemId?, folder?, client?, user?, language?, host?, sysnr?, router?, adtUrl?(未验证猜测), httpUrl?, adtUrlNote?, probe? { reachable, verifiedUrl?, status?, detail, tried[] { url, ok, status?, detail } } }, truncated?`。无 GUI 时 `available: false` + 提示改走手工字段。
 
 ### adt_create_destination
-在**会话工作区**写 `.dsh-abap-adt/destinations.yaml` 创建/更新目的地（原子写、写后即热生效——下一次 `adt_*` 调用即可用）。两种模式：`guiUuid` 导入 GUI 连接（client/language/username 自动带出，`strictSSL` 默认 false）；或手工传 `name` + `url`。
+在**会话工作区**写 `<宿主配置目录>/destinations.yaml`（DSH 为 `.dsh-abap-adt`；目录由宿主经 `HostProfile.workspaceConfigDir` 声明、注册表为存储权威）创建/更新目的地（原子写、写后即热生效——下一次 `adt_*` 调用即可用）。两种模式：`guiUuid` 导入 GUI 连接（client/language/username 自动带出，`strictSSL` 默认 false）；或手工传 `name` + `url`。
 **URL 探测（导入模式）**：URL 按 GUI 推导时（未显式传 `url`）默认实测候选组合（`443<nn>` / `443` / `80<nn>` / `80`，无凭证 GET，401 = 存活），用**第一个真正应答的** URL 落盘（可能与端口约定不同并在 notes 说明）；**没有任何候选展示可用 ADT 端点时拒绝创建**（不写文件），报逐候选原因与引导（VPN/防火墙；**saprouter 条目**：HTTP 无法走 GUI 的 saprouter——要 web dispatcher url 作为显式 `url` 传入）；`force: true` 可强制保存（标记 `urlVerified.ok=false`）。显式传入的 `url` 不探测（用 `ping` 验证）。
 **ping 先行（`ping: true`）**：保存前先带凭证 ping。**连接级失败**（无 HTTP 状态码：网络/VPN 不通）同样拒绝保存（`force` 可覆盖）；**HTTP 级失败**（如 401——URL 已证存活）照常保存并提示修凭证/服务。
 **写出的文件自带说明**：每个未指定的可配置项都以注释行（含默认值与用途，`passwordEnv` 按目的地名生成约定引用）一并写入，取消注释即可手工改配置；托管写入保留已设值并重新生成注释模板，不会把 schema 默认值物化成真实行。
 **按目的地权限**：六个策略键 `enableTransports` / `allowedTransports` / `allowTransportableEdits` / `allowedPackages` / `allowExecution` / `allowBatchWrites` 可直接传入，写入该条目的 `policy:` 块；只覆盖显式传入的键，未传的沿用全局配置 / `SAP_*` 环境变量 / 内置默认（见 policy 表）。
-**密码**：直接传 `password` —— 默认存入 **DSH 凭证文件** `~/.dsh/.credentials.yaml`（引用名 = `passwordEnv` 或约定 `ADT_<NAME>_PASSWORD`，destinations.yaml 只留引用不落明文）；未挂载凭证服务、或显式 `passwordInFile: true`、或凭证服务拒绝写入（同名环境变量遮蔽）时回退**明文写入文件**并附警告。不传 `password` 时可自行维护该引用（DSH 分层解析：进程环境变量 > 凭证文件 > `.env`，每次调用实时读取）。
+**密码**：直接传 `password` —— 默认存入**宿主凭证存储**（DSH 上即 `~/.dsh/.credentials.yaml`；引用名 = `passwordEnv` 或约定 `ADT_<NAME>_PASSWORD`，destinations.yaml 只留引用不落明文）；无凭证存储、或显式 `passwordInFile: true`、或凭证服务拒绝写入（同名环境变量遮蔽）时回退**明文写入文件**并附警告。不传 `password` 时可自行维护该引用（宿主分层解析——DSH：进程环境变量 > 凭证文件 > `.env`；无凭证存储的宿主仅环境变量；每次调用实时读取）。凭证相关文案（工具描述 / notes / hint / destinations.yaml 自文档注释）随宿主自适应：内核经 `ctx.get('host')` 声明缝识别环境（DSH 插件声明 dsh 档案，AgentChat 声明其加密存储，未声明宿主按能力推断并使用宿主中立措辞）。
 - **入参**：`name?, url?, client?, language?, username?, password?, passwordEnv?, passwordInFile?, strictSSL?, timeoutMs?, enableTransports?, allowedTransports?, allowTransportableEdits?, allowedPackages?, allowExecution?, allowBatchWrites?, guiUuid?, probe?, probeTimeoutMs?, setDefault?, overwrite?, ping?, force?`。
 - **返回**：`file, action(created|updated), destination{ ..., policy? }, setAsDefault, urlVerified? { ok, url?, status?, detail }, passwordStoredIn?(credential-store|file), importedFromGui?, shadowsGlobal, notes[], ping? { ok, detail }, hint`。
 - 同名已存在时需 `overwrite: true`；同名全局配置会被工作区条目就近覆盖（`shadowsGlobal` 提示）。

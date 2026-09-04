@@ -1,6 +1,7 @@
 import { AdtClient, type AdtDestination } from '@nefevcore/abap-adt-protocol';
 import type { DestinationConfig, EffectiveConfig, PluginConfig } from './config.js';
 import { AdtPolicy } from './policy.js';
+import { type HostProfile } from './hostprofile.js';
 export interface RegistryDestination {
     config: AdtDestination;
     /** `true` when backed by the in-process mock server. */
@@ -49,14 +50,27 @@ export declare class AdtRegistry {
     private mockPort?;
     /** Top-level policy inputs (global defaults for every destination). */
     private globalPolicyInputs;
-    /** Workspace file store (mtime-cached, per-tool-call layer). */
+    /**
+     * Workspace file store (mtime-cached, per-tool-call layer). Fixed at
+     * construction from the host profile: it decides the config DIRECTORY and
+     * the voice of the file's self-documenting comments.
+     */
     private readonly workspace;
     /** Client reuse for workspace-layer destinations, keyed by full config. */
     private readonly clientCache;
+    /** Host profile this registry was created with (storage authority). */
+    private readonly hostProfile?;
     private constructor();
+    /**
+     * The workspace config directory destinations are stored in on this host
+     * (`<cwd>/<dir>/destinations.yaml`): host-declared via
+     * `HostProfile.workspaceConfigDir`, default '.dsh-abap-adt'.
+     */
+    get workspaceConfigDir(): string;
     /** Accepts the fully-resolved config from `resolveEffectiveConfig`. */
     static create(config: EffectiveConfig, options?: {
         credentialResolver?: CredentialResolver;
+        hostProfile?: HostProfile;
     }): Promise<AdtRegistry>;
     /**
      * Re-apply a resolved config in place (settings hot reload): swaps the
@@ -122,6 +136,8 @@ export declare class AdtRegistry {
      * unless `overwrite` is set; `setDefault` also writes `defaultDestination`.
      * The written layer is validated before the atomic tmp+rename write, and
      * the workspace cache is refreshed so the very next view reflects it.
+     * Location and comment voice follow the registry's host profile (set at
+     * create — the storage authority), NOT the caller's per-call detection.
      */
     saveWorkspaceDestination(cwd: string, dest: DestinationConfig, options?: {
         setDefault?: boolean;

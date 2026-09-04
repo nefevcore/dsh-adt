@@ -4,7 +4,7 @@
  *   - `adt_list_gui_connections` — search the local SAP GUI (SAP Logon)
  *     landscape so the agent can offer the user matching systems to import.
  *   - `adt_create_destination` — create or update a destination in the
- *     session workspace file `<cwd>/.dsh-abap-adt/destinations.yaml`, either
+ *     session workspace file `<cwd>/<host config dir>/destinations.yaml`, either
  *     from explicit fields or by importing a discovered GUI connection.
  *
  * Together they cover the conversational flow: the user asks for a

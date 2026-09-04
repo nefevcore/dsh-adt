@@ -15,7 +15,7 @@
  *   4. settings user section — `abap-adt:` in ~/.dsh/settings.yaml
  *   5. explicit `configFile` — authoritative team-shared override; its path
  *      comes from any lower layer
- *   6. workspace file — `<session cwd>/.dsh-abap-adt/destinations.yaml`
+ *   6. workspace file — `<session cwd>/<host config dir>/destinations.yaml`
  *      (nearest; per-session, resolved at tool-call time because the preset
  *      mount is shared across sessions — see registry.ts viewFor())
  *
@@ -372,16 +372,27 @@ export interface EffectiveConfig {
     configFileUsed?: string;
 }
 /**
- * Resolve the workspace config file candidates for a workspace root
- * (`<cwd>/.dsh-abap-adt/destinations.yaml`, then `.yml`).
+ * Workspace-scoped config: every session has a working directory (its
+ * "workspace", `exec.agent.session.header.cwd`), and destinations configured
+ * there are private to that workspace — e.g.
+ * `<workspace>/<config dir>/destinations.yaml`. The config DIR is a host
+ * property: hosts declare theirs via `HostProfile.workspaceConfigDir`
+ * (DSH: '.dsh-abap-adt', other hosts their own); the default below keeps
+ * undeclared hosts and existing workspaces working unchanged.
  */
-export declare function workspaceConfigCandidates(cwd: string): string[];
+export declare const DEFAULT_WORKSPACE_CONFIG_DIR = ".dsh-abap-adt";
+/**
+ * Resolve the workspace config file candidates for a workspace root, inside
+ * `configDir` (the host-declared workspace config directory, default
+ * '.dsh-abap-adt'): `<cwd>/<configDir>/destinations.yaml`, then `.yml`.
+ */
+export declare function workspaceConfigCandidates(cwd: string, configDir?: string): string[];
 /**
  * The workspace config file for a cwd: the first existing candidate, or the
  * primary candidate when none exists yet (so creators can pre-resolve the
  * path they are about to write).
  */
-export declare function workspaceConfigPath(cwd: string): string;
+export declare function workspaceConfigPath(cwd: string, configDir?: string): string;
 /** Built-in defaults, applied last (mirrors the schema defaults above). */
 export declare function builtinDefaults(): EffectiveConfig;
 /** The dsh home directory: `${DSH_HOME}` or `~/.dsh`. */

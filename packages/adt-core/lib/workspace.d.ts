@@ -1,4 +1,5 @@
 import { type DestinationConfig, type PluginConfig } from './config.js';
+import { type HostProfile } from './hostprofile.js';
 /** One loaded workspace file: its absolute path and the validated layer. */
 interface WorkspaceLayer {
     path: string;
@@ -8,9 +9,15 @@ interface WorkspaceLayer {
  * mtime+size-cached synchronous loader/writer for workspace config files.
  * One instance lives on the AdtRegistry; the FILE layer stays synchronous so
  * `viewFor`/`require` only ever await password resolution, never file I/O.
+ * The host profile (from the registry) fixes TWO host properties for the
+ * store's lifetime: the config DIRECTORY the file lives in
+ * (`HostProfile.workspaceConfigDir`) and the voice of the self-documenting
+ * comments (see {@link workspaceFileHeader} / {@link passwordRefChain}).
  */
 export declare class WorkspaceConfigStore {
+    private readonly hostProfile?;
     private cache;
+    constructor(hostProfile?: HostProfile | undefined);
     /** First existing candidate path for a cwd (undefined when none exists). */
     existingPath(cwd: string): string | undefined;
     /**
@@ -27,8 +34,9 @@ export declare class WorkspaceConfigStore {
      * CURRENT raw layer (or `{}` for a fresh file — no schema defaults minted,
      * so unset options stay unset) and returns the next one; the write is
      * tmp+rename so a crash can never tear the file. The rendered body lists
-     * every unset option as a commented template (see renderWorkspaceConfig).
-     * Returns the written path and the persisted layer.
+     * every unset option as a commented template (see renderWorkspaceConfig),
+     * and the file lands in the host-declared config directory under the
+     * store's profile (constructor). Returns the written path and layer.
      */
     write(cwd: string, mutate: (current: Partial<PluginConfig>) => Partial<PluginConfig>): {
         path: string;

@@ -1,5 +1,7 @@
 /**
- * Workspace-scoped destination config: `<cwd>/.dsh-abap-adt/destinations.yaml`.
+ * Workspace-scoped destination config:
+ * `<cwd>/<host config dir>/destinations.yaml` (host-declared dir, default
+ * '.dsh-abap-adt' — see hostprofile.ts / config.ts).
  *
  * A session's workspace is its working directory (`exec.agent.session.header
  * .cwd`). The plugin's preset mount is SHARED across every session on the
@@ -34,6 +36,12 @@ import {
   type PluginConfig,
 } from './config.js';
 import { POLICY_DEFAULTS, POLICY_ENV, POLICY_KEYS, type PolicyKey } from './policy.js';
+import {
+  globalConfigSentence,
+  passwordRefChain,
+  workspaceConfigDirOf,
+  type HostProfile,
+} from './hostprofile.js';
 
 /** One loaded workspace file: its absolute path and the validated layer. */
 interface WorkspaceLayer {
@@ -41,14 +49,21 @@ interface WorkspaceLayer {
   layer: Partial<PluginConfig>;
 }
 
-/** Header comment written above managed workspace config files. */
-const WORKSPACE_FILE_HEADER =
-  '# abap-adt workspace destinations — created by adt_create_destination.\n' +
-  '# Manual edits are welcome; changes hot-apply on the next adt_* tool call.\n' +
-  '# Layering: this file overrides ~/.dsh/settings.yaml `abap-adt:` (nearest wins).\n' +
-  '# Every option left unset is listed below as a commented line with its\n' +
-  '# default — uncomment (and edit) a line to set it. Managed writes keep the\n' +
-  '# values you set and regenerate the commented templates.\n';
+/**
+ * Header comment written above managed workspace config files. Host-voiced:
+ * the layering line names the host's global config layer when the caller
+ * detected a host profile (see hostprofile.ts), else stays host-neutral.
+ */
+function workspaceFileHeader(profile: HostProfile | undefined): string {
+  return (
+    '# abap-adt workspace destinations — created by adt_create_destination.\n' +
+    '# Manual edits are welcome; changes hot-apply on the next adt_* tool call.\n' +
+    `# Layering: ${globalConfigSentence(profile)} (nearest wins).\n` +
+    '# Every option left unset is listed below as a commented line with its\n' +
+    '# default — uncomment (and edit) a line to set it. Managed writes keep the\n' +
+    '# values you set and regenerate the commented templates.\n'
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Self-documenting YAML rendering
@@ -116,7 +131,7 @@ const POLICY_KEY_SET = new Set<string>(POLICY_KEYS);
  * with its default and purpose. Keys the schema accepts but a workspace file
  * never acts on (demo/demoPort) are preserved when set but not advertised.
  */
-function renderWorkspaceConfig(layer: Partial<PluginConfig>): string {
+function renderWorkspaceConfig(layer: Partial<PluginConfig>, profile: HostProfile | undefined): string {
   const record = layer as Record<string, unknown>;
   const lines: string[] = [];
   const templates: KeyTemplate[] = [];
@@ -150,7 +165,7 @@ function renderWorkspaceConfig(layer: Partial<PluginConfig>): string {
     } else {
       if (lines.length > 0) lines.push('');
       lines.push('destinations:');
-      for (const dest of destinations) renderDestination(dest, lines);
+      for (const dest of destinations) renderDestination(dest, lines, profile);
     }
   }
   return lines.length > 0 ? `${lines.join('\n')}\n` : '';
@@ -158,7 +173,7 @@ function renderWorkspaceConfig(layer: Partial<PluginConfig>): string {
 
 /** Render one destination entry: real lines for set keys, then the commented
  *  template menu for the rest (same canonical order as the config schema). */
-function renderDestination(dest: DestinationConfig, lines: string[]): void {
+function renderDestination(dest: DestinationConfig, lines: string[], profile: HostProfile | undefined): void {
   const record = dest as unknown as Record<string, unknown>;
   lines.push(`  - name: ${scalar(dest.name)}`);
   lines.push(`    url: ${scalar(dest.url)}`);
@@ -173,11 +188,11 @@ function renderDestination(dest: DestinationConfig, lines: string[]): void {
   emit('username', { label: `username: ${scalar('YOUR_USER')}`, description: 'ABAP user name' });
   emit('password', {
     label: `password: ${scalar('CHANGE_ME')}`,
-    description: 'plaintext password stored IN THIS FILE — prefer passwordEnv + the DSH credential store',
+    description: `plaintext password stored IN THIS FILE — prefer passwordEnv (${passwordRefChain(profile)})`,
   });
   emit('passwordEnv', {
     label: `passwordEnv: ${scalar(passwordRefNames(dest)[0])}`,
-    description: 'credential reference: process env > ~/.dsh/.credentials.yaml > .env',
+    description: `credential reference: ${passwordRefChain(profile)}`,
   });
   emit('strictSSL', {
     label: `strictSSL: ${scalar(true)}`,
@@ -237,6 +252,10 @@ function parseRawLayer(raw: string, path: string): Partial<PluginConfig> {
  * mtime+size-cached synchronous loader/writer for workspace config files.
  * One instance lives on the AdtRegistry; the FILE layer stays synchronous so
  * `viewFor`/`require` only ever await password resolution, never file I/O.
+ * The host profile (from the registry) fixes TWO host properties for the
+ * store's lifetime: the config DIRECTORY the file lives in
+ * (`HostProfile.workspaceConfigDir`) and the voice of the self-documenting
+ * comments (see {@link workspaceFileHeader} / {@link passwordRefChain}).
  */
 export class WorkspaceConfigStore {
   private cache = new Map<
@@ -244,9 +263,11 @@ export class WorkspaceConfigStore {
     { mtimeMs: number; size: number; layer: Partial<PluginConfig> }
   >();
 
+  constructor(private readonly hostProfile?: HostProfile) {}
+
   /** First existing candidate path for a cwd (undefined when none exists). */
   existingPath(cwd: string): string | undefined {
-    return workspaceConfigCandidates(cwd).find((candidate) => {
+    return workspaceConfigCandidates(cwd, workspaceConfigDirOf(this.hostProfile)).find((candidate) => {
       try {
         return statSync(candidate).isFile();
       } catch {
@@ -291,8 +312,9 @@ export class WorkspaceConfigStore {
    * CURRENT raw layer (or `{}` for a fresh file — no schema defaults minted,
    * so unset options stay unset) and returns the next one; the write is
    * tmp+rename so a crash can never tear the file. The rendered body lists
-   * every unset option as a commented template (see renderWorkspaceConfig).
-   * Returns the written path and the persisted layer.
+   * every unset option as a commented template (see renderWorkspaceConfig),
+   * and the file lands in the host-declared config directory under the
+   * store's profile (constructor). Returns the written path and layer.
    */
   write(
     cwd: string,
@@ -300,7 +322,8 @@ export class WorkspaceConfigStore {
   ): { path: string; layer: Partial<PluginConfig> } {
     // Preferred path: an existing file, else the primary (.yaml) candidate.
     const path =
-      this.existingPath(cwd) ?? workspaceConfigCandidates(cwd)[0]!;
+      this.existingPath(cwd) ??
+      workspaceConfigCandidates(cwd, workspaceConfigDirOf(this.hostProfile))[0]!;
     let current: Partial<PluginConfig> = {};
     let raw: string | undefined;
     try {
@@ -313,10 +336,10 @@ export class WorkspaceConfigStore {
     // Fail fast on an invalid result (same validator as every read path).
     const plain = toPlainConfig(next);
     const validated = validateExternalConfig(plain, path);
-    const body = renderWorkspaceConfig(plain);
+    const body = renderWorkspaceConfig(plain, this.hostProfile);
     mkdirSync(dirname(path), { recursive: true });
     const tmp = join(dirname(path), `.${Math.random().toString(36).slice(2)}.tmp`);
-    writeFileSync(tmp, WORKSPACE_FILE_HEADER + body, 'utf8');
+    writeFileSync(tmp, workspaceFileHeader(this.hostProfile) + body, 'utf8');
     renameSync(tmp, path);
     // Refresh the cache so the very next call sees the new state.
     const stats = statSync(path);

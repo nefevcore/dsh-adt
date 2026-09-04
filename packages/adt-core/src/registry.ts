@@ -4,6 +4,7 @@ import type { DestinationConfig, EffectiveConfig, PluginConfig } from './config.
 import { resolvePassword } from './config.js';
 import { AdtPolicy, POLICY_KEYS } from './policy.js';
 import type { PolicyInputs, PolicyKey } from './policy.js';
+import { workspaceConfigDirOf, type HostProfile } from './hostprofile.js';
 import { WorkspaceConfigStore, upsertDestination } from './workspace.js';
 
 export interface RegistryDestination {
@@ -84,24 +85,42 @@ export class AdtRegistry {
   private mockPort?: number;
   /** Top-level policy inputs (global defaults for every destination). */
   private globalPolicyInputs: PolicyInputs = {};
-  /** Workspace file store (mtime-cached, per-tool-call layer). */
-  private readonly workspace = new WorkspaceConfigStore();
+  /**
+   * Workspace file store (mtime-cached, per-tool-call layer). Fixed at
+   * construction from the host profile: it decides the config DIRECTORY and
+   * the voice of the file's self-documenting comments.
+   */
+  private readonly workspace: WorkspaceConfigStore;
   /** Client reuse for workspace-layer destinations, keyed by full config. */
   private readonly clientCache = new Map<string, RegistryDestination>();
+  /** Host profile this registry was created with (storage authority). */
+  private readonly hostProfile?: HostProfile;
 
   private constructor(
     policy: AdtPolicy,
     private readonly credentialResolver?: CredentialResolver,
+    hostProfile?: HostProfile,
   ) {
     this.policy = policy;
+    this.hostProfile = hostProfile;
+    this.workspace = new WorkspaceConfigStore(hostProfile);
+  }
+
+  /**
+   * The workspace config directory destinations are stored in on this host
+   * (`<cwd>/<dir>/destinations.yaml`): host-declared via
+   * `HostProfile.workspaceConfigDir`, default '.dsh-abap-adt'.
+   */
+  get workspaceConfigDir(): string {
+    return workspaceConfigDirOf(this.hostProfile);
   }
 
   /** Accepts the fully-resolved config from `resolveEffectiveConfig`. */
   static async create(
     config: EffectiveConfig,
-    options: { credentialResolver?: CredentialResolver } = {},
+    options: { credentialResolver?: CredentialResolver; hostProfile?: HostProfile } = {},
   ): Promise<AdtRegistry> {
-    const registry = new AdtRegistry(AdtPolicy.resolve(config), options.credentialResolver);
+    const registry = new AdtRegistry(AdtPolicy.resolve(config), options.credentialResolver, options.hostProfile);
     await registry.reload(config);
     return registry;
   }
@@ -381,6 +400,8 @@ export class AdtRegistry {
    * unless `overwrite` is set; `setDefault` also writes `defaultDestination`.
    * The written layer is validated before the atomic tmp+rename write, and
    * the workspace cache is refreshed so the very next view reflects it.
+   * Location and comment voice follow the registry's host profile (set at
+   * create — the storage authority), NOT the caller's per-call detection.
    */
   saveWorkspaceDestination(
     cwd: string,

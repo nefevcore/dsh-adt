@@ -1,6 +1,6 @@
 {
   "name": "@nefevcore/abap-adt-core",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Host-neutral agent tool core for SAP ABAP ADT: the complete adt_* tool family (search → read → edit → activate → unit test → ATC → transport → execute → debug), destination registry, two-sided governance policy, OCC snapshots and config layering — consumed by host adapters such as @nefevcore/abap-adt-dsh-plugin (DeepSeek Harness) and AgentChat's ac-sap-adt row.",
   "type": "module",
   "main": "./lib/index.js",

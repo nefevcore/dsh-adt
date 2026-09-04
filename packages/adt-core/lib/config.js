@@ -15,7 +15,7 @@
  *   4. settings user section — `abap-adt:` in ~/.dsh/settings.yaml
  *   5. explicit `configFile` — authoritative team-shared override; its path
  *      comes from any lower layer
- *   6. workspace file — `<session cwd>/.dsh-abap-adt/destinations.yaml`
+ *   6. workspace file — `<session cwd>/<host config dir>/destinations.yaml`
  *      (nearest; per-session, resolved at tool-call time because the preset
  *      mount is shared across sessions — see registry.ts viewFor())
  *
@@ -123,27 +123,30 @@ const DEFAULT_CONFIG_FILE = 'abap-adt.yml';
  * Workspace-scoped config: every session has a working directory (its
  * "workspace", `exec.agent.session.header.cwd`), and destinations configured
  * there are private to that workspace — e.g.
- * `<workspace>/.dsh-abap-adt/destinations.yaml`. This is the nearest config
- * layer: it overrides the settings user section for `destinations` (merged by
- * name, workspace wins), `defaultDestination`, and permission-policy keys.
+ * `<workspace>/<config dir>/destinations.yaml`. The config DIR is a host
+ * property: hosts declare theirs via `HostProfile.workspaceConfigDir`
+ * (DSH: '.dsh-abap-adt', other hosts their own); the default below keeps
+ * undeclared hosts and existing workspaces working unchanged.
  */
-const WORKSPACE_CONFIG_DIR = '.dsh-abap-adt';
+export const DEFAULT_WORKSPACE_CONFIG_DIR = '.dsh-abap-adt';
 /** Candidate file names inside the workspace config dir, first hit wins. */
 const WORKSPACE_CONFIG_FILES = ['destinations.yaml', 'destinations.yml'];
 /**
- * Resolve the workspace config file candidates for a workspace root
- * (`<cwd>/.dsh-abap-adt/destinations.yaml`, then `.yml`).
+ * Resolve the workspace config file candidates for a workspace root, inside
+ * `configDir` (the host-declared workspace config directory, default
+ * '.dsh-abap-adt'): `<cwd>/<configDir>/destinations.yaml`, then `.yml`.
  */
-export function workspaceConfigCandidates(cwd) {
-    return WORKSPACE_CONFIG_FILES.map((file) => join(cwd, WORKSPACE_CONFIG_DIR, file));
+export function workspaceConfigCandidates(cwd, configDir = DEFAULT_WORKSPACE_CONFIG_DIR) {
+    return WORKSPACE_CONFIG_FILES.map((file) => join(cwd, configDir, file));
 }
 /**
  * The workspace config file for a cwd: the first existing candidate, or the
  * primary candidate when none exists yet (so creators can pre-resolve the
  * path they are about to write).
  */
-export function workspaceConfigPath(cwd) {
-    return workspaceConfigCandidates(cwd).find((p) => existsSync(p)) ?? workspaceConfigCandidates(cwd)[0];
+export function workspaceConfigPath(cwd, configDir = DEFAULT_WORKSPACE_CONFIG_DIR) {
+    return (workspaceConfigCandidates(cwd, configDir).find((p) => existsSync(p)) ??
+        workspaceConfigCandidates(cwd, configDir)[0]);
 }
 /** Built-in defaults, applied last (mirrors the schema defaults above). */
 export function builtinDefaults() {

@@ -21,9 +21,12 @@
  *     `undefined` via {@link deepCompact} where their boundary demands
  *     lossless JSON);
  *   - services: provide a {@link ToolHost} facade whose `get('fs')` returns
- *     an {@link AdtFileSystem} (snapshots/export/local check) and whose
+ *     an {@link AdtFileSystem} (snapshots/export/local check), whose
  *     `get('credentials')` returns the seam `src/credentials.ts` describes
- *     (password references like `ADT_DEV_PASSWORD`);
+ *     (password references like `ADT_DEV_PASSWORD`), and whose `get('host')`
+ *     declares a {@link HostProfile} (see `src/hostprofile.ts`) so the
+ *     credential-store wording names YOUR host's store instead of assuming
+ *     DSH's — undeclared hosts get capability-inferred, host-neutral wording;
  *   - execution context: tools read `exec.signal` and the caller workspace
  *     directory from `exec.agent.session.header.cwd` (see
  *     `sessionCwd` in tools/common.ts) — hosts synthesize that shape;
@@ -110,12 +113,13 @@ export { DebuggerManager } from './debugger.js';
 export { AdtPolicy, AdtPolicyError, POLICY_KEYS } from './policy.js';
 export { SnapshotConflictError } from './snapshots.js';
 export { credentialResolverOf, credentialsOf, isCredentialRefName } from './credentials.js';
+export { hostProfileOf, workspaceConfigDirOf } from './hostprofile.js';
 export { deepCompact } from './tools/common.js';
 export { CRUD_MATRIX, CRUD_VERBS, crudObjectTypes, crudCreatableTypes, renderCrudMatrixTable } from './crudmatrix.js';
 // --- Object-reference resolution helpers (ADT type codes ↔ URIs ↔ names) ---
 export { TYPE_MAP, normalizeType, refFromName, resolveObject, resolveObjects, typeLabel, } from './resolve.js';
 // --- Config layering (schema defaults < composition < files < workspace) ---
-export { Config, builtinDefaults, composeLayers, resolveEffectiveConfig, loadExternalConfigFile, parseExternalConfigText, validateExternalConfig, workspaceConfigCandidates, workspaceConfigPath, passwordRefNames, expandHomePath, resolveConfigFilePath, dshHome, autoDiscoverConfigFile, } from './config.js';
+export { Config, builtinDefaults, composeLayers, resolveEffectiveConfig, loadExternalConfigFile, parseExternalConfigText, validateExternalConfig, workspaceConfigCandidates, workspaceConfigPath, DEFAULT_WORKSPACE_CONFIG_DIR, passwordRefNames, expandHomePath, resolveConfigFilePath, dshHome, autoDiscoverConfigFile, } from './config.js';
 // --- Tool-definition vocabulary (see tooldef.ts) ---
 export { defineTool, parameterSpecToJsonSchema, valueSpecToJsonSchema, ToolArgsError, } from './tooldef.js';
 //# sourceMappingURL=index.js.map

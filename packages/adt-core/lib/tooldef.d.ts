@@ -62,8 +62,9 @@ export type ToolContentView = Array<{
 }>;
 /**
  * Structural host seam: a service-capable context. The DSH `Context`
- * satisfies this structurally (tools only ever call `ctx.get('fs')` and
- * `ctx.get('credentials')`); other hosts pass a facade with the same shape.
+ * satisfies this structurally (tools only ever call `ctx.get('fs')`,
+ * `ctx.get('credentials')` and — for environment detection — `ctx.get('host')`,
+ * see src/hostprofile.ts); other hosts pass a facade with the same shape.
  */
 export interface ToolHost {
     /** Resolve an optional service by name; `undefined` when not mounted. */

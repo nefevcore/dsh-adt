@@ -7,7 +7,8 @@ export function systemTools(deps) {
             name: 'adt_list_destinations',
             description: 'List the configured ABAP ADT destinations and their connectivity status. ' +
                 'Use this first to discover which SAP systems are available and reachable. ' +
-                'Destinations come from the session workspace file (.dsh-abap-adt/destinations.yaml) layered over the global config.',
+                'Destinations come from the session workspace file ' +
+                `(${registry.workspaceConfigDir}/destinations.yaml) layered over the global config.`,
             parameters: {},
             output: {
                 schema: {

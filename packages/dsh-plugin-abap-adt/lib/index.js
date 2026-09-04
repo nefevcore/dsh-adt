@@ -20,6 +20,21 @@ import { Context } from '@deepseek-ai/cordis';
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings';
 import { AdtRegistry, assembleAdtTools, composeLayers, Config, credentialResolverOf, DebuggerManager, deepCompact, LockLedger, resolveEffectiveConfig, } from '@nefevcore/abap-adt-core';
 const name = 'abap-adt';
+/**
+ * DSH declaration on the core's host-detection seam (core
+ * `src/hostprofile.ts`): the core keeps its credential/description wording
+ * host-neutral and voices it from THIS profile — so `adt_create_destination`
+ * tells users about `~/.dsh/.credentials.yaml` because DSH declares it here,
+ * not because the core presumes DSH.
+ */
+const DSH_HOST_PROFILE = {
+    id: 'dsh',
+    label: 'DSH',
+    credentialStore: { label: 'DSH credential store', locationHint: '~/.dsh/.credentials.yaml' },
+    passwordResolution: 'process env > ~/.dsh/.credentials.yaml > .env files',
+    globalConfigHint: 'overrides ~/.dsh/settings.yaml `abap-adt:`',
+    workspaceConfigDir: '.dsh-abap-adt',
+};
 // Only `tools` is a hard dependency (audit D1): without it the plugin has no
 // reason to load at all. `fs` is deliberately OPTIONAL — resolved per call
 // via `ctx.get('fs')` — so lean profiles without dsh-fs still get every
@@ -61,9 +76,12 @@ async function apply(ctx, config) {
     let disposed = false;
     // Password references (passwordEnv / ADT_<NAME>_PASSWORD) resolve through
     // the DSH credential service when mounted: process env > the user's
-    // ~/.dsh/.credentials.yaml > .env files, re-resolved per tool call.
+    // ~/.dsh/.credentials.yaml > .env files, re-resolved per tool call. The
+    // host profile is the STORAGE authority: it fixes the workspace config
+    // directory (.dsh-abap-adt) and voices the file's self-documentation.
     const registry = await AdtRegistry.create(composeLayers([config]), {
         credentialResolver: credentialResolverOf(ctx),
+        hostProfile: DSH_HOST_PROFILE,
     });
     // Plugin-level debugger session manager (core src/debugger.ts): the
     // listener identity outlives single tool calls, and the disposer detaches
@@ -109,9 +127,18 @@ async function apply(ctx, config) {
         },
     });
     const deps = { registry, ledger, debugger: debuggerManager };
+    // Host facade for the core's environment-detection seam: declares the DSH
+    // identity (`get('host')`, see DSH_HOST_PROFILE above) and forwards every
+    // other service lookup to the DSH context unchanged. The logger seam rides
+    // along only when the context provides one (lean profiles may not).
+    const dshLogger = ctx.logger;
+    const host = {
+        get: (serviceName) => (serviceName === 'host' ? DSH_HOST_PROFILE : ctx.get(serviceName)),
+        ...(dshLogger ? { logger: dshLogger } : {}),
+    };
     // Full catalog assembly lives in the core — this wrapper only adds the
     // DSH registry boundary behavior below.
-    const tools = assembleAdtTools(deps, ctx);
+    const tools = assembleAdtTools(deps, host);
     for (const tool of tools) {
         // Sanitize every tool's output at the registry boundary: strip `undefined`
         // property values so the value passes the DSH lossless-JSON validation

@@ -261,7 +261,7 @@ export declare function destinationOf(args: Record<string, unknown>): string | u
  * (`exec.agent.session.header.cwd` — the same seam dsh-tool-fs/bash/pwsh
  * use), falling back to undefined. Workspace-layer destination resolution
  * (see registry.ts `viewFor`) keys off this, so `adt_*` calls see the
- * `<cwd>/.dsh-abap-adt/destinations.yaml` of the session that made them.
+ * `<cwd>/<host config dir>/destinations.yaml` of the session that made them.
  */
 export declare function sessionCwd(exec: unknown): string | undefined;
 /** A raw arg as a non-empty string, else `undefined`. */

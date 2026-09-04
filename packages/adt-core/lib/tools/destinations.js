@@ -4,7 +4,7 @@
  *   - `adt_list_gui_connections` — search the local SAP GUI (SAP Logon)
  *     landscape so the agent can offer the user matching systems to import.
  *   - `adt_create_destination` — create or update a destination in the
- *     session workspace file `<cwd>/.dsh-abap-adt/destinations.yaml`, either
+ *     session workspace file `<cwd>/<host config dir>/destinations.yaml`, either
  *     from explicit fields or by importing a discovered GUI connection.
  *
  * Together they cover the conversational flow: the user asks for a
@@ -18,6 +18,7 @@ import { defineTool } from '../tooldef.js';
 import { cwd as nodeCwd } from 'node:process';
 import { passwordRefNames } from '../config.js';
 import { credentialsOf, isCredentialRefName } from '../credentials.js';
+import { credentialStoreNote, hostProfileOf, passwordReferenceHint, passwordResolutionSentence, plaintextFallbackNote, } from '../hostprofile.js';
 import { discoverSapGuiLandscape, searchSapGuiConnections, } from '../sapgui.js';
 import { DEFAULT_PROBE_TIMEOUT_MS, pickVerifiedProbe, probeCandidateUrls, summarizeProbes, unreachableGuidance, } from '../probe.js';
 import { destinationNameFromLabel } from '../workspace.js';
@@ -145,6 +146,26 @@ function connectionView(c) {
 }
 export function destinationTools(deps, ctx) {
     const { registry } = deps;
+    // Host environment (declared via `ctx.get('host')`, else inferred — see
+    // src/hostprofile.ts): every password-related string below is templated
+    // from it, so each host names ITS credential store instead of the core
+    // presuming DSH's. Descriptions bake the assembly-time snapshot; the
+    // execute path re-detects per call.
+    const profile = hostProfileOf(ctx);
+    const store = profile.credentialStore;
+    const passwordsDoc = store
+        ? 'Passwords: pass `password` and it is stored in the ' +
+            store.label +
+            (store.locationHint !== undefined
+                ? ` (${store.locationHint}, referenced from the file via \`passwordEnv\` — never written to destinations.yaml)`
+                : ' (referenced from the file via `passwordEnv` — never written to destinations.yaml)') +
+            '; when no credential service is available, or `passwordInFile: true`, the password ' +
+            'is written plaintext into destinations.yaml (avoid committing that file). Without `password`, maintain ' +
+            'the credential yourself under the ADT_<NAME>_PASSWORD reference. After creating, verify with adt_ping.'
+        : 'Passwords: no credential store exists on ' +
+            `${profile.label} — pass \`password\` and it is written plaintext ` +
+            'into destinations.yaml (avoid committing that file), or maintain the credential yourself under the ' +
+            'ADT_<NAME>_PASSWORD reference (a process environment variable). After creating, verify with adt_ping.';
     return [
         defineTool({
             name: 'adt_list_gui_connections',
@@ -271,7 +292,8 @@ export function destinationTools(deps, ctx) {
         }),
         defineTool({
             name: 'adt_create_destination',
-            description: 'Create (or update) an ADT destination in the session WORKSPACE file .dsh-abap-adt/destinations.yaml — ' +
+            description: 'Create (or update) an ADT destination in the session WORKSPACE file ' +
+                `${registry.workspaceConfigDir}/destinations.yaml — ` +
                 'hot-applies to every following adt_* call in this workspace. Every option left unset is written into ' +
                 'the file as a commented line with its default, so the user can hand-edit the file later. Two modes: ' +
                 '(1) import a SAP GUI connection — pass `guiUuid` from adt_list_gui_connections (url/client/language/' +
@@ -289,11 +311,7 @@ export function destinationTools(deps, ctx) {
                 'allowedTables (written into the entry `policy:` block; keys not passed fall back to the global ' +
                 'config / SAP_* env vars / built-in defaults). The environment tier travels as `profile` ' +
                 '(dev default; qa defaults execution/batchWrites/debugger to off; prd hard-denies them). ' +
-                'Passwords: pass `password` and it is stored in the DSH ' +
-                'credential store (~/.dsh/.credentials.yaml, referenced from the file via `passwordEnv` — never written ' +
-                'to destinations.yaml); when no credential service is available, or `passwordInFile: true`, the password ' +
-                'is written plaintext into destinations.yaml (avoid committing that file). Without `password`, maintain ' +
-                'the credential yourself under the ADT_<NAME>_PASSWORD reference. After creating, verify with adt_ping.',
+                passwordsDoc + ',',
             parameters: {
                 name: {
                     type: 'string',
@@ -309,13 +327,18 @@ export function destinationTools(deps, ctx) {
                 username: { type: 'string', description: 'ABAP user (GUI shortcut entry when present).' },
                 password: {
                     type: 'string',
-                    description: 'Password for `username`. Stored in the DSH credential store (~/.dsh/.credentials.yaml) and ' +
-                        'referenced via passwordEnv — not written to destinations.yaml (unless passwordInFile).',
+                    description: store
+                        ? 'Password for `username`. Stored in the ' +
+                            store.label +
+                            (store.locationHint !== undefined ? ` (${store.locationHint})` : '') +
+                            ' and referenced via passwordEnv — not written to destinations.yaml (unless passwordInFile).'
+                        : `Password for \`username\`. No credential store on ${profile.label}: written PLAINTEXT into ` +
+                            'destinations.yaml — prefer maintaining ADT_<NAME>_PASSWORD as a process environment variable instead.',
                 },
                 passwordEnv: {
                     type: 'string',
                     description: 'Reference name for the password (environment-variable style, e.g. ADT_DEV_PASSWORD). Default: ' +
-                        'ADT_<NAME>_PASSWORD. DSH resolves it layer-wise: process env > ~/.dsh/.credentials.yaml > .env files.',
+                        `ADT_<NAME>_PASSWORD. ${passwordResolutionSentence(profile)}.`,
                 },
                 passwordInFile: {
                     type: 'boolean',
@@ -470,7 +493,9 @@ export function destinationTools(deps, ctx) {
                         },
                         passwordStoredIn: {
                             type: 'string',
-                            description: 'Where a supplied password went: credential-store (~/.dsh/.credentials.yaml) | file (plaintext).',
+                            description: 'Where a supplied password went: credential-store' +
+                                (store ? ` (${store.locationHint ?? store.label})` : '') +
+                                ' | file (plaintext).',
                         },
                         importedFromGui: {
                             type: 'object',
@@ -504,7 +529,7 @@ export function destinationTools(deps, ctx) {
                         ? `  imported from SAP GUI: ${value.importedFromGui.name} (${value.importedFromGui.uuid})`
                         : '',
                     value.passwordStoredIn === 'credential-store'
-                        ? '  password stored in the DSH credential store (~/.dsh/.credentials.yaml)'
+                        ? `  password stored in the ${store?.label ?? 'host credential store'}`
                         : value.passwordStoredIn === 'file'
                             ? '  password written PLAINTEXT into the file — do not commit it'
                             : '',
@@ -713,11 +738,13 @@ export function destinationTools(deps, ctx) {
                     }
                 }
                 // --- Password handling -------------------------------------------------
-                // With a password supplied: prefer the DSH credential store (the value
-                // lives in ~/.dsh/.credentials.yaml and is referenced from the file by
-                // name); write plaintext into destinations.yaml only when explicitly
-                // asked for or when no credential service is mounted.
+                // With a password supplied: prefer the host credential store (the
+                // value lives wherever THIS host keeps secrets and is referenced from
+                // the file by name); write plaintext into destinations.yaml only when
+                // explicitly asked for or when no writable credential service is
+                // mounted. All wording names the host's own store (hostprofile.ts).
                 const passwordRef = destOut.passwordEnv ?? passwordRefNames({ name })[0];
+                const profileNow = hostProfileOf(ctx);
                 let passwordStoredIn;
                 if (password !== undefined) {
                     if (!isCredentialRefName(passwordRef)) {
@@ -730,7 +757,7 @@ export function destinationTools(deps, ctx) {
                         try {
                             await service.set(passwordRef, password);
                             passwordStoredIn = 'credential-store';
-                            notes.push(`password stored in the DSH credential store (reference ${passwordRef}; backing file ~/.dsh/.credentials.yaml) — destinations.yaml keeps only the reference`);
+                            notes.push(credentialStoreNote(profileNow, passwordRef));
                         }
                         catch (error) {
                             // e.g. a read-only source (machine env var of the same name)
@@ -744,9 +771,7 @@ export function destinationTools(deps, ctx) {
                     else {
                         destOut.password = password;
                         passwordStoredIn = 'file';
-                        notes.push(passwordInFile
-                            ? 'password written PLAINTEXT into destinations.yaml as requested (passwordInFile) — do not commit this file, prefer the credential store'
-                            : 'no DSH credential service mounted: password written PLAINTEXT into destinations.yaml — do not commit this file');
+                        notes.push(plaintextFallbackNote(profileNow, passwordRef, passwordInFile ? 'explicit' : service ? 'not-writable' : 'none'));
                     }
                 }
                 // Never echo the password back in the tool result — the output schema
@@ -764,7 +789,7 @@ export function destinationTools(deps, ctx) {
                 const hint = urlVerified && !urlVerified.ok
                     ? 'the url is UNVERIFIED (probe failed) — fix the cause above (VPN/network, firewall, saprouter, or a web-dispatcher url), then re-run adt_create_destination with an explicit `url` and overwrite: true; adt_ping will confirm'
                     : username && passwordStoredIn === undefined
-                        ? `set the password under reference ${passwordRef} (DSH credential store ~/.dsh/.credentials.yaml or an env var of that name), then verify with adt_ping`
+                        ? passwordReferenceHint(profileNow, passwordRef)
                         : `verify with adt_ping (destination: ${name})`;
                 return {
                     file: saved.path,

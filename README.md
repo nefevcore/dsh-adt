@@ -41,6 +41,7 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 
   - `ToolHost.get('fs')` → `AdtFileSystem`（快照/导出/本地检查的文件面；DSH 的 dsh-fs 服务结构兼容，其他宿主给小适配器）
   - `ToolHost.get('credentials')` → 密码引用解析缝（`ADT_<NAME>_PASSWORD` 词汇）
+  - `ToolHost.get('host')` → 宿主环境声明缝（内核 `src/hostprofile.ts`）：宿主声明身份与凭证存储词汇，凭证相关文案/引导随宿主自适应；未声明按能力推断、措辞宿主中立。`workspaceConfigDir` 字段声明**工作区 destinations 目录**（存储权威 = `AdtRegistry.create({ hostProfile })`，DSH 声明 `.dsh-abap-adt`，其他宿主可用自己的目录，如 AgentChat 数据根下的 `.agentchat/abap-adt`；未声明默认 `.dsh-abap-adt`，既有工作区不受影响）
   - 执行上下文 `exec.signal` + `exec.agent.session.header.cwd`（per-call 工作区锚点）
 
 - **`@nefevcore/abap-adt-dsh-plugin`（DSH 宿主适配）**——`abap-adt` settings 命名空间（`~/.dsh/settings.yaml` 热更）+ DSH 工具注册边界（lossless-JSON 消毒）+ `abap-adt-preset` CLI；内核 API 全量 re-export，存量消费者无感。
@@ -54,6 +55,15 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更免重启热生效——连接真实系统的 `destinations` 推荐放**工作区配置** `<工作区>/.dsh-abap-adt/destinations.yaml`（对话式创建见下），全局兜底/权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
 ### 从 0.1.0 升级
+
+#### 0.7.1（宿主自适应密钥管理 + destinations 目录随宿主声明）
+
+修复"非 DSH 宿主被引导去编辑永远不会被读取的 `~/.dsh/...` 文件"的问题，并把工作区 destinations 目录变为宿主可声明：
+
+- **宿主环境检测缝（内核 `src/hostprofile.ts`）**：新可选服务 `ctx.get('host')` 返回 `HostProfile`（身份 / 凭证存储词汇 / 密码引用解析链 / 全局配置层提示）。`adt_create_destination` 的工具与参数描述、结果 notes/hint、destinations.yaml 自文档注释与文件头全部按当前宿主措辞——DSH 输出与 0.7.0 **逐字节一致**（测试锁定）；未声明宿主按能力推断（挂了凭证服务 → 通用"host credential store"；没挂 → 只引导环境变量），无凭证存储时明文回退的警告会指明 `ADT_<NAME>_PASSWORD` 环境变量这条路。
+- **`HostProfile.workspaceConfigDir`**：宿主声明工作区 destinations 目录（`<cwd>/<dir>/destinations.yaml`）。存储权威 = `AdtRegistry.create(config, { hostProfile })`；未声明默认 `.dsh-abap-adt`（DSH 显式声明同名，既有工作区零变化）。`workspaceConfigCandidates/Path` 增加 `configDir` 参数，注册表新增 `workspaceConfigDir` getter，工具描述如实报告本宿主目录。
+- 消费方升级：DSH 用户照旧 `dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin`（无需重建预设）；AgentChat 等其他宿主在适配层声明自己的档案（`ctx.get('host')` 门面 + `AdtRegistry.create` 各一处）即可获得自己的凭证存储措辞与目录。
+- 测试 288 → **300**（新增 `hostprofile.test.ts`：声明/推断/中立/只读存储/目录迁移五类路径）。
 
 #### 0.6.0（治理 + 调试器 + 对象能力，P0/P1 全量落地）
 
@@ -114,7 +124,7 @@ dsh plugin --profile web exec abap-adt-preset --force
 - **方法级读写（token 经济）**：`adt_read_object`/`adt_edit_object` 带 `method` 参数——只收发一个 METHOD 块（~30 行而非全类），窗口仍按全源行号编址；编辑走完整 OCC 冲突链
 - **依赖契约序言**：`adt_read_object {context: true}` 一次读取带回所用类/接口的**公共契约**（超类/接口优先，预算花在成功取回的契约上；解析失败的依赖原样列出——看得见的缺口≠没有依赖）
 - **能力巡检（sweep）**：`adt_selfcheck` 对目的地做只读能力扫描，判定 answered/empty/dead/absent/broken——`dead` = 返回空而独立 oracle（search↔read↔$batch 交叉印证）证明有内容；报告列出全部刻意不巡检的工具（覆盖声明是清单不是空白）
-- **对话式建连接**：`adt_create_destination` / `adt_list_gui_connections` —— 直接说"帮我建 impc 的连接"，代理搜索本机 SAP GUI 连接列表让你挑（或问你要 url/账号），一条对话写好**工作区配置文件** `.dsh-abap-adt/destinations.yaml`；密码默认存入 DSH 凭证文件 `~/.dsh/.credentials.yaml`（配置只留引用），下一次调用即生效
+- **对话式建连接**：`adt_create_destination` / `adt_list_gui_connections` —— 直接说"帮我建 impc 的连接"，代理搜索本机 SAP GUI 连接列表让你挑（或问你要 url/账号），一条对话写好**工作区配置文件** `<工作区>/<宿主配置目录>/destinations.yaml`（目录随宿主声明，DSH 为 `.dsh-abap-adt`）；密码默认存入**宿主凭证存储**（DSH 上即 `~/.dsh/.credentials.yaml`，配置只留引用），下一次调用即生效
 - **冲突安全编辑（OCC）**：`adt_read_object` 默认在本地留对象快照（含服务端内容哈希）；`adt_edit_object` 对**你读到的快照**做确定性匹配，上传前在持锁状态下哈希校验服务端未变——他人改动 → `[CONFLICT]` 显式拒绝而非静默错配；也可直接编辑本地快照文件后用 `adt_push_object` 校验上传（pull→edit→push）
 - **错误分析**：`adt_list_dumps` / `adt_get_dump` 直接读取 ABAP 短转储（ST22）做排障闭环
 - **代码执行**：`adt_execute` 运行可执行程序 / `if_oo_adt_classrun` 类并取回控制台输出
@@ -138,7 +148,7 @@ dsh plugin --profile web exec abap-adt-preset --force
 
 > 帮我创建 impc 的连接配置
 
-代理会先调 `adt_list_gui_connections` 搜索**本机 SAP GUI（SAP Logon）**的连接列表——找得到就把匹配项（名称 / SID / 集团 / 推导 URL）列出来让你挑，挑定后 `adt_create_destination` 从 GUI 条目导入（集团/语言/用户自动带出，URL 按 SAP 端口约定 `https://<host>:443<nn>` 推导）；本机没有 GUI 或想手填时，代理会问你要 `url / client / username`，然后用显式字段创建。密码也直接说：默认存进 DSH 凭证文件 `~/.dsh/.credentials.yaml`（引用名 `ADT_<目的地名大写>_PASSWORD` 或 `passwordEnv` 指定，destinations.yaml 只留引用不落明文）；也可以自己维护该凭证文件或环境变量。
+代理会先调 `adt_list_gui_connections` 搜索**本机 SAP GUI（SAP Logon）**的连接列表——找得到就把匹配项（名称 / SID / 集团 / 推导 URL）列出来让你挑，挑定后 `adt_create_destination` 从 GUI 条目导入（集团/语言/用户自动带出，URL 按 SAP 端口约定 `https://<host>:443<nn>` 推导）；本机没有 GUI 或想手填时，代理会问你要 `url / client / username`，然后用显式字段创建。密码也直接说：默认存进宿主凭证存储（DSH 上即 `~/.dsh/.credentials.yaml`；引用名 `ADT_<目的地名大写>_PASSWORD` 或 `passwordEnv` 指定，destinations.yaml 只留引用不落明文）；也可以自己维护该凭证文件或环境变量。**密钥管理按宿主自适应**：内核通过声明式检测缝 `ctx.get('host')`（内核 `src/hostprofile.ts`）识别运行环境——DSH 插件声明 dsh 档案（凭证文件词汇 + 分层链），AgentChat 行声明自己的加密凭据存储，未声明的宿主按能力推断（挂了凭证服务 → 通用宿主存储措辞；没挂 → 只引导环境变量，绝不让你去编辑不存在的 `~/.dsh/...` 文件），明文回退仅在无凭证存储时出现并附警告。
 
 手写也行——在工作区根目录建 `.dsh-abap-adt/destinations.yaml`（保存即热生效，无需重启）：
 
@@ -166,7 +176,7 @@ destinations:
 ③ 旧版独立文件 ~/.dsh/abap-adt.yml            （已废弃，仅迁移期兼容，出现即告警）
 ④ settings.yaml 的 abap-adt: 用户段           （全局用户覆盖层）
 ⑤ 显式 configFile（团队共享）                  （路径可来自 ②-④ 任一层；~ 展开、相对路径锚定 dsh home）
-⑥ 工作区文件 <会话工作区>/.dsh-abap-adt/destinations.yaml
+⑥ 工作区文件 <会话工作区>/<宿主配置目录>/destinations.yaml（DSH 为 .dsh-abap-adt，目录随宿主声明，未声明默认 .dsh-abap-adt）
                                              （最近层：同名目的地覆盖以上全部、可设 defaultDestination
                                               与权限键；按调用热生效，adt_create_destination 写这里）
 ⑦ SAP_* 环境变量                              （仅权限六开关，且仅在 ①-⑥ 均未设置时生效）
@@ -175,7 +185,7 @@ destinations:
 - `destinations` 跨层按名字合并：高层的同名条目覆盖低层，新名字追加——随包发布的 `destinations: []` 永远不会挡住其他层
 - settings 段/共享文件/工作区文件写错键名会**明确报错**（含路径与未知键名）；显式指定的 `configFile` 不存在则告警并跳过该层
 - 工作区层只认 `destinations` / `defaultDestination` / 权限六开关（`demo`、`demoPort`、`configFile` 属全局层）；文件格式与其他层完全一致，也可含按目的地的 `policy:` 块
-- 密码在 schema 中标记为 secret（settings 展示时自动脱敏）；解析优先级 `config.password` > `passwordEnv` 指定的**凭证引用**（DSH 按层解析：进程环境变量 > `~/.dsh/.credentials.yaml` 凭证文件 > `.env`，每次工具调用实时解析，改完即生效）> `ADT_PASSWORD`。**切勿把密码明文写进任何配置**——对话里直接把密码告诉代理即可：`adt_create_destination` 会把它存进 DSH 凭证文件（`~/.dsh/.credentials.yaml`），destinations.yaml 只留 `passwordEnv` 引用；仅在未挂载凭证服务或显式 `passwordInFile: true` 时才明文落盘（避免提交该文件）
+- 密码在 schema 中标记为 secret（settings 展示时自动脱敏）；解析优先级 `config.password` > `passwordEnv` 指定的**凭证引用**（宿主按层解析——DSH：进程环境变量 > `~/.dsh/.credentials.yaml` 凭证文件 > `.env`；其他宿主为其自己的存储，未挂凭证服务时仅环境变量；每次工具调用实时解析，改完即生效）> `ADT_PASSWORD`。**切勿把密码明文写进任何配置**——对话里直接把密码告诉代理即可：`adt_create_destination` 会把它存进宿主凭证存储（DSH 上即 `~/.dsh/.credentials.yaml`），destinations.yaml 只留 `passwordEnv` 引用；仅在无凭证存储或显式 `passwordInFile: true` 时才明文落盘（避免提交该文件；工具结果 note 与 destinations.yaml 自文档注释都会按当前宿主写明去路与解析链）
 - 未挂载 settings 服务或 dsh-fs 的精简 profile 自动降级：仅用插件行 config 解析，行为与组合时一致；文件系统能力（源码快照 / export / push / `sourceFile` / 本地检查）缺失时明确报错，其余 `adt_*` 工具不受影响
 
 认证说明：

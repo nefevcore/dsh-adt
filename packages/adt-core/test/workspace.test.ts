@@ -33,6 +33,15 @@ test('workspaceConfigCandidates/Path: <cwd>/.dsh-abap-adt/destinations.yaml then
   assert.equal(workspaceConfigPath(cwd), join(cwd, '.dsh-abap-adt', 'destinations.yaml'));
 });
 
+test('workspaceConfigCandidates: a host-declared config dir relocates the file (default unchanged)', () => {
+  const cwd = join(tmpdir(), 'ws');
+  assert.deepEqual(workspaceConfigCandidates(cwd, '.agentchat/abap-adt'), [
+    join(cwd, '.agentchat', 'abap-adt', 'destinations.yaml'),
+    join(cwd, '.agentchat', 'abap-adt', 'destinations.yml'),
+  ]);
+  assert.equal(workspaceConfigPath(cwd, '.agentchat/abap-adt'), join(cwd, '.agentchat', 'abap-adt', 'destinations.yaml'));
+});
+
 // ---------------------------------------------------------------------------
 // WorkspaceConfigStore
 // ---------------------------------------------------------------------------

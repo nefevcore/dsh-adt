@@ -12,7 +12,9 @@
  * environment variable OR in the host credential store.
  *
  * Structural typing (no runtime dependency on a host package): the host
- * service object satisfies this interface, and tests inject fakes.
+ * service object satisfies this interface, and tests inject fakes. Hosts
+ * additionally DECLARE themselves via `ctx.get('host')` (src/hostprofile.ts)
+ * so user-facing wording names their own store.
  */
 import type { ToolHost } from './tooldef.js';
 
