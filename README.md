@@ -56,6 +56,11 @@ DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.
 
 ### 从 0.1.0 升级
 
+#### 0.7.2（`workspaceConfigDir: '.'`——锚点即配置目录，per-caller 作用域）
+
+- **`HostProfile.workspaceConfigDir` 新增特殊值 `'.'`**：会话锚点目录本身就是配置目录（`<cwd>/destinations.yaml`），工具描述渲染为 "destinations.yaml (in the session workspace anchor)" 而非 `./destinations.yaml`。面向**按调用方作用域锚点**的宿主（如 AgentChat 的 per-Agent 锚点 `.ac-sap-adt/agents/<id>`），避免每个作用域里再嵌一层常量目录。
+- 测试 300 → **301**（`.` 模式：文件直落锚点 + 描述无 `./` 前缀）。
+
 #### 0.7.1（宿主自适应密钥管理 + destinations 目录随宿主声明）
 
 修复"非 DSH 宿主被引导去编辑永远不会被读取的 `~/.dsh/...` 文件"的问题，并把工作区 destinations 目录变为宿主可声明：

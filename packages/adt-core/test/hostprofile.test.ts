@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hostProfileOf, type HostProfile } from '../lib/hostprofile.js';
+import { workspaceConfigCandidates } from '../lib/config.js';
 import { AdtRegistry } from '../lib/registry.js';
 import { LockLedger } from '../lib/locks.js';
 import { builtinDefaults } from '../lib/config.js';
@@ -140,6 +141,30 @@ test('declared DSH host: wording names the DSH credential store byte-for-byte', 
   assert.match(raw, /# Layering: this file overrides ~\/\.dsh\/settings\.yaml `abap-adt:` \(nearest wins\)\./);
   assert.match(raw, /passwordEnv: ADT_DEV_PASSWORD/);
   assert.match(raw, /# password: CHANGE_ME\s+# plaintext password stored IN THIS FILE — prefer passwordEnv \(process env > ~\/\.dsh\/\.credentials\.yaml > \.env files\)/);
+});
+
+test("declared workspaceConfigDir '.' : destinations.yaml sits directly in the anchor", async () => {
+  const ANCHOR_PROFILE: HostProfile = {
+    id: 'anchored',
+    label: 'the anchor host',
+    passwordResolution: 'process environment variables only',
+    workspaceConfigDir: '.',
+  };
+  // Candidates collapse into the anchor itself (no nested constant dir).
+  const cwd = join(tmpdir(), 'ws-anchor');
+  assert.deepEqual(workspaceConfigCandidates(cwd, '.'), [
+    join(cwd, 'destinations.yaml'),
+    join(cwd, 'destinations.yml'),
+  ]);
+  const { result, raw, tool } = await runCreate(bareHost(ANCHOR_PROFILE), {
+    name: 'x', url: 'https://x.example.com', username: 'U',
+  }, ANCHOR_PROFILE);
+  // The file lands directly in the workspace anchor directory…
+  assert.match(result.file, /abap-adt-hostprofile-[^\\/]+[\\/]destinations\.yaml$/);
+  assert.match(raw, /name: x/);
+  // …and descriptions render without a './' path segment.
+  assert.match(tool.description, /session WORKSPACE file destinations\.yaml \(in the session workspace anchor\)/);
+  assert.doesNotMatch(tool.description, /\.\/destinations\.yaml/);
 });
 
 test('declared workspaceConfigDir relocates the destinations file (AgentChat-style host)', async () => {

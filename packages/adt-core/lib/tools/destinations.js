@@ -18,7 +18,7 @@ import { defineTool } from '../tooldef.js';
 import { cwd as nodeCwd } from 'node:process';
 import { passwordRefNames } from '../config.js';
 import { credentialsOf, isCredentialRefName } from '../credentials.js';
-import { credentialStoreNote, hostProfileOf, passwordReferenceHint, passwordResolutionSentence, plaintextFallbackNote, } from '../hostprofile.js';
+import { credentialStoreNote, hostProfileOf, passwordReferenceHint, passwordResolutionSentence, plaintextFallbackNote, workspaceConfigLocationLabel, } from '../hostprofile.js';
 import { discoverSapGuiLandscape, searchSapGuiConnections, } from '../sapgui.js';
 import { DEFAULT_PROBE_TIMEOUT_MS, pickVerifiedProbe, probeCandidateUrls, summarizeProbes, unreachableGuidance, } from '../probe.js';
 import { destinationNameFromLabel } from '../workspace.js';
@@ -293,7 +293,7 @@ export function destinationTools(deps, ctx) {
         defineTool({
             name: 'adt_create_destination',
             description: 'Create (or update) an ADT destination in the session WORKSPACE file ' +
-                `${registry.workspaceConfigDir}/destinations.yaml — ` +
+                `${workspaceConfigLocationLabel(registry.workspaceConfigDir)} — ` +
                 'hot-applies to every following adt_* call in this workspace. Every option left unset is written into ' +
                 'the file as a commented line with its default, so the user can hand-edit the file later. Two modes: ' +
                 '(1) import a SAP GUI connection — pass `guiUuid` from adt_list_gui_connections (url/client/language/' +

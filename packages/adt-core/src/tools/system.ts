@@ -1,4 +1,5 @@
 import { defineTool } from '../tooldef.js';
+import { workspaceConfigLocationLabel } from '../hostprofile.js';
 import { sessionCwd, DESTINATION_PARAM, destinationOf, text, type ToolDeps } from './common.js';
 
 export function systemTools(deps: ToolDeps) {
@@ -11,7 +12,7 @@ export function systemTools(deps: ToolDeps) {
         'List the configured ABAP ADT destinations and their connectivity status. ' +
         'Use this first to discover which SAP systems are available and reachable. ' +
         'Destinations come from the session workspace file ' +
-        `(${registry.workspaceConfigDir}/destinations.yaml) layered over the global config.`,
+        `(${workspaceConfigLocationLabel(registry.workspaceConfigDir)}) layered over the global config.`,
       parameters: {},
       output: {
         schema: {

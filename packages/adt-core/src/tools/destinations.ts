@@ -25,6 +25,7 @@ import {
   passwordReferenceHint,
   passwordResolutionSentence,
   plaintextFallbackNote,
+  workspaceConfigLocationLabel,
 } from '../hostprofile.js';
 import {
   discoverSapGuiLandscape,
@@ -361,7 +362,7 @@ export function destinationTools(deps: ToolDeps, ctx: ToolHost) {
       name: 'adt_create_destination',
       description:
         'Create (or update) an ADT destination in the session WORKSPACE file ' +
-        `${registry.workspaceConfigDir}/destinations.yaml — ` +
+        `${workspaceConfigLocationLabel(registry.workspaceConfigDir)} — ` +
         'hot-applies to every following adt_* call in this workspace. Every option left unset is written into ' +
         'the file as a commented line with its default, so the user can hand-edit the file later. Two modes: ' +
         '(1) import a SAP GUI connection — pass `guiUuid` from adt_list_gui_connections (url/client/language/' +

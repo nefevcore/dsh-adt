@@ -155,4 +155,12 @@ export function globalConfigSentence(profile) {
 export function workspaceConfigDirOf(profile) {
     return profile?.workspaceConfigDir ?? DEFAULT_WORKSPACE_CONFIG_DIR;
 }
+/**
+ * Human-facing location label for tool descriptions: `'.'` (anchor IS the
+ * config dir) renders without a path segment, anything else as
+ * `<dir>/destinations.yaml`.
+ */
+export function workspaceConfigLocationLabel(dir) {
+    return dir === '.' ? 'destinations.yaml (in the session workspace anchor)' : `${dir}/destinations.yaml`;
+}
 //# sourceMappingURL=hostprofile.js.map

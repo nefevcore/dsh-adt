@@ -38,11 +38,15 @@ export interface HostProfile {
      * Directory (relative to a session workspace) where THIS host keeps its
      * workspace destinations file: `<cwd>/<dir>/destinations.yaml`. DSH
      * declares '.dsh-abap-adt'; other hosts their own location (an AgentChat
-     * row, say, '.agentchat/abap-adt' inside its data root). Omitted → the
-     * core default '.dsh-abap-adt', so undeclared hosts and existing
-     * workspaces keep working unchanged. Storage is REGISTRY-level: hosts
-     * declare the profile at `AdtRegistry.create` (declaring a different dir
-     * means files in the previous dir are no longer read — hosts migrate).
+     * row, say, '.agentchat/abap-adt' inside its data root). The special
+     * value `'.'` means the anchor directory itself IS the config directory
+     * (`<cwd>/destinations.yaml`) — for hosts that scope the anchor per
+     * caller (e.g. one anchor per agent) and don't want a nested constant
+     * dir inside every scope. Omitted → the core default '.dsh-abap-adt', so
+     * undeclared hosts and existing workspaces keep working unchanged.
+     * Storage is REGISTRY-level: hosts declare the profile at
+     * `AdtRegistry.create` (declaring a different dir means files in the
+     * previous dir are no longer read — hosts migrate).
      */
     workspaceConfigDir?: string;
 }
@@ -96,4 +100,10 @@ export declare function globalConfigSentence(profile: HostProfile | undefined): 
  * default '.dsh-abap-adt'.
  */
 export declare function workspaceConfigDirOf(profile: HostProfile | undefined): string;
+/**
+ * Human-facing location label for tool descriptions: `'.'` (anchor IS the
+ * config dir) renders without a path segment, anything else as
+ * `<dir>/destinations.yaml`.
+ */
+export declare function workspaceConfigLocationLabel(dir: string): string;
 //# sourceMappingURL=hostprofile.d.ts.map
