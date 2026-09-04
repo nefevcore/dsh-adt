@@ -45,7 +45,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dshHome } from './config.js';
+import { dshHome } from '@nefevcore/abap-adt-core';
 
 /** The plugin row appended to the copied composition. */
 export const PLUGIN_ROW = `

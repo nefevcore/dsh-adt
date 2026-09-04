@@ -1,8 +1,9 @@
-# npm 发布 —— Trusted Publishing（OIDC），三包按依赖顺序
+# npm 发布 —— Trusted Publishing（OIDC），四包按依赖顺序
 #
 # 无需任何 npm token：npm >= 11.5 在 id-token: write 权限下经 GitHub OIDC
 # 换取一次性短时令牌。前提（npmjs.com 各包页面配置一次，包必须已存在）：
-#   @nefevcore/abap-adt-protocol / abap-adt-mock / abap-adt-dsh-plugin
+#   @nefevcore/abap-adt-protocol / abap-adt-mock / abap-adt-core /
+#   abap-adt-dsh-plugin
 #   → Settings → Add Trusted Publisher：
 #     repository owner: nefevcore
 #     repository name:  dsh-adt
@@ -10,7 +11,7 @@
 #     environment:      留空
 #
 # 触发：推送 v* 标签，或 Actions 页面手动 workflow_dispatch。
-# 发版 = 同时 bump 三个 packages/*/package.json 的 version → commit → tag v* → push。
+# 发版 = 同时 bump 四个 packages/*/package.json 的 version → commit → tag v* → push。
 name: publish
 
 on:
@@ -45,15 +46,16 @@ jobs:
       - name: 打包（workspace:* 自动替换为实际版本号）
         run: |
           mkdir -p dist-tarballs
-          for p in adt-protocol adt-mock dsh-plugin-abap-adt; do
+          for p in adt-protocol adt-mock adt-core dsh-plugin-abap-adt; do
             (cd "packages/$p" && pnpm pack --pack-destination ../../dist-tarballs)
           done
 
-      - name: 发布（依赖顺序：protocol → mock → plugin；OIDC 免 token/2FA）
+      - name: 发布（依赖顺序：protocol → mock → core → dsh-plugin；OIDC 免 token/2FA）
         run: |
           # file: 前缀必需：npm 11 对裸相对路径 .tgz 会按 git 依赖解析
           # （git ls-remote ssh://git@github.com/...）而不是本地 tarball。
           publish() { npm publish "file:$1"; }
           publish "$(ls dist-tarballs/nefevcore-abap-adt-protocol-*.tgz)"
           publish "$(ls dist-tarballs/nefevcore-abap-adt-mock-*.tgz)"
+          publish "$(ls dist-tarballs/nefevcore-abap-adt-core-*.tgz)"
           publish "$(ls dist-tarballs/nefevcore-abap-adt-dsh-plugin-*.tgz)"

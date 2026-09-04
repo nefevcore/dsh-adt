@@ -1,27 +1,27 @@
 /** Runtime smoke test: exercise the tool layer against the in-process mock ADT
  *  server. Run: node scripts/smoke-tools.mjs (after pnpm build). */
-import { AdtRegistry } from '../packages/dsh-plugin-abap-adt/lib/registry.js';
-import { LockLedger } from '../packages/dsh-plugin-abap-adt/lib/locks.js';
-import { DebuggerManager } from '../packages/dsh-plugin-abap-adt/lib/debugger.js';
-import { builtinDefaults } from '../packages/dsh-plugin-abap-adt/lib/config.js';
-import { readTools } from '../packages/dsh-plugin-abap-adt/lib/tools/read.js';
-import { writeTools } from '../packages/dsh-plugin-abap-adt/lib/tools/write.js';
-import { objectTools } from '../packages/dsh-plugin-abap-adt/lib/tools/objects.js';
-import { lifecycleTools } from '../packages/dsh-plugin-abap-adt/lib/tools/lifecycle.js';
-import { searchTools } from '../packages/dsh-plugin-abap-adt/lib/tools/search.js';
-import { systemTools } from '../packages/dsh-plugin-abap-adt/lib/tools/system.js';
-import { policyTools } from '../packages/dsh-plugin-abap-adt/lib/tools/policy.js';
-import { lockTools } from '../packages/dsh-plugin-abap-adt/lib/tools/lock.js';
-import { gateTools } from '../packages/dsh-plugin-abap-adt/lib/tools/gate.js';
-import { batchTools } from '../packages/dsh-plugin-abap-adt/lib/tools/batch.js';
-import { dumpTools } from '../packages/dsh-plugin-abap-adt/lib/tools/dumps.js';
-import { executeTools } from '../packages/dsh-plugin-abap-adt/lib/tools/execute.js';
-import { structureTools } from '../packages/dsh-plugin-abap-adt/lib/tools/structure.js';
-import { selfcheckTools } from '../packages/dsh-plugin-abap-adt/lib/tools/selfcheck.js';
-import { textElementTools } from '../packages/dsh-plugin-abap-adt/lib/tools/textelements.js';
-import { cochangeTools } from '../packages/dsh-plugin-abap-adt/lib/tools/cochange.js';
-import { debuggerTools } from '../packages/dsh-plugin-abap-adt/lib/tools/debugger.js';
-import { crudTools } from '../packages/dsh-plugin-abap-adt/lib/tools/crud.js';
+import { AdtRegistry } from '../packages/adt-core/lib/registry.js';
+import { LockLedger } from '../packages/adt-core/lib/locks.js';
+import { DebuggerManager } from '../packages/adt-core/lib/debugger.js';
+import { builtinDefaults } from '../packages/adt-core/lib/config.js';
+import { readTools } from '../packages/adt-core/lib/tools/read.js';
+import { writeTools } from '../packages/adt-core/lib/tools/write.js';
+import { objectTools } from '../packages/adt-core/lib/tools/objects.js';
+import { lifecycleTools } from '../packages/adt-core/lib/tools/lifecycle.js';
+import { searchTools } from '../packages/adt-core/lib/tools/search.js';
+import { systemTools } from '../packages/adt-core/lib/tools/system.js';
+import { policyTools } from '../packages/adt-core/lib/tools/policy.js';
+import { lockTools } from '../packages/adt-core/lib/tools/lock.js';
+import { gateTools } from '../packages/adt-core/lib/tools/gate.js';
+import { batchTools } from '../packages/adt-core/lib/tools/batch.js';
+import { dumpTools } from '../packages/adt-core/lib/tools/dumps.js';
+import { executeTools } from '../packages/adt-core/lib/tools/execute.js';
+import { structureTools } from '../packages/adt-core/lib/tools/structure.js';
+import { selfcheckTools } from '../packages/adt-core/lib/tools/selfcheck.js';
+import { textElementTools } from '../packages/adt-core/lib/tools/textelements.js';
+import { cochangeTools } from '../packages/adt-core/lib/tools/cochange.js';
+import { debuggerTools } from '../packages/adt-core/lib/tools/debugger.js';
+import { crudTools } from '../packages/adt-core/lib/tools/crud.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -235,7 +235,7 @@ console.log(`create TABL with fields: success=${tbl.success} activated=${tbl.act
 const guardedRegistry = await AdtRegistry.create({ ...builtinDefaults(), demo: true, demoPort: 0, blockedTablesProfile: 'standard' });
 try {
   const guardedDeps = { registry: guardedRegistry, ledger: new LockLedger(), debugger: new DebuggerManager(guardedRegistry) };
-  const guardedPreview = (await import('../packages/dsh-plugin-abap-adt/lib/tools/datapreview.js')).dataPreviewTools(guardedDeps)[0];
+  const guardedPreview = (await import('../packages/adt-core/lib/tools/datapreview.js')).dataPreviewTools(guardedDeps)[0];
   try {
     await guardedPreview.execute({ name: 'KNA1' }, exec);
     console.log('blockedTables: NOT BLOCKED (unexpected)');
@@ -258,7 +258,7 @@ try {
 const debugRegistry = await AdtRegistry.create({ ...builtinDefaults(), demo: true, demoPort: 0, allowDebugger: true, allowDebugVariables: true });
 try {
   const dbgDeps = { registry: debugRegistry, ledger: new LockLedger(), debugger: new DebuggerManager(debugRegistry) };
-  const dbg = (await import('../packages/dsh-plugin-abap-adt/lib/tools/debugger.js')).debuggerTools(dbgDeps);
+  const dbg = (await import('../packages/adt-core/lib/tools/debugger.js')).debuggerTools(dbgDeps);
   const dby = new Map(dbg.map((t) => [t.name, t]));
   await dby.get('adt_debug_breakpoint').execute({ action: 'set', name: 'ZPROG_DEMO', type: 'PROG', line: 7 }, exec);
   const listen = await dby.get('adt_debug_session').execute({ action: 'listen', timeoutSeconds: 3 }, exec);

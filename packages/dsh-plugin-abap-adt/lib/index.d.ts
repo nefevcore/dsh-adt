@@ -1,16 +1,23 @@
 /**
- * @nefevcore/abap-adt-dsh-plugin — DeepSeek Harness plugin for SAP ABAP Development.
+ * @nefevcore/abap-adt-dsh-plugin — DeepSeek Harness host adapter for SAP
+ * ABAP Development.
  *
- * Registers the `adt_*` tool family on `ctx.tools`: destinations/system
- * introspection, object search, source read/write/create/delete, activation,
- * syntax checks, ABAP Unit, ATC, transports, packages — plus batch quality
- * checks and local source export that go beyond the interactive VS Code ADT
- * workflow. The plugin speaks the ADT REST protocol directly (no SAP
- * proprietary libraries) and ships a demo mode backed by an in-process mock
- * server for zero-setup end-to-end use.
+ * Thin adapter over the host-neutral core (`@nefevcore/abap-adt-core`):
+ * this package owns exactly the DSH wiring —
+ *
+ *   - the `abap-adt` settings namespace (composition row config = base,
+ *     `~/.dsh/settings.yaml` `abap-adt:` section = user layer, hot reload),
+ *   - registration on the DSH tool registry (`ctx.tools`) with the
+ *     lossless-JSON boundary sanitization (`deepCompact`),
+ *   - the `abap-adt-preset` CLI (presets for DSH sessions).
+ *
+ * Everything else — the 46 `adt_*` tools, destination registry, policy,
+ * OCC snapshots, debugger sessions, config layering — lives in the core and
+ * is re-exported below for backward compatibility (the pre-0.7.0 `.` entry
+ * exported the same surface).
  */
 import { Context } from '@deepseek-ai/cordis';
-import { Config, type PluginConfig } from './config.js';
+import { Config, type PluginConfig } from '@nefevcore/abap-adt-core';
 declare const name = "abap-adt";
 declare const inject: string[];
 /**
@@ -27,8 +34,8 @@ declare const inject: string[];
 declare function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<void>>;
 export { Config, apply, inject, name };
 export type { PluginConfig };
-export { AdtRegistry } from './registry.js';
-export { TYPE_MAP, resolveObject, resolveObjects, refFromName, normalizeType, typeLabel } from './resolve.js';
+export { AdtRegistry } from '@nefevcore/abap-adt-core';
+export { TYPE_MAP, resolveObject, resolveObjects, refFromName, normalizeType, typeLabel, } from '@nefevcore/abap-adt-core';
 export { AdtClient, AdtError } from '@nefevcore/abap-adt-protocol';
 export { createMockAdtServer } from '@nefevcore/abap-adt-mock';
 //# sourceMappingURL=index.d.ts.map

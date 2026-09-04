@@ -1,13 +1,18 @@
 /**
- * Host-neutral agent entry (`@nefevcore/abap-adt-dsh-plugin/agent`).
+ * `@nefevcore/abap-adt-core` — the host-neutral agent tool core for SAP
+ * ABAP ADT.
  *
  * Everything an agent runtime needs to mount the `adt_*` tool family WITHOUT
- * any DeepSeek Harness dependency: the tool factories, the destination
- * registry, the lock ledger, the debugger session manager, and the config
- * layering pipeline. The DSH-specific wiring (settings namespace, host tool
- * registry, presentation) lives in the package root entry (`.`); this module
- * and its entire import graph import no DSH package at runtime — hosts like
- * AgentChat consume it through small adapters:
+ * any host-specific dependency: the tool factories, the destination registry,
+ * the lock ledger, the debugger session manager, and the config layering
+ * pipeline. Host adapters live in separate packages and consume this core:
+ *
+ *   - DeepSeek Harness: `@nefevcore/abap-adt-dsh-plugin` (settings namespace
+ *     section + DSH tool registry + presentation),
+ *   - AgentChat: the built-in `ac-sap-adt` row (capability-tagged tool
+ *     registration + credentials/fs adapters).
+ *
+ * Adapter duties (all three seams are structural, defined in tooldef.ts):
  *
  *   - tool registration: iterate {@link assembleAdtTools} and map each
  *     {@link DefinedTool} onto the host tool contract (the `parameters`
@@ -48,8 +53,9 @@ export type { CredentialsService } from './credentials.js';
 export { deepCompact } from './tools/common.js';
 export { CRUD_MATRIX, CRUD_VERBS, crudObjectTypes, crudCreatableTypes, renderCrudMatrixTable } from './crudmatrix.js';
 export type { CrudVerb, CrudCell } from './crudmatrix.js';
-export { builtinDefaults, composeLayers, resolveEffectiveConfig, loadExternalConfigFile, parseExternalConfigText, validateExternalConfig, workspaceConfigCandidates, workspaceConfigPath, passwordRefNames, expandHomePath, resolveConfigFilePath, } from './config.js';
+export { TYPE_MAP, normalizeType, refFromName, resolveObject, resolveObjects, typeLabel, } from './resolve.js';
+export { Config, builtinDefaults, composeLayers, resolveEffectiveConfig, loadExternalConfigFile, parseExternalConfigText, validateExternalConfig, workspaceConfigCandidates, workspaceConfigPath, passwordRefNames, expandHomePath, resolveConfigFilePath, dshHome, autoDiscoverConfigFile, } from './config.js';
 export type { PluginConfig, EffectiveConfig, DestinationConfig } from './config.js';
 export { defineTool, parameterSpecToJsonSchema, valueSpecToJsonSchema, ToolArgsError, } from './tooldef.js';
 export type { AdtFileSystem, AdtFsDirEntry, AdtFsTarget, AdtFsWriteOutcome, AdtToolResult, DefineToolOptions, DefinedTool, InferArgs, InferValue, JsonSchema, JsonValue, ParameterJsonSchema, ParameterSchemaSpec, ToolContentView, ToolExec, ToolResultView, ValueSchemaSpec, } from './tooldef.js';
-//# sourceMappingURL=agent.d.ts.map
+//# sourceMappingURL=index.d.ts.map

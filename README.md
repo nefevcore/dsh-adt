@@ -15,7 +15,7 @@
 
 ## 安装与更新
 
-安装和更新只支持 **dsh CLI** 一种方式（要求 pnpm 在 PATH——`corepack enable` 或 `npm i -g pnpm`；缺失时 dsh 会明确报错）。三个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-dsh-plugin` DSH 插件）：
+安装和更新只支持 **dsh CLI** 一种方式（要求 pnpm 在 PATH——`corepack enable` 或 `npm i -g pnpm`；缺失时 dsh 会明确报错）。四个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-core` 纯内核、`@nefevcore/abap-adt-dsh-plugin` DSH 宿主适配）：
 
 ```bash
 # ① 安装（装进 web profile；仅安装，不自动加载）
@@ -33,15 +33,21 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 
 **默认不加载，按会话启用（by design）**：包内不声明 `dsh.bundle`，安装只是把包放进 profile 的依赖里——`adt_*` 工具**只出现在用 `abap-adt` 预设创建的会话**，其他会话完全不受影响。安装时 dsh 会提示 `declares no dsh.bundle — installed as a plain dependency`，这正是预期行为。
 
-### 其他宿主：host-neutral `./agent` 入口（AgentChat 内置行等）
+### 架构：纯内核 + 宿主适配（多宿主共用一份引擎）
 
-工具层本体不依赖任何 DSH 运行时——包的 `./agent` 导出入口（`@nefevcore/abap-adt-dsh-plugin/agent`）暴露同一份引擎：`assembleAdtTools(deps, host)` 聚合全部 46 个工具（参数已是标准 JSON Schema），外加 `AdtRegistry` / `LockLedger` / `DebuggerManager` / 配置分层（`composeLayers` / `resolveEffectiveConfig`）与 `deepCompact` 等出口。宿主只需适配三个结构化缝（定义在 `src/tooldef.ts`）：
+0.7.0 起仓库分为**纯内核**与**宿主适配**两层：
 
-- `ToolHost.get('fs')` → `AdtFileSystem`（快照/导出/本地检查的文件面；DSH 的 dsh-fs 服务结构兼容，其他宿主给小适配器）
-- `ToolHost.get('credentials')` → 密码引用解析缝（`ADT_<NAME>_PASSWORD` 词汇）
-- 执行上下文 `exec.signal` + `exec.agent.session.header.cwd`（per-call 工作区锚点）
+- **`@nefevcore/abap-adt-core`（纯内核）**——全部 46 个 `adt_*` 工具、目的地注册表、双向治理策略、OCC 快照、锁账本、调试器会话、配置分层。零 DSH 依赖，主入口 `assembleAdtTools(deps, host)` 聚合工具目录（参数已是标准 JSON Schema），并导出 `AdtRegistry` / `LockLedger` / `DebuggerManager` / `composeLayers` / `deepCompact` 等全部引擎件。宿主适配三个结构化缝（定义在内核 `src/tooldef.ts`）：
 
-首个消费方是 [AgentChat](https://github.com/nefevcore/AgentChat) 的内置插件行 `ac-sap-adt`（`src/ac-sap-adt/`，47 工具带 `sap-adt` 能力标签门禁；fs 缝 = 数据根子树内的 node:fs 适配器，credentials 缝 = 加密凭据存储；demo 目的地同样开箱即用）。开发期 AgentChat 以 pnpm `link:` 指向本仓库检出版本，引擎发版后切 semver。
+  - `ToolHost.get('fs')` → `AdtFileSystem`（快照/导出/本地检查的文件面；DSH 的 dsh-fs 服务结构兼容，其他宿主给小适配器）
+  - `ToolHost.get('credentials')` → 密码引用解析缝（`ADT_<NAME>_PASSWORD` 词汇）
+  - 执行上下文 `exec.signal` + `exec.agent.session.header.cwd`（per-call 工作区锚点）
+
+- **`@nefevcore/abap-adt-dsh-plugin`（DSH 宿主适配）**——`abap-adt` settings 命名空间（`~/.dsh/settings.yaml` 热更）+ DSH 工具注册边界（lossless-JSON 消毒）+ `abap-adt-preset` CLI；内核 API 全量 re-export，存量消费者无感。
+
+- **AgentChat 内置行 `ac-sap-adt`**（[AgentChat 仓库](https://github.com/nefevcore/AgentChat) `src/ac-sap-adt/`）——第二宿主适配：46 工具带 `sap-adt` 能力标签门禁（Agent tags 显式授予才可见）；fs 缝 = 数据根子树内的 node:fs 适配器，credentials 缝 = 加密凭据存储；依赖 `@nefevcore/abap-adt-core`（semver），demo 目的地同样开箱即用。
+
+  （0.6.0 曾以 dsh-plugin 包的 `./agent` 子路径过渡；0.7.0 起独立成包。）
 
 ②生成的预设：复制 `standard` 预设（完整编码代理、不含插件开发工具集）到 `~/.dsh/.agent-presets/abap-adt/`，追加插件行、剔除源里可能携带的 `tool-cordis` / `skill-filesystem` 行，并**将 persona 替换为 ABAP 专属人设**（常用工具使用指引、开发流程指引，以及传输请求纪律：修改前必须向用户索取请求号并显式传 `transport`，绝不省略让后端自行建任务；释放传输保持人工决策）。刻意不复制部署默认预设——默认为 `cordis` 时会带入 `tool-cordis`（其 Host Cordis inspect provider 与活动 cordis 会话冲突），需要时 `--from` 可覆盖。支持 `--id/--from/--name/--force/--dry-run`。重启 DSH 后新建会话，在预设 chip 选「ABAP Development」即可。手工建预设的说明见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md)。
 

@@ -3,9 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { AdtRegistry } from '../lib/registry.js';
-import { LockLedger } from '../lib/locks.js';
-import { builtinDefaults } from '../lib/config.js';
+import { AdtRegistry, LockLedger, builtinDefaults } from '@nefevcore/abap-adt-core';
 import { apply } from '../lib/index.js';
 
 const dest = (name: string, overrides: Record<string, unknown> = {}) =>

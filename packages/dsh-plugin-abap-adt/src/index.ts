@@ -1,28 +1,41 @@
 /**
- * @nefevcore/abap-adt-dsh-plugin — DeepSeek Harness plugin for SAP ABAP Development.
+ * @nefevcore/abap-adt-dsh-plugin — DeepSeek Harness host adapter for SAP
+ * ABAP Development.
  *
- * Registers the `adt_*` tool family on `ctx.tools`: destinations/system
- * introspection, object search, source read/write/create/delete, activation,
- * syntax checks, ABAP Unit, ATC, transports, packages — plus batch quality
- * checks and local source export that go beyond the interactive VS Code ADT
- * workflow. The plugin speaks the ADT REST protocol directly (no SAP
- * proprietary libraries) and ships a demo mode backed by an in-process mock
- * server for zero-setup end-to-end use.
+ * Thin adapter over the host-neutral core (`@nefevcore/abap-adt-core`):
+ * this package owns exactly the DSH wiring —
+ *
+ *   - the `abap-adt` settings namespace (composition row config = base,
+ *     `~/.dsh/settings.yaml` `abap-adt:` section = user layer, hot reload),
+ *   - registration on the DSH tool registry (`ctx.tools`) with the
+ *     lossless-JSON boundary sanitization (`deepCompact`),
+ *   - the `abap-adt-preset` CLI (presets for DSH sessions).
+ *
+ * Everything else — the 46 `adt_*` tools, destination registry, policy,
+ * OCC snapshots, debugger sessions, config layering — lives in the core and
+ * is re-exported below for backward compatibility (the pre-0.7.0 `.` entry
+ * exported the same surface).
  */
 
 import { Context } from '@deepseek-ai/cordis';
 // Type-only: pulls in the DSH `ctx.tools` service augmentation (and the
-// tool/* event catalog) for this host entry. Erased at runtime — the neutral
-// `./agent` entry has no dsh-tools reference at all.
+// tool/* event catalog). Erased at runtime — the core has no dsh-tools
+// reference at all.
 import type {} from '@deepseek-ai/dsh-tools';
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings';
-import { Config, composeLayers, resolveEffectiveConfig, type PluginConfig } from './config.js';
-import { credentialResolverOf } from './credentials.js';
-import { AdtRegistry } from './registry.js';
-import { LockLedger } from './locks.js';
-import { DebuggerManager } from './debugger.js';
-import { deepCompact } from './tools/common.js';
-import { assembleAdtTools } from './agent.js';
+import {
+  AdtRegistry,
+  assembleAdtTools,
+  composeLayers,
+  Config,
+  credentialResolverOf,
+  DebuggerManager,
+  deepCompact,
+  LockLedger,
+  type PluginConfig,
+  resolveEffectiveConfig,
+  type ToolExec,
+} from '@nefevcore/abap-adt-core';
 
 const name = 'abap-adt';
 // Only `tools` is a hard dependency (audit D1): without it the plugin has no
@@ -51,7 +64,7 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
   const error = (message: string) => (logger?.error ?? console.error)(`abap-adt: ${message}`);
 
   // Persistent lock ledger: survives process restarts so `adt_unlock_all` can
-  // release locks left behind by crashed sessions (see src/locks.ts).
+  // release locks left behind by crashed sessions (core src/locks.ts).
   const ledger = new LockLedger();
 
   // Settings wiring (optional service): `source()` returns the resolved
@@ -74,9 +87,9 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
     credentialResolver: credentialResolverOf(ctx),
   });
 
-  // Plugin-level debugger session manager (see src/debugger.ts): the listener
-  // identity outlives single tool calls, and the disposer detaches every
-  // registered listener so an unloaded plugin leaks no debug sessions.
+  // Plugin-level debugger session manager (core src/debugger.ts): the
+  // listener identity outlives single tool calls, and the disposer detaches
+  // every registered listener so an unloaded plugin leaks no debug sessions.
   const debuggerManager = new DebuggerManager(registry);
   async function rebuild(): Promise<void> {
     rebuildChain = rebuildChain.then(async () => {
@@ -118,23 +131,23 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
   });
 
   const deps = { registry, ledger, debugger: debuggerManager };
-  // Full catalog assembly lives in the host-neutral agent entry (also the
-  // seam non-DSH hosts consume) — this wrapper only adds the DSH registry
-  // boundary behavior below.
+  // Full catalog assembly lives in the core — this wrapper only adds the
+  // DSH registry boundary behavior below.
   const tools = assembleAdtTools(deps, ctx);
 
   for (const tool of tools) {
     // Sanitize every tool's output at the registry boundary: strip `undefined`
     // property values so the value passes the DSH lossless-JSON validation
     // (the registry rejects undefined anywhere in the returned value). The
-    // presentResult cast only crosses vocabulary: our ToolResultView record
-    // vs. the DSH presentation union (the produced shapes are the DSH cards).
+    // presentResult cast only crosses vocabulary: the core's ToolResultView
+    // record vs. the DSH presentation union (the produced shapes are the
+    // DSH cards).
     const { execute, presentResult, ...rest } = tool;
     ctx.tools.register({
       ...rest,
       ...(presentResult ? { presentResult: presentResult as never } : {}),
       execute: async (args: unknown, exec: unknown) =>
-        deepCompact(await execute(args as Record<string, unknown>, exec as import('./tooldef.js').ToolExec)),
+        deepCompact(await execute(args as Record<string, unknown>, exec as ToolExec)),
     });
   }
 
@@ -154,7 +167,19 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
 
 export { Config, apply, inject, name };
 export type { PluginConfig };
-export { AdtRegistry } from './registry.js';
-export { TYPE_MAP, resolveObject, resolveObjects, refFromName, normalizeType, typeLabel } from './resolve.js';
+
+// --- Backward-compat surface (the pre-0.7.0 `.` entry exported these) ---
+// The engine surface now lives in @nefevcore/abap-adt-core; existing DSH
+// consumers (presets, scripts) keep importing them from here unchanged.
+
+export { AdtRegistry } from '@nefevcore/abap-adt-core';
+export {
+  TYPE_MAP,
+  resolveObject,
+  resolveObjects,
+  refFromName,
+  normalizeType,
+  typeLabel,
+} from '@nefevcore/abap-adt-core';
 export { AdtClient, AdtError } from '@nefevcore/abap-adt-protocol';
 export { createMockAdtServer } from '@nefevcore/abap-adt-mock';
