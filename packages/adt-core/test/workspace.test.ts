@@ -848,7 +848,10 @@ test('adt_create_destination: connect-level ping failure refuses to save unless 
     )) as ToolResult & { ping?: { ok: boolean; detail: string } };
     assert.equal(forced.action, 'created');
     assert.equal(forced.ping?.ok, false);
-    assert.match(forced.ping?.detail ?? '', /failed/i);
+    // Connect-level failure OR its timeout form — both are the honest
+    // "cannot reach" report; which one depends on how fast the resolver
+    // fails .invalid (fast NXDOMAIN → "failed", slow CI resolver → "timed out").
+    assert.match(forced.ping?.detail ?? '', /(failed|timed out)/i);
   } finally {
     await registry.dispose();
     rmSync(ws, { recursive: true, force: true });
