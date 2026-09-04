@@ -81,19 +81,38 @@ corepack pnpm build
 
 ## 方式 3：npm 发布（最规范，接收方两条命令安装启用）
 
-三个包（`@nefevcore/abap-adt-protocol` → `abap-adt-mock` → `abap-adt-dsh-plugin`；插件包**刻意不声明** `dsh.bundle`——安装只是进 profile 依赖、不自动加载，须用 `abap-adt-preset` CLI 生成预设按会话启用，见根 README「安装与更新」）。
+四个包按依赖顺序发布：`@nefevcore/abap-adt-protocol` → `abap-adt-mock` → `abap-adt-core` → `abap-adt-dsh-plugin`（0.7.0 内核拆分后 core 是第四个包；插件包**刻意不声明** `dsh.bundle`——安装只是进 profile 依赖、不自动加载，须用 `abap-adt-preset` CLI 生成预设按会话启用，见根 README「安装与更新」）。
 
-**首发（v0.1.0）已手动完成**；之后的发版全部走 CI 自动（GitHub Actions Trusted Publishing / OIDC，免 token 免 2FA）：
+### 发版流程：推 `v*` 标签，Actions 自动发布
+
+发布动作只有一条——把标签推上 GitHub。`publish.yml`（Trusted Publishing / OIDC，免 token 免 2FA）自动跑 install → test → pack（`workspace:*` 自动替换为实际版本号）→ 按依赖顺序发布四包。前置步骤：
 
 ```bash
-# 1. 同时 bump 三个 packages/*/package.json 的 version
-# 2. 提交 + 打标签 + 推送
-git add -A && git commit -m "chore(release): v0.1.1"
-git tag v0.1.1 && git push origin main v0.1.1
-# 3. Actions 自动：install → test(194) → pack（workspace:* 自动替换为实际版本号）→ 按依赖顺序发布
+# ① 四包 lockstep bump：packages/*/package.json 的 version 一起改。
+#    漏改任何一个，CI 会打出旧版本号的 tarball 并撞
+#    "cannot publish over previously published version"（0.7.0 发版时踩过）
+# ② README「从 0.1.0 升级」下补一节该版本说明（仓库惯例）
+# ③ 本地验证 + 提交：显式列出改动路径，不要 git add -A
+#    （工作区常有 bug_collects/ 等不入库的本地草稿）
+pnpm test                                          # build + 全量测试，全绿才继续
+git add README.md docs packages && git commit -m "feat(...): v0.7.2 — <一句话>"
+# ④ 打标签推送（标签触发 CI）
+git tag v0.7.2 && git push origin main v0.7.2
+# ⑤ 核验：CI 约 3–5 分钟，四包按依赖顺序陆续可见
+npm view @nefevcore/abap-adt-protocol version      # 四个包各查一次，都应等于新版本号
+npm view @nefevcore/abap-adt-dsh-plugin version
 ```
 
-> 前提（各包一次性配置）：npmjs.com 包页面 → Settings → **Trusted Publishing** 添加 `nefevcore / dsh-adt / publish.yml`（environment 留空）——只在包已存在时可配，所以**任何新包的第一次发布必须手动一次**。
+版本号约定（0.x 阶段）：修复 + 小幅加性变更 → 补丁号（如 0.7.1 宿主自适应密钥管理批次）；成体系的功能批次 → 次号（0.6.0 治理+调试器、0.7.0 内核拆分）。破坏性变更在 README 升级说明里显著标注迁移步骤。
+
+### github.com 推不上去时（网络阻断）
+
+CI 发布的唯一前提是 tag 推上 GitHub；直连超时 / SSL reset 时：
+
+- **优先挂重试循环等恢复**——间歇性阻断常见（v0.7.1 发版时连挂三次后自行恢复，重试循环第 1 次即成功）。`ssh.github.com:443` 通常仍可达，但本机未配 SSH 密钥时走不了。
+- **不要转手动 `npm publish`**：账号开了 2FA，本地直发会被 EOTP（一次性验证码）拦住；即便发成功，之后补推 tag 时 CI 还会撞已发布版本。Trusted Publishing 正是为免掉这些而设——等网络恢复推 tag 即可。
+
+> 前提（各包一次性配置）：npmjs.com 包页面 → Settings → **Trusted Publishing** 添加 `nefevcore / dsh-adt / publish.yml`（environment 留空）——只在包已存在时可配，所以**任何新包的第一次发布必须手动一次**（v0.1.0 首发即此情形）。
 
 **接收方安装（无需克隆、无需构建）：**
 ```bash
@@ -134,10 +153,10 @@ gh repo edit nefevcore/dsh-adt --add-topic \
 
 ## 版本更新
 
-改代码后：
+改代码后（走方式 3 发 npm 的完整流程见上方「发版流程」）：
 ```bash
 pnpm build            # 编译
-pnpm test             # 194 项测试
+pnpm test             # 全量测试（随版本增长，当前 300 项）
 pnpm bundle           # 重新生成单文件（方式 1 分发时）
 ```
 **接收方加载的是文件 URL → 必须重启 DSH 才会加载新代码**（Node ESM 缓存钉住旧模块，HMR 只重跑配置）。
