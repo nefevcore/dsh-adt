@@ -31,6 +31,8 @@ dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin
 dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 ```
 
+> ⏳ **发版后 24h 内更新被拦？** pnpm 11 默认开启供应链保护（`minimumReleaseAge: 1440`——新发布的包 24 小时内不被解析）。紧跟发版执行 `update` 时：默认 **loose 模式**会把新版本自动追加进 profile 的 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 并放行（一条 info 提示列出所加条目，属预期行为）；若你的环境**显式设置过** `minimumReleaseAge`（此时 strict 模式默认生效），会直接报 `ERR_PNPM_NO_MATURE_MATCHING_VERSION`——三个选择：等发布满 24h；或在该 yaml 手动加上四包的 `@<版本>` 豁免后重跑；或在终端交互式运行按提示确认。输出里出现的 `✓ Lockfile passes supply-chain policies (verified … ago)` 只是**按 lockfile 内容缓存的成功判定复用提示**，不是错误——内容或策略一变即自动重新校验，无需也无法手动"刷新验证时间"。
+
 **默认不加载，按会话启用（by design）**：包内不声明 `dsh.bundle`，安装只是把包放进 profile 的依赖里——`adt_*` 工具**只出现在用 `abap-adt` 预设创建的会话**，其他会话完全不受影响。安装时 dsh 会提示 `declares no dsh.bundle — installed as a plain dependency`，这正是预期行为。
 
 ### 架构：纯内核 + 宿主适配（多宿主共用一份引擎）
