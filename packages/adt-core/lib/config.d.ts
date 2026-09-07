@@ -3,7 +3,7 @@
  * pipeline.
  *
  * The plugin registers its Config schema as the `abap-adt` settings namespace
- * via `installSettingsSection` (see index.ts), so the composition entry (the
+ * via `ctx.settings.installSection` (see index.ts), so the composition entry (the
  * plugin row's `config:` block) becomes the namespace `base` and the user's
  * `~/.dsh/settings.yaml` `abap-adt:` section becomes the user layer. The
  * effective config resolves nearest-wins:

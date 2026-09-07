@@ -19,10 +19,10 @@
 
 import { Context } from '@deepseek-ai/cordis';
 // Type-only: pulls in the DSH `ctx.tools` service augmentation (and the
-// tool/* event catalog). Erased at runtime — the core has no dsh-tools
-// reference at all.
+// tool/* event catalog) plus the `ctx.settings` augmentation. Erased at
+// runtime — the core has no dsh-tools reference at all.
 import type {} from '@deepseek-ai/dsh-tools';
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings';
+import type {} from '@deepseek-ai/dsh-settings';
 import {
   AdtRegistry,
   assembleAdtTools,
@@ -141,14 +141,19 @@ async function apply(ctx: Context, config: PluginConfig): Promise<() => Promise<
   }
 
   // Installed last: attach fires onChange immediately, and rebuild() above
-  // is ready for it by this point.
-  installSettingsSection(ctx, settingsNamespace(name), Config, config, {
-    setSource: (current) => {
-      source = current;
-    },
-    onChange: () => {
-      void rebuild();
-    },
+  // is ready for it by this point. (dsh ≥ 0.1.2 settings seam: the old
+  // module-level installSettingsSection() moved onto the service —
+  // ctx.inject wires the optional dependency and settingsCtx.settings
+  // owns the section lifecycle, with identical attach/detach semantics.)
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, name, Config, config, {
+      setSource: (current) => {
+        source = current;
+      },
+      onChange: () => {
+        void rebuild();
+      },
+    });
   });
 
   const deps = { registry, ledger, debugger: debuggerManager };

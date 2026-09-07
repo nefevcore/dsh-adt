@@ -17,7 +17,6 @@
  * exported the same surface).
  */
 import { Context } from '@deepseek-ai/cordis';
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings';
 import { AdtRegistry, assembleAdtTools, composeLayers, Config, credentialResolverOf, DebuggerManager, deepCompact, LockLedger, resolveEffectiveConfig, } from '@nefevcore/abap-adt-core';
 const name = 'abap-adt';
 /**
@@ -117,14 +116,19 @@ async function apply(ctx, config) {
         return rebuildChain;
     }
     // Installed last: attach fires onChange immediately, and rebuild() above
-    // is ready for it by this point.
-    installSettingsSection(ctx, settingsNamespace(name), Config, config, {
-        setSource: (current) => {
-            source = current;
-        },
-        onChange: () => {
-            void rebuild();
-        },
+    // is ready for it by this point. (dsh ≥ 0.1.2 settings seam: the old
+    // module-level installSettingsSection() moved onto the service —
+    // ctx.inject wires the optional dependency and settingsCtx.settings
+    // owns the section lifecycle, with identical attach/detach semantics.)
+    ctx.inject(['settings'], (settingsCtx) => {
+        settingsCtx.settings.installSection(ctx, name, Config, config, {
+            setSource: (current) => {
+                source = current;
+            },
+            onChange: () => {
+                void rebuild();
+            },
+        });
     });
     const deps = { registry, ledger, debugger: debuggerManager };
     // Host facade for the core's environment-detection seam: declares the DSH

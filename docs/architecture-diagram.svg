@@ -32,7 +32,7 @@
   <text x="760" y="192" font-size="11.5" fill="#334155">· ctx.tools ▸ 硬依赖 inject（注册 46 工具）</text>
   <text x="760" y="210" font-size="11.5" fill="#334155">· ctx.get('fs') ▸ 可选 · 快照/导出/推送/本地检查</text>
   <text x="760" y="228" font-size="11.5" fill="#334155">· ctx.get('credentials') ▸ 可选 · 密码分层解析</text>
-  <text x="1165" y="192" font-size="11.5" fill="#334155">· settings ▸ installSettingsSection('abap-adt')</text>
+  <text x="1165" y="192" font-size="11.5" fill="#334155">· settings ▸ installSection('abap-adt')</text>
   <text x="1165" y="210" font-size="11.5" fill="#334155">　 · 保存即热生效 → rebuild() → registry.reload()</text>
   <text x="1165" y="228" font-size="11.5" fill="#334155">· ctx.logger ▸ 日志（未挂载时降级 console）</text>
 

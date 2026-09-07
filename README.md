@@ -15,7 +15,7 @@
 
 ## 安装与更新
 
-安装和更新只支持 **dsh CLI** 一种方式（要求 pnpm 在 PATH——`corepack enable` 或 `npm i -g pnpm`；缺失时 dsh 会明确报错）。四个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-core` 纯内核、`@nefevcore/abap-adt-dsh-plugin` DSH 宿主适配）：
+安装和更新只支持 **dsh CLI** 一种方式（要求 pnpm 在 PATH——`corepack enable` 或 `npm i -g pnpm`；缺失时 dsh 会明确报错）。**0.8.0 起要求 DSH ≥ 0.1.2-rc.1**（settings 接缝从模块级 `installSettingsSection()` 迁到 `ctx.settings.installSection()`；旧版 DSH 请继续用 0.7.x）。四个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-core` 纯内核、`@nefevcore/abap-adt-dsh-plugin` DSH 宿主适配）：
 
 ```bash
 # ① 安装（装进 web profile；仅安装，不自动加载）
@@ -55,6 +55,15 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
 DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更免重启热生效——连接真实系统的 `destinations` 推荐放**工作区配置** `<工作区>/.dsh-abap-adt/destinations.yaml`（对话式创建见下），全局兜底/权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
 
 ### 从 0.1.0 升级
+
+#### 0.8.0（适配 DSH 0.1.2 破坏性更新：settings 接缝迁移）
+
+DSH 0.1.2-rc.1 把 `@deepseek-ai/dsh-settings` 的模块级辅助 `installSettingsSection()` / `settingsNamespace()` 移到了服务方法 `ctx.settings.installSection(owner, ns, schema, entry, hooks)`（由 `ctx.inject(['settings'], …)` 接线，attach/detach 语义不变）。旧插件在新 DSH 上挂载预设时报 `does not provide an export named 'installSettingsSection'`（升级中途还可能出现瞬时的 `Cannot find package '@deepseek-ai/cordis'`——profile 模块回退链接重新指健康装机后即消失）。
+
+- **迁移**：插件 `src/index.ts` 的 settings 接线改为 `ctx.inject(['settings'], …)` + `installSection`，`@deepseek-ai/dsh-settings` 变为纯类型依赖；`setSource`/`onChange` 钩子与热更行为逐字节等价（D4 重建/销毁竞态测试不变仍绿）。
+- **依赖**：peer `@deepseek-ai/cordis ^4.0.2`、`@deepseek-ai/dsh-settings ^0.1.2-rc.1`；开发依赖 `@deepseek-ai/dsh-tools ^0.1.2-rc.1`（接口与 0.1.0 相同，仅对齐版本）。
+- **升级方法**：DSH 升级到 ≥ 0.1.2-rc.1 后 `dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin`，**重启 DSH**（进程内缓存旧模块记录，不重启会复现同名报错），预设与配置无需重建。
+- 测试 301 项全绿（无行为变化，无新增测试面）。
 
 #### 0.7.2（`workspaceConfigDir: '.'`——锚点即配置目录，per-caller 作用域）
 

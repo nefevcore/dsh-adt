@@ -160,9 +160,22 @@ test('D4: a settings change queued behind disposal cannot revive the registry', 
     let resolved: Parameters<typeof apply>[1] = entryConfig;
     const dispose = await apply(fakeCtx, entryConfig);
     assert.ok(registered.length > 0, 'tools were registered');
-    // Activate the settings service scope: hooks.onChange() fires (rebuild #1).
+    // Activate the settings service scope: installSection wires the source,
+    // fires onChange (rebuild #1), and registers a watch the test can drive.
     settingsFn!({
-      settings: { register: () => ({ get: () => resolved, watch: (cb: () => void) => (watchCallback = cb) }) },
+      settings: {
+        installSection: (
+          _owner: unknown,
+          _ns: string,
+          _schema: unknown,
+          _entry: unknown,
+          hooks: { setSource: (current: () => unknown) => void; onChange: () => void },
+        ) => {
+          hooks.setSource(() => resolved);
+          hooks.onChange();
+          watchCallback = hooks.onChange;
+        },
+      },
       effect: (f: () => () => void) => void f(),
     });
     // A settings change arrives (rebuild #2 queued) …

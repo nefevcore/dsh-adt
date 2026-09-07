@@ -1,6 +1,6 @@
 {
   "name": "@nefevcore/abap-adt-dsh-plugin",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "DeepSeek Harness host adapter for @nefevcore/abap-adt-core: agent-native access to SAP ABAP systems via the ADT REST protocol — search, edit, activate, unit tests, ATC, transports, packages, plus agent-scale batch/export features.",
   "type": "module",
   "main": "./lib/index.js",
@@ -23,11 +23,11 @@
     "@nefevcore/abap-adt-protocol": "workspace:*"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6"
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-settings": "^0.1.2-rc.1"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1",
     "yaml": "^2.9.0"
   },
   "engines": {
