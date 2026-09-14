@@ -25,8 +25,9 @@ import { sessionCwd, DESTINATION_PARAM, destinationOf, optStr, text } from './co
 /** Read-only adt_* tools this sweep exercises, by capability. */
 const COVERED_TOOLS = new Set([
     'adt_search',
-    'adt_read_object',
-    'adt_package_content',
+    // A-group removal: the read capabilities these owned are exercised by the
+    // fs_ops tools now; the sweep still probes the same client methods.
+    'adt_object_read',
     'adt_where_used',
     'adt_object_versions',
     'adt_list_dumps',
@@ -46,16 +47,12 @@ export const UNPROBED_TOOLS = [
     'adt_check',
     'adt_cochange',
     'adt_create_destination',
-    'adt_create_object',
-    'adt_crud',
     'adt_data_preview',
     'adt_debug_breakpoint',
     'adt_debug_inspect',
     'adt_debug_session',
     'adt_debug_set_variable',
     'adt_debug_step',
-    'adt_delete_object',
-    'adt_edit_object',
     'adt_execute',
     'adt_export_objects',
     'adt_get_atc_result',
@@ -65,9 +62,11 @@ export const UNPROBED_TOOLS = [
     'adt_list_gui_connections',
     'adt_local_check',
     'adt_lock_info',
+    'adt_object_delete',
+    'adt_object_edit',
+    'adt_object_write',
     'adt_permissions',
     'adt_push_object',
-    'adt_read_structure',
     'adt_read_textelements',
     'adt_release_gate',
     'adt_run_atc',
@@ -75,8 +74,6 @@ export const UNPROBED_TOOLS = [
     'adt_selfcheck',
     'adt_unlock_all',
     'adt_version_diff',
-    'adt_write_object',
-    'adt_write_structure',
 ];
 function classify(raw) {
     if (raw.kind === 'ok')
@@ -300,11 +297,11 @@ export function selfcheckTools(deps) {
                 push(capability, tool, raw, oracleDead);
             };
             push('object search', 'adt_search', searchCap);
-            pushObj('source read', 'adt_read_object', readCap, searchExists && readCap.kind !== 'ok');
-            pushObj('package content', 'adt_package_content', packageCap, searchExists && probe?.packageName !== undefined && packageCap.kind !== 'ok');
+            pushObj('source read', 'adt_object_read', readCap, searchExists && readCap.kind !== 'ok');
+            pushObj('package content', 'adt_object_read', packageCap, searchExists && probe?.packageName !== undefined && packageCap.kind !== 'ok');
             pushObj('where-used', 'adt_where_used', whereUsedCap);
             pushObj('version feed', 'adt_object_versions', versionsCap);
-            pushObj('active version read', 'adt_read_object', activeCap);
+            pushObj('active version read', 'adt_object_read', activeCap);
             push('dump feed', 'adt_list_dumps', dumpsCap);
             push('dump detail', 'adt_get_dump', dumpDetailCap);
             push('transport feed', 'adt_list_transports', transportsCap);

@@ -38,11 +38,21 @@ import type { ToolHost } from './tooldef.js';
 import type { ToolDeps } from './tools/common.js';
 export type { ToolHost } from './tooldef.js';
 /**
- * Build the FULL `adt_*` tool catalog (the 46 dedicated tools plus the
- * compact CRUD facade, which routes onto the former by name and therefore
- * comes last). `host` is the host facade the filesystem/credential seams
- * resolve through; `deps` carries the shared registry, lock ledger and
- * debugger session manager (one set per plugin instance, not per call).
+ * The REMOVED CRUD-era tool names (docs/ddic-fsops-matrix-plan.md §6.1,
+ * group A) — their implementations live on as internal engines of the four
+ * `adt_object_*` tools, but the names no longer register. The dead-reference
+ * grep test pins this list: a caller asking for one of these gets the
+ * migration pointer below.
+ */
+export declare const REMOVED_A_GROUP_TOOLS: readonly string[];
+/** Old verb → fs verb (migration note §6.5). */
+export declare const CRUD_TO_FS_VERBS: Readonly<Record<string, string>>;
+/**
+ * Build the FULL `adt_*` tool catalog: 37 dedicated tools plus the four
+ * fs_ops tools (write/read/edit/delete × type). The nine CRUD-era group-A
+ * tools are BUILT (their full policy/OCC/lock chains are the engines the
+ * four tools route to) but NOT registered — they exist only in the internal
+ * routing map (docs/ddic-fsops-matrix-plan.md §6 removal batch).
  */
 export declare function assembleAdtTools(deps: ToolDeps, host: ToolHost): import('./tooldef.js').DefinedTool[];
 export { AdtRegistry } from './registry.js';
@@ -58,6 +68,10 @@ export type { HostProfile } from './hostprofile.js';
 export { deepCompact } from './tools/common.js';
 export { CRUD_MATRIX, CRUD_VERBS, crudObjectTypes, crudCreatableTypes, renderCrudMatrixTable } from './crudmatrix.js';
 export type { CrudVerb, CrudCell } from './crudmatrix.js';
+export { typeRegistryRows, typeRegistryTypes, typeRegistryRow, typeRegistryRowsForPhase, typeRegistryCreatableTypes, typeRegistryDuplicateSpellings, verbSupport, } from './typeregistry.js';
+export type { TypeRegistryRow, EditMode, Activates, VerbSupport } from './typeregistry.js';
+export { FS_VERBS, FS_MATRIX, fsObjectTypes, fsCell, fsVerbsFor, fsUnsupportedMessage, renderFsMatrixTable, renderFsMatrixCard, } from './fsmatrix.js';
+export type { FsVerb, FsCell } from './fsmatrix.js';
 export { TYPE_MAP, normalizeType, refFromName, resolveObject, resolveObjects, typeLabel, } from './resolve.js';
 export { Config, builtinDefaults, composeLayers, resolveEffectiveConfig, loadExternalConfigFile, parseExternalConfigText, validateExternalConfig, workspaceConfigCandidates, workspaceConfigPath, DEFAULT_WORKSPACE_CONFIG_DIR, passwordRefNames, expandHomePath, resolveConfigFilePath, dshHome, autoDiscoverConfigFile, } from './config.js';
 export type { PluginConfig, EffectiveConfig, DestinationConfig } from './config.js';

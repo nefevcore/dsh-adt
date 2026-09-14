@@ -27,6 +27,32 @@ export interface MockAdtOptions {
     systemId?: string;
     release?: string;
     /**
+     * Backend fidelity profile:
+     *
+     *  - `legacy` (default): the permissive shape the original mock spoke —
+     *    loose Accept negotiation, `/repository/activation`, `_action=DELETE`
+     *    fallback, no session-type discipline. Kept for the demo mode and the
+     *    existing test corpus.
+     *
+     *  - `strict`: the REAL shape captured against a live S4C gateway system
+     *    (deloitte-kic, 2026-09-14, scripts/verify-p1-real.mjs evidence):
+     *      1. strict Accept negotiation — bare `application/xml` on
+     *         type-specific endpoints answers 406; the wildcard Accept passes
+     *         everywhere; `/source/main` ONLY answers the wildcard;
+     *      2. lock = POST {uri}?_action=LOCK&accessMode=MODIFY (capital LOCK),
+     *         handle inside `asx:values/LOCK_HANDLE`; PUT requires
+     *         ?lockHandle=; unlock = `_action=UNLOCK` (capital);
+     *      3. activation ONLY on the compat path `/activation`
+     *         (`/repository/activation` → 404);
+     *      4. deletion service `/deletion/delete` with the object URI as a
+     *         FULL `/sap/bc/adt/...` path inside the body (a stripped prefix
+     *         answers 500 like the real gateway); `_action=DELETE` → 404;
+     *      5. session discipline: a state-changing request WITHOUT
+     *         `x-sap-adt-sessiontype: stateful` after the session was opened
+     *         stateful answers like the ICM would (session-level refusal).
+     */
+    profile?: 'legacy' | 'strict';
+    /**
      * Simulate an old / restricted backend (BASIS < 7.5x, verified against a
      * real NW 7.4x system): the async `/abapunit/runs` service is absent
      * (404) and ABAP Unit runs only via the synchronous `/abapunit/testruns`

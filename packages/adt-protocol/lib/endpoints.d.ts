@@ -106,6 +106,13 @@ export declare const ENDPOINTS: {
         readonly CLAS: (query?: AdtQueryParams) => string;
         readonly INTF: (query?: AdtQueryParams) => string;
         readonly PROG: (query?: AdtQueryParams) => string;
+        /**
+         * Function groups. REAL-SYSTEM EVIDENCE (deloitte-kic S4C gateway,
+         * 2026-09-14): the gateway serves the collection AND the object/source
+         * URIs under `/functions/groups` — the `/fugr` spelling 404s there.
+         * (Both spellings exist in the wild; the official ADT Eclipse client
+         * posts here as well.)
+         */
         readonly FUNC: (query?: AdtQueryParams) => string;
         readonly DDLS: (query?: AdtQueryParams) => string;
         readonly TABL: (query?: AdtQueryParams) => string;

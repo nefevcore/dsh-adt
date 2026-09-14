@@ -21,7 +21,7 @@ the same one ADT/Eclipse uses. Its dialect differs from what you may assume:
 
 ### 2. Writing is not activating — and activation does not cascade
 
-`adt_write_object`/`adt_edit_object` SAVE the source (pass `activate: true`
+`adt_object_edit` SAVE the source (pass `activate: true`
 to activate in the same call). Activating a PROG main program does NOT
 cascade to its includes on most backends: pass the main object AND its
 includes in ONE `adt_activate`/`adt_check` call. Inactive objects are listed
@@ -37,8 +37,8 @@ deliberately no release tool.**
 
 ### 4. Read before edit — the OCC contract
 
-`adt_read_object` keeps a local snapshot with the server content hash.
-`adt_edit_object` matches your quote against THAT snapshot and hash-verifies
+`adt_object_read` keeps a local snapshot with the server content hash.
+the edit matches your quote against THAT snapshot and hash-verifies
 the server under the lock: if anyone changed the object since your read you
 get `[CONFLICT]` and nothing is applied — re-read, redo. After every write
 the source is read back and verified (`persisted` in the output):
@@ -53,8 +53,7 @@ delete/activate — never a silent fallback onto a different object. Pass
 
 ### 5a. Structured metadata objects are not source
 
-MSAG/DOMA/DTEL/TTYP have no plain source: `adt_read_object` refuses them and
-points at `adt_read_structure` (packages point at `adt_package_content`).
+MSAG/DOMA/DTEL/TTYP have no plain source: `adt_object_read` returns them as typed JSON (packages return their member list) — one door per kind.
 The reverse holds too — reading a class "as structure" is refused with a
 pointer back. One right door per object kind.
 
@@ -69,8 +68,8 @@ it (`raise top`, `offset=…`). An empty list with no note is a TRUE empty.
 
 | Need | Use | Cost |
 |---|---|---|
-| One method of a big class | `adt_read_object {method: "NAME"}` | ~30 lines |
-| Understand an object + its collaborators | `adt_read_object {context: true}` | source + compressed contracts |
+| One method of a big class | `adt_object_read {method: "NAME"}` | ~30 lines |
+| Understand an object + its collaborators | `adt_object_read {context: true}` | source + compressed contracts |
 | Find where something lives | `adt_search` (then read windows) | hits, not sources |
 | A slice of a huge object | `startLine`/`endLine` windows | bounded |
 
@@ -87,24 +86,24 @@ it (`raise top`, `offset=…`). An empty list with no note is a TRUE empty.
 
 ```
 Need to change an ABAP object?
-├─ one method of a class            → adt_edit_object {method, newText}   (send only the block)
-├─ a precise spot you can quote     → adt_edit_object {oldText, newText}  (quote verbatim from your read)
-├─ a whole FORM/MODULE/block        → adt_edit_object {start, end}        (bare closers resolve structurally)
-├─ a rewrite / new file on disk     → adt_write_object {source|sourceFile}
+├─ one method of a class            → edit {method, newText}   (send only the block)
+├─ a precise spot you can quote     → edit {oldText, newText}  (quote verbatim from your read)
+├─ a whole FORM/MODULE/block        → edit {start, end}        (bare closers resolve structurally)
+├─ a rewrite / new file on disk     → edit {source|sourceFile}
 └─ huge file / local tooling        → read (snapshot) → edit the localCopy file → adt_push_object
 ```
 
 Ambiguity is always an error that lists the candidates (`occurrence` picks
 one); not-found errors list the closest lines so one re-read converges.
 
-**Creating a table?** `adt_create_object {type:"TABL", fields:[…]}` generates
+**Creating a table?** `adt_object_write {type:"TABL", fields:[…]}` generates
 DDIC 2.0 DDL (auto MANDT key) and ACTIVATES in one call — the output echoes
 the DDL it wrote. Field labels come from the field `description` or a data
 element passed as `type`. Need the selection-screen texts of a program you
 are about to change? `adt_read_textelements` returns them as textpool rows
 (I/S/H) in one read.
 
-**One call, any verb?** `adt_crud {verb, type, name, …}` routes create/read/
+**One call, any verb?** The four `adt_object_*` tools are the verb face: write/read/
 update/delete to the dedicated tool that owns that verb×type — same policy
 and conflict checks as calling it directly (`routedTool` in the answer says
 which ran). Calling it without `verb` returns the capability matrix. Use the
@@ -119,11 +118,11 @@ Two workflow rules separate reviewable changes from drive-by edits:
    changed block(s) to the user — old lines, new lines, nothing else — and
    let the change land only once the diff is visible in the conversation.
    Small or "obvious" edits are no exception: the user must be able to veto
-   what they never saw. (For `adt_edit_object` the quote/new pair IS the
-   diff; for `adt_write_object` show a unified diff against your last read.)
+   what they never saw. (For block edits the quote/new pair IS the
+   diff; for whole-object rewrites show a unified diff against your last read.)
 2. **Check before you push big changes.** Small surgical edits via
-   `adt_edit_object` already run a syntax check on the full source
-   afterwards. For whole-object rewrites (`adt_write_object` / 
+   source edits already run a syntax check on the full source
+   afterwards. For whole-object rewrites ( 
    `adt_push_object`), run `adt_check` on the object BEFORE writing — a
    syntax error found after the write leaves an inactive broken object
    sitting under a released lock, and check-before-write avoids exactly
@@ -209,5 +208,5 @@ customer/vendor PII, addresses, authentication tables, HR/payroll, tax IDs
 plus audit logs, communication/workflow payloads, and the `Z*` namespace
 (`strict`). A deny can never be argued away per call. The sanctioned bypass
 is a config-level `allowedTables` exemption — those reads pass and carry an
-audited note in the output. Reading DDIC metadata (`adt_read_structure`) is
+audited note in the output. Reading DDIC metadata (typed JSON via `adt_object_read`) is
 never affected; only rows are governed.

@@ -64,26 +64,55 @@ import { debuggerTools } from './tools/debugger.js';
 import { textElementTools } from './tools/textelements.js';
 import { cochangeTools } from './tools/cochange.js';
 import { crudTools } from './tools/crud.js';
+import { fsOpsTools } from './tools/fsops.js';
+void crudTools; // (A-group removal: the crud facade is no longer assembled; kept exported for its module's own tests)
 /**
- * Build the FULL `adt_*` tool catalog (the 46 dedicated tools plus the
- * compact CRUD facade, which routes onto the former by name and therefore
- * comes last). `host` is the host facade the filesystem/credential seams
- * resolve through; `deps` carries the shared registry, lock ledger and
- * debugger session manager (one set per plugin instance, not per call).
+ * The REMOVED CRUD-era tool names (docs/ddic-fsops-matrix-plan.md §6.1,
+ * group A) — their implementations live on as internal engines of the four
+ * `adt_object_*` tools, but the names no longer register. The dead-reference
+ * grep test pins this list: a caller asking for one of these gets the
+ * migration pointer below.
+ */
+export const REMOVED_A_GROUP_TOOLS = [
+    'adt_crud',
+    'adt_create_object',
+    'adt_read_object',
+    'adt_read_structure',
+    'adt_write_object',
+    'adt_edit_object',
+    'adt_write_structure',
+    'adt_delete_object',
+    'adt_package_content',
+];
+/** Old verb → fs verb (migration note §6.5). */
+export const CRUD_TO_FS_VERBS = {
+    create: 'write',
+    update: 'edit',
+};
+/**
+ * Build the FULL `adt_*` tool catalog: 37 dedicated tools plus the four
+ * fs_ops tools (write/read/edit/delete × type). The nine CRUD-era group-A
+ * tools are BUILT (their full policy/OCC/lock chains are the engines the
+ * four tools route to) but NOT registered — they exist only in the internal
+ * routing map (docs/ddic-fsops-matrix-plan.md §6 removal batch).
  */
 export function assembleAdtTools(deps, host) {
-    const tools = [
-        ...systemTools(deps),
-        ...destinationTools(deps, host),
-        ...searchTools(deps),
+    const engines = [
         ...readTools(deps, host),
         ...writeTools(deps, host),
         ...objectTools(deps),
+        ...structureTools(deps),
+        ...packageTools(deps),
+    ];
+    const engineMap = new Map(engines.map((t) => [t.name, t]));
+    const registered = [
+        ...systemTools(deps),
+        ...destinationTools(deps, host),
+        ...searchTools(deps),
         ...lifecycleTools(deps),
         ...testingTools(deps),
         ...atcRunTools(deps),
         ...transportTools(deps),
-        ...packageTools(deps),
         ...batchTools(deps, host),
         ...localTools(deps, host),
         ...whereUsedTools(deps),
@@ -94,17 +123,13 @@ export function assembleAdtTools(deps, host) {
         ...policyTools(deps),
         ...dumpTools(deps),
         ...executeTools(deps),
-        ...structureTools(deps),
         ...selfcheckTools(deps),
         ...debuggerTools(deps),
         ...textElementTools(deps),
         ...cochangeTools(deps),
     ];
-    // The compact CRUD facade routes to the registered tools by name — appended
-    // AFTER the full catalog exists (every matrix owner must be present).
-    const routable = new Map(tools.map((t) => [t.name, t]));
-    tools.push(...crudTools(deps, routable));
-    return tools;
+    const fs = fsOpsTools(deps, engineMap);
+    return [...registered, ...fs];
 }
 // --- Engine building blocks hosts wire into their own composition ---
 export { AdtRegistry } from './registry.js';
@@ -116,6 +141,9 @@ export { credentialResolverOf, credentialsOf, isCredentialRefName } from './cred
 export { hostProfileOf, workspaceConfigDirOf } from './hostprofile.js';
 export { deepCompact } from './tools/common.js';
 export { CRUD_MATRIX, CRUD_VERBS, crudObjectTypes, crudCreatableTypes, renderCrudMatrixTable } from './crudmatrix.js';
+// --- fs_ops: type registry + fs verb matrix (docs/ddic-fsops-matrix-plan.md) ---
+export { typeRegistryRows, typeRegistryTypes, typeRegistryRow, typeRegistryRowsForPhase, typeRegistryCreatableTypes, typeRegistryDuplicateSpellings, verbSupport, } from './typeregistry.js';
+export { FS_VERBS, FS_MATRIX, fsObjectTypes, fsCell, fsVerbsFor, fsUnsupportedMessage, renderFsMatrixTable, renderFsMatrixCard, } from './fsmatrix.js';
 // --- Object-reference resolution helpers (ADT type codes ↔ URIs ↔ names) ---
 export { TYPE_MAP, normalizeType, refFromName, resolveObject, resolveObjects, typeLabel, } from './resolve.js';
 // --- Config layering (schema defaults < composition < files < workspace) ---

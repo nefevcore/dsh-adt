@@ -110,7 +110,14 @@ export const ENDPOINTS = {
         CLAS: (query) => `${ADT_BASE}/oo/classes${toQuery(query)}`,
         INTF: (query) => `${ADT_BASE}/oo/interfaces${toQuery(query)}`,
         PROG: (query) => `${ADT_BASE}/programs/programs${toQuery(query)}`,
-        FUNC: (query) => `${ADT_BASE}/fugr${toQuery(query)}`,
+        /**
+         * Function groups. REAL-SYSTEM EVIDENCE (deloitte-kic S4C gateway,
+         * 2026-09-14): the gateway serves the collection AND the object/source
+         * URIs under `/functions/groups` — the `/fugr` spelling 404s there.
+         * (Both spellings exist in the wild; the official ADT Eclipse client
+         * posts here as well.)
+         */
+        FUNC: (query) => `${ADT_BASE}/functions/groups${toQuery(query)}`,
         DDLS: (query) => `${ADT_BASE}/ddls/sources${toQuery(query)}`,
         TABL: (query) => `${ADT_BASE}/ddic/tables${toQuery(query)}`,
         STRU: (query) => `${ADT_BASE}/ddic/structures${toQuery(query)}`,
