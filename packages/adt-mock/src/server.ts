@@ -30,6 +30,32 @@ export interface MockAdtOptions {
   systemId?: string;
   release?: string;
   /**
+   * Backend fidelity profile:
+   *
+   *  - `legacy` (default): the permissive shape the original mock spoke —
+   *    loose Accept negotiation, `/repository/activation`, `_action=DELETE`
+   *    fallback, no session-type discipline. Kept for the demo mode and the
+   *    existing test corpus.
+   *
+   *  - `strict`: the REAL shape captured against a live S4C gateway system
+   *    (deloitte-kic, 2026-09-14, scripts/verify-p1-real.mjs evidence):
+   *      1. strict Accept negotiation — bare `application/xml` on
+   *         type-specific endpoints answers 406; the wildcard Accept passes
+   *         everywhere; `/source/main` ONLY answers the wildcard;
+   *      2. lock = POST {uri}?_action=LOCK&accessMode=MODIFY (capital LOCK),
+   *         handle inside `asx:values/LOCK_HANDLE`; PUT requires
+   *         ?lockHandle=; unlock = `_action=UNLOCK` (capital);
+   *      3. activation ONLY on the compat path `/activation`
+   *         (`/repository/activation` → 404);
+   *      4. deletion service `/deletion/delete` with the object URI as a
+   *         FULL `/sap/bc/adt/...` path inside the body (a stripped prefix
+   *         answers 500 like the real gateway); `_action=DELETE` → 404;
+   *      5. session discipline: a state-changing request WITHOUT
+   *         `x-sap-adt-sessiontype: stateful` after the session was opened
+   *         stateful answers like the ICM would (session-level refusal).
+   */
+  profile?: 'legacy' | 'strict';
+  /**
    * Simulate an old / restricted backend (BASIS < 7.5x, verified against a
    * real NW 7.4x system): the async `/abapunit/runs` service is absent
    * (404) and ABAP Unit runs only via the synchronous `/abapunit/testruns`
@@ -257,6 +283,7 @@ export function createMockAdtServer(options: MockAdtOptions = {}) {
 
   const systemId = options.systemId ?? 'MOCK';
   const release = options.release ?? '757';
+  const profile = options.profile ?? 'legacy';
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
@@ -267,6 +294,7 @@ export function createMockAdtServer(options: MockAdtOptions = {}) {
         password: options.password,
         legacyUnitOnly: options.legacyUnitOnly ?? false,
         cors: options.cors ?? true,
+        profile,
       });
     } catch (error) {
       res.statusCode = error instanceof MockHttpError ? error.status : 500;
@@ -378,6 +406,8 @@ interface Ctx {
   legacyUnitOnly: boolean;
   /** See MockAdtOptions.cors. */
   cors: boolean;
+  /** Backend fidelity profile (see MockAdtOptions.profile). */
+  profile: 'legacy' | 'strict';
 }
 
 /** Everything a route handler needs for one request. */
@@ -443,6 +473,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
     res.setHeader('X-CSRF-Token', state.csrfToken);
   }
 
+  // ---- STRICT profile: pre-route fidelity gates (deloitte-kic evidence) ----
+  if (opts.profile === 'strict') {
+    const refusal = strictGatesFull(req, res, state, { path, url });
+    if (refusal) return;
+  }
+
   const ctx: RequestCtx = { req, res, state, opts, url, path };
   for (const route of ROUTES) {
     if (!route.match(ctx)) continue;
@@ -464,6 +500,90 @@ async function handle(req: IncomingMessage, res: ServerResponse, state: MockStat
   res.statusCode = 404;
   res.setHeader('Content-Type', 'application/xml');
   res.end(errorXml(`Mock ADT: no handler for ${req.method} ${path}`));
+}
+
+// ---------------------------------------------------------------------------
+// STRICT profile — the real S4C gateway shapes (deloitte-kic, 2026-09-14).
+// Evidence: scripts/verify-p1-real.mjs + probe2..14 in the repo history.
+// ---------------------------------------------------------------------------
+
+/** Type-specific media types the strict backend negotiates per endpoint. */
+const STRICT_ENDPOINT_MEDIA: Array<{ test: RegExp; accept: RegExp[] }> = [
+  // /source/main ONLY answers */* (text/plain and source.v1 both rejected).
+  { test: /\/source\/main$/, accept: [/^\*\/\*$/] },
+  // Structured editors and their collections negotiate the kind media type.
+  { test: /\/ddic\/domains/, accept: [/vnd\.sap\.adt\.domains/, /^\*\/\*$/] },
+  { test: /\/ddic\/dataelements/, accept: [/vnd\.sap\.adt\.dataelements/, /^\*\/\*$/] },
+  { test: /\/ddic\/tabletypes/, accept: [/vnd\.sap\.adt\.tabletype/, /^\*\/\*$/] },
+  { test: /\/ddic\/tables/, accept: [/vnd\.sap\.adt\.tables/, /^\*\/\*$/] },
+  { test: /\/ddic\/ddl\/sources/, accept: [/vnd\.sap\.adt\.ddlSource/, /^\*\/\*$/] },
+  // Activation answers its own type (or the generic wildcard).
+  { test: /^\/activation$/, accept: [/vnd\.sap\.adt\.activation/, /^\*\/\*$/] },
+  { test: /^\/deletion\/delete$/, accept: [/vnd\.sap\.adt\.deletion/, /^\*\/\*$/] },
+];
+
+/** Sessions that have been opened stateful (strict profile only). */
+const strictStatefulSessions = new Set<string>();
+
+/**
+ * Pre-route strict gate chain. Returns true when the request was REFUSED
+ * (the response is already written); false lets it flow into the route table.
+ *
+ *  1. Session discipline: once ANY request in the session carried
+ *     `x-sap-adt-sessiontype: stateful`, a later state-changing request
+ *     WITHOUT it behaves like the ICM's broken-session answer (the deloitte
+ *     trap: mixing stateless into a stateful chain kills the session).
+ *  2. Accept negotiation: type-specific endpoints reject bare application/xml.
+ *  3. Route existence: /repository/activation and _action=DELETE do not
+ *     exist on the strict backend (activation = compat path; deletion =
+ *     the deletion service).
+ */
+function strictGatesFull(
+  req: IncomingMessage,
+  res: ServerResponse,
+  state: MockState,
+  ctx: { path: string; url: URL },
+): boolean {
+  const sessionCookie = (req.headers.cookie ?? '').match(/SAP_SESSIONID_MOCK_\d+=([^;]+)/)?.[1];
+  const isStateful = req.headers['x-sap-adt-sessiontype'] === 'stateful';
+  const stateChanging = req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE';
+  if (sessionCookie && isStateful) strictStatefulSessions.add(sessionCookie);
+  // A state-changing request on a session that WAS stateful, now without
+  // the header: the real gateway answers with the ICM error page.
+  if (sessionCookie && strictStatefulSessions.has(sessionCookie) && stateChanging && !isStateful) {
+    res.statusCode = 400;
+    res.setHeader('Content-Type', 'text/html; charset=windows-1252');
+    res.end('<html><head><title>Service cannot be reached</title></head><body>strict mock: stateful session discipline violated (x-sap-adt-sessiontype missing on a state-changing request)</body></html>');
+    return true;
+  }
+  // Accept negotiation on the type-specific endpoints (READ/WRITE only —
+  // the lock/unlock actions carry their own media type, and the real
+  // gateway negotiates those independently).
+  const accept = req.headers.accept ?? '';
+  const readOrWrite = req.method === 'GET' || req.method === 'PUT';
+  const rule = readOrWrite ? STRICT_ENDPOINT_MEDIA.find((r) => r.test.test(ctx.path)) : undefined;
+  if (rule && !rule.accept.some((re) => re.test(accept))) {
+    res.statusCode = 406;
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(errorXml(`The message content is not acceptable (strict profile: this endpoint negotiates ${rule.accept.map((r) => r.source).join(' | ')} — got '${accept || 'none'}')`, 'ExceptionResourceNotAcceptable'));
+    return true;
+  }
+  // Compat activation ONLY in strict: the modern path 404s before routing.
+  if (ctx.path === '/repository/activation') {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(errorXml('Resource /sap/bc/adt/repository/activation does not exist (strict profile: activation lives on /sap/bc/adt/activation)', 'ExceptionResourceNotFound'));
+    return true;
+  }
+  // Legacy _action=DELETE does not exist in strict.
+  if (ctx.url.searchParams.get('_action') === 'DELETE') {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(errorXml('No suitable resource found (strict profile: use /sap/bc/adt/deletion/delete)', 'ExceptionResourceNotFound'));
+    return true;
+  }
+  void state;
+  return false;
 }
 
 // --- Route handlers (one per table entry) ------------------------------------
@@ -1245,7 +1365,7 @@ function hUnlock({ res, state, url, path }: RequestCtx): void {
   res.end(lockResultXml('', ''));
 }
 
-// ---- Object delete (_action=DELETE) ----
+// ---- Object delete (_action=DELETE; legacy profile) ----
 function hDeleteObject({ res, state, path }: RequestCtx): void {
   const objByUri = findObject(state, path);
   if (!objByUri) return; // unreachable: match verified the object exists
@@ -1254,6 +1374,57 @@ function hDeleteObject({ res, state, path }: RequestCtx): void {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'application/xml');
   res.end(adtXml(`<adtcore:objectReferences xmlns:adtcore="${NS_ADT}"/>`));
+}
+
+// ---- Modern deletion service (POST /deletion/delete; strict evidence) ----
+// Body: <del:deletionRequest><del:object adtcore:uri="FULL /sap/bc/adt path">
+// The deloitte gateway REQUIRES the full prefix inside the body — a
+// stripped URI answers 500 (Application Server Error) exactly like the
+// real system did during verification.
+async function hDeletionService({ req, res, state }: RequestCtx): Promise<void> {
+  const body = await readBody(req);
+  const uriMatch = body.match(/adtcore:uri="([^"]+)"/);
+  if (!uriMatch) {
+    res.statusCode = 400;
+    res.setHeader('Content-Type', 'application/xml');
+    res.end(errorXml('deletionRequest misses del:object/@adtcore:uri'));
+    return;
+  }
+  const uri = uriMatch[1]!;
+  if (!uri.startsWith('/sap/bc/adt/')) {
+    // The real gateway's 500: the object service cannot resolve the
+    // prefix-stripped URI and dies with an application error page.
+    res.statusCode = 500;
+    res.setHeader('Content-Type', 'text/html; charset=windows-1252');
+    res.end('<html><head><title>Application Server Error</title></head><body>strict mock: deletion body URI must be the FULL /sap/bc/adt/... path</body></html>');
+    return;
+  }
+  const obj = findObject(state, uri);
+  if (!obj) {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.deletion.response.v1+xml');
+    res.end(adtXml(`<del:deletionResult xmlns:del="http://www.sap.com/adt/deletion"><del:object del:isDeleted="false" adtcore:uri="${xmlEscape(uri)}" xmlns:adtcore="${NS_ADT}"><del:message del:priority="1" del:type="E"><del:text>object not found</del:text></del:message></del:object></del:deletionResult>`));
+    return;
+  }
+  state.objects = state.objects.filter((o) => o.uri !== obj.uri);
+  state.locked.delete(obj.uri);
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/vnd.sap.adt.deletion.response.v1+xml');
+  res.end(adtXml(`<del:deletionResult xmlns:del="http://www.sap.com/adt/deletion"><del:object del:isDeleted="true" adtcore:uri="${xmlEscape(obj.uri)}" adtcore:type="${obj.type}" adtcore:name="${obj.name}" adtcore:packageName="${obj.packageName}" xmlns:adtcore="${NS_ADT}"><del:message del:priority="0" del:type="S"><del:text/></del:message></del:object></del:deletionResult>`));
+}
+
+// ---- Strict LOCK param guard: _action=LOCK without accessMode=MODIFY ----
+// The deloitte gateway accepts ONLY the full form; anything else is a
+// parameter error (real systems answer 400 ExceptionParameterNotFound).
+function hStrictLockParamMissing({ res, url }: RequestCtx): void {
+  res.statusCode = 400;
+  res.setHeader('Content-Type', 'application/xml');
+  res.end(
+    errorXml(
+      `Parameter accessMode could not be found (strict profile: LOCK requires ?_action=LOCK&accessMode=MODIFY, got accessMode='${url.searchParams.get('accessMode') ?? ''}')`,
+      'ExceptionParameterNotFound',
+    ),
+  );
 }
 
 // ---- Object read (base URI or /source/main) ----
@@ -1658,6 +1829,30 @@ const objectPath = (path: string): string =>
   path.endsWith('/source/main') ? path.slice(0, -'/source/main'.length) : path;
 
 const ROUTES: Route[] = [
+  // ---- STRICT profile routes (deloitte-kic evidence) ----
+  // Modern deletion service (both profiles answer it; the strict profile
+  // additionally 404s the legacy _action=DELETE in the pre-route gates).
+  {
+    method: 'POST',
+    csrf: true,
+    match: (c) => c.path === '/deletion/delete',
+    handler: hDeletionService,
+  },
+  // Compat activation path (strict-only live route; the modern path 404s
+  // there via the pre-route gate — legacy keeps the modern path below).
+  { method: 'POST', csrf: true, match: (c) => c.path === '/activation', handler: hActivation },
+  // Strict LOCK: requires accessMode=MODIFY (the real gateway's form).
+  {
+    method: 'POST',
+    csrf: true,
+    match: (c) =>
+      c.opts.profile === 'strict' &&
+      c.url.searchParams.get('_action') === 'LOCK' &&
+      c.url.searchParams.get('accessMode') !== 'MODIFY' &&
+      findObject(c.state, c.path) !== undefined,
+    handler: hStrictLockParamMissing,
+  },
+  // ---- Common routes (both profiles) ----
   // Discovery / search / where-used
   { method: 'GET', match: (c) => c.path === '/core/discovery' || c.path === '/discovery', handler: hDiscovery },
   { method: 'GET', match: (c) => c.path === '/repository/informationsystem/search', handler: hSearch },

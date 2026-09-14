@@ -100,15 +100,15 @@ test('every matrix cell routes to a real tool of the full plugin catalog', async
   }
 });
 
-test('the documented matrix table matches the rendered single source', () => {
+test('the old CRUD matrix table is GONE from the docs (A-group removal)', () => {
+  // The fs_ops matrix replaced it in tool-reference.md §11; the CRUD-era
+  // render is no longer published. This pins that the doc cannot silently
+  // regress to the removed face.
   const docPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'docs', 'tool-reference.md');
-  // Normalize line endings: git may hand the doc back as CRLF on Windows.
   const doc = readFileSync(docPath, 'utf8').replace(/\r\n/g, '\n');
-  const rendered = renderCrudMatrixTable();
   assert.ok(
-    doc.includes(rendered),
-    'docs/tool-reference.md no longer contains the rendered CRUD matrix table — ' +
-      'regenerate it from src/crudmatrix.ts (renderCrudMatrixTable()) after changing the matrix',
+    !doc.includes('| type | create | read | update | delete |'),
+    'docs/tool-reference.md carries a CRUD-verb table again — the fs_ops matrix (write/read/edit/delete) is the published face',
   );
 });
 

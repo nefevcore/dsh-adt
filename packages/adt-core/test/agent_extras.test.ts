@@ -6,6 +6,7 @@ import { builtinDefaults } from '../lib/config.js';
 import { readTools } from '../lib/tools/read.js';
 import { writeTools } from '../lib/tools/write.js';
 import { selfcheckTools, UNPROBED_TOOLS } from '../lib/tools/selfcheck.js';
+import { REMOVED_A_GROUP_TOOLS } from '../lib/index.js';
 import { systemTools } from '../lib/tools/system.js';
 import { destinationTools } from '../lib/tools/destinations.js';
 import { searchTools } from '../lib/tools/search.js';
@@ -30,6 +31,7 @@ import { debuggerTools } from '../lib/tools/debugger.js';
 import { textElementTools } from '../lib/tools/textelements.js';
 import { cochangeTools } from '../lib/tools/cochange.js';
 import { crudTools } from '../lib/tools/crud.js';
+import { fsOpsTools } from '../lib/tools/fsops.js';
 import { DebuggerManager } from '../lib/debugger.js';
 import { findMethodBlocks, extractDependencyCandidates, rankDependencies, extractContract } from '../lib/abap.js';
 import type { Context } from '@deepseek-ai/cordis';
@@ -262,12 +264,12 @@ test('adt_selfcheck: mock destination answers, nothing dead or broken', async ()
   assert.equal(result.summary.broken, 0);
   assert.ok(result.summary.answered >= 8, `answered=${result.summary.answered}`);
   const byTool = new Map(result.checks.map((c) => [`${c.tool}:${c.capability}`, c]));
-  assert.equal(byTool.get('adt_read_object:source read')!.verdict, 'answered');
+  assert.equal(byTool.get('adt_object_read:source read')!.verdict, 'answered');
   assert.equal(byTool.get('adt_search:object search')!.verdict, 'answered');
   assert.equal(byTool.get('adt_batch:protocol $batch GET')!.verdict, 'answered');
   assert.ok(result.probeObject.includes('ZCL'));
   // Coverage statement: mutating/executing tools listed, never omitted.
-  assert.ok(result.unprobedTools.includes('adt_write_object'));
+  assert.ok(result.unprobedTools.includes('adt_object_write'));
   assert.ok(result.unprobedTools.includes('adt_execute'));
   assert.ok(result.unprobedTools.includes('adt_run_unit_tests'));
 
@@ -287,14 +289,10 @@ test('tool catalog: every adt_* tool accounted for (published numbers)', async (
     ...systemTools(deps),
     ...destinationTools(deps, fakeCtx),
     ...searchTools(deps),
-    ...readTools(deps, fakeCtx),
-    ...writeTools(deps, fakeCtx),
-    ...objectTools(deps),
     ...lifecycleTools(deps),
     ...testingTools(deps),
     ...atcRunTools(deps),
     ...transportTools(deps),
-    ...packageTools(deps),
     ...batchTools(deps, fakeCtx),
     ...localTools(deps, fakeCtx),
     ...whereUsedTools(deps),
@@ -305,18 +303,25 @@ test('tool catalog: every adt_* tool accounted for (published numbers)', async (
     ...policyTools(deps),
     ...dumpTools(deps),
     ...executeTools(deps),
-    ...structureTools(deps),
     ...selfcheckTools(deps),
     ...debuggerTools(deps),
     ...textElementTools(deps),
     ...cochangeTools(deps),
-    // The compact CRUD facade is appended after the full catalog (index.ts).
-    ...crudTools(deps, new Map<string, never>() as never),
+    // A-group removal (docs/ddic-fsops-matrix-plan.md §6): the nine CRUD-era
+    // tools are no longer registered — they are internal engines of the four
+    // fs_ops tools below. 36 + 4 = 40.
+    ...fsOpsTools(deps, new Map<string, never>() as never),
   ];
   const names = all.map((t) => t.name).sort();
   assert.equal(new Set(names).size, names.length, 'duplicate tool name registered');
-  assert.equal(names.length, 46, `catalog size drifted: ${names.length} — update README/docs badge and this pin together`);
+  assert.equal(names.length, 40, `catalog size drifted: ${names.length} — update README/docs badge and this pin together`);
   assert.ok(names.includes('adt_selfcheck'));
+  assert.ok(names.includes('adt_object_write') && names.includes('adt_object_read'));
+  assert.ok(names.includes('adt_object_edit') && names.includes('adt_object_delete'));
+  // The A-group names are gone from the REGISTERED face.
+  for (const removed of REMOVED_A_GROUP_TOOLS) {
+    assert.ok(!names.includes(removed), `${removed} must no longer register (A-group removal)`);
+  }
   // Sweep coverage statement stays honest: covered + unprobed = full catalog.
   const covered = new Set(SWEPT_TOOLS);
   for (const name of names) {
@@ -330,8 +335,7 @@ test('tool catalog: every adt_* tool accounted for (published numbers)', async (
 /** Tools adt_selfcheck claims to cover (mirrors COVERED_TOOLS in selfcheck.ts). */
 const SWEPT_TOOLS = [
     'adt_search',
-    'adt_read_object',
-    'adt_package_content',
+    'adt_object_read',
     'adt_where_used',
     'adt_object_versions',
     'adt_list_dumps',
