@@ -272,6 +272,23 @@ test('write engines route through the owner chain (A-group removal landed them)'
   await del.execute({ type: 'PROG', name: 'ZPROG_ENG_OK' }, exec);
 });
 
+test('write: P1/P3 source types carry the real-system wire forms (DCLS chain on the mock)', async () => {
+  const { write, read, delete: del } = buildCatalog(registry);
+  // DCLS write → create engine → client.createObject with the dcl:dclSource
+  // root + /acm/dcl/sources collection (real-system evidence, 4.1 fix).
+  const created = (await write.execute({
+    type: 'DCLS', name: 'ZDCLS_ENG_OK', description: 'engine routed',
+    packageName: '$TMP', source: "@MappingRole: true\ndefine role zdcls_eng_ok {\n  grant select on t100;\n}\n",
+  }, exec)) as { verb: string; type: string; success?: boolean; uri?: string };
+  assert.equal(created.verb, 'write');
+  assert.equal(created.type, 'DCLS');
+  assert.equal(created.success, true, `DCLS write failed: ${JSON.stringify(created)}`);
+  // Read it back through the fs read engine (source form).
+  const back = (await read.execute({ type: 'DCLS', name: 'ZDCLS_ENG_OK' }, exec)) as { source?: string };
+  assert.match(back.source ?? '', /define role zdcls_eng_ok/);
+  await del.execute({ type: 'DCLS', name: 'ZDCLS_ENG_OK' }, exec);
+});
+
 test('engines whose commit has not landed refuse loudly (no silent degrade)', async () => {
   const { edit } = buildCatalog(registry);
   // SRVB edit is planned; VIEW edit is a hard no — both refuse by message.

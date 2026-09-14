@@ -309,9 +309,10 @@ async function handle(req, res, state, opts) {
     }
     // ---- STRICT profile: pre-route fidelity gates (deloitte-kic evidence) ----
     if (opts.profile === 'strict') {
-        const refusal = strictGatesFull(req, res, state, { path, url });
-        if (refusal)
+        const outcome = await strictGatesFull(req, res, state, { path, url });
+        if (outcome.refused)
             return;
+        req = outcome.req; // possibly a replay stub (body already buffered)
     }
     const ctx = { req, res, state, opts, url, path };
     for (const route of ROUTES) {
@@ -349,7 +350,18 @@ const STRICT_ENDPOINT_MEDIA = [
     { test: /\/ddic\/dataelements/, accept: [/vnd\.sap\.adt\.dataelements/, /^\*\/\*$/] },
     { test: /\/ddic\/tabletypes/, accept: [/vnd\.sap\.adt\.tabletype/, /^\*\/\*$/] },
     { test: /\/ddic\/tables/, accept: [/vnd\.sap\.adt\.tables/, /^\*\/\*$/] },
+    { test: /\/ddic\/structures/, accept: [/vnd\.sap\.adt\.structures/, /^\*\/\*$/] },
     { test: /\/ddic\/ddl\/sources/, accept: [/vnd\.sap\.adt\.ddlSource/, /^\*\/\*$/] },
+    // P1/P3 additions (real-system evidence): each create collection negotiates
+    // its own media type — a bare application/xml Accept is 406.
+    { test: /\/acm\/dcl\/sources/, accept: [/vnd\.sap\.adt\.dclSource/, /^\*\/\*$/] },
+    { test: /\/ddic\/ddlx\/sources/, accept: [/vnd\.sap\.adt\.ddic\.ddlx/, /^\*\/\*$/] },
+    { test: /\/bo\/behaviordefinitions/, accept: [/vnd\.sap\.adt\.blues/, /^\*\/\*$/] },
+    { test: /\/ddic\/srvd\/sources/, accept: [/vnd\.sap\.adt\.ddic\.srvd/, /^\*\/\*$/] },
+    { test: /\/oo\/classes/, accept: [/vnd\.sap\.adt\.oo\.classes/, /^\*\/\*$/] },
+    { test: /\/oo\/interfaces/, accept: [/vnd\.sap\.adt\.oo\.interfaces/, /^\*\/\*$/] },
+    { test: /\/programs\/programs/, accept: [/vnd\.sap\.adt\.programs\.programs/, /^\*\/\*$/] },
+    { test: /\/functions\/groups/, accept: [/vnd\.sap\.adt\.functions\.groups/, /^\*\/\*$/] },
     // Activation answers its own type (or the generic wildcard).
     { test: /^\/activation$/, accept: [/vnd\.sap\.adt\.activation/, /^\*\/\*$/] },
     { test: /^\/deletion\/delete$/, accept: [/vnd\.sap\.adt\.deletion/, /^\*\/\*$/] },
@@ -368,8 +380,12 @@ const strictStatefulSessions = new Set();
  *  3. Route existence: /repository/activation and _action=DELETE do not
  *     exist on the strict backend (activation = compat path; deletion =
  *     the deletion service).
+ *  4. Create body roots: each typed collection rejects the GENERIC
+ *     `<adtcore:object>`/`<adtcore:objectReference>` form with 400 —
+ *     the real gateways want the type's own namespaced root element
+ *     (REAL-SYSTEM EVIDENCE, all three environments, 2026-09-14).
  */
-function strictGatesFull(req, res, state, ctx) {
+async function strictGatesFull(req, res, state, ctx) {
     const sessionCookie = (req.headers.cookie ?? '').match(/SAP_SESSIONID_MOCK_\d+=([^;]+)/)?.[1];
     const isStateful = req.headers['x-sap-adt-sessiontype'] === 'stateful';
     const stateChanging = req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE';
@@ -381,7 +397,7 @@ function strictGatesFull(req, res, state, ctx) {
         res.statusCode = 400;
         res.setHeader('Content-Type', 'text/html; charset=windows-1252');
         res.end('<html><head><title>Service cannot be reached</title></head><body>strict mock: stateful session discipline violated (x-sap-adt-sessiontype missing on a state-changing request)</body></html>');
-        return true;
+        return { refused: true, req };
     }
     // Accept negotiation on the type-specific endpoints (READ/WRITE only —
     // the lock/unlock actions carry their own media type, and the real
@@ -393,24 +409,60 @@ function strictGatesFull(req, res, state, ctx) {
         res.statusCode = 406;
         res.setHeader('Content-Type', 'application/xml');
         res.end(errorXml(`The message content is not acceptable (strict profile: this endpoint negotiates ${rule.accept.map((r) => r.source).join(' | ')} — got '${accept || 'none'}')`, 'ExceptionResourceNotAcceptable'));
-        return true;
+        return { refused: true, req };
+    }
+    // Create POSTs to typed collections must carry the type's own root
+    // element — the generic forms 400 on the real gateways. The body is
+    // buffered here and replayed to the route handler via a stub req (the
+    // real stream is already drained by readBody).
+    if (req.method === 'POST' && (ctx.path === '/ddic/tables' || ctx.path === '/ddic/structures'
+        || ctx.path === '/ddic/domains' || ctx.path === '/ddic/dataelements' || ctx.path === '/ddic/tabletypes'
+        || ctx.path === '/ddic/ddl/sources' || ctx.path === '/acm/dcl/sources' || ctx.path === '/ddic/ddlx/sources'
+        || ctx.path === '/bo/behaviordefinitions' || ctx.path === '/ddic/srvd/sources' || ctx.path === '/oo/classes'
+        || ctx.path === '/oo/interfaces' || ctx.path === '/programs/programs' || ctx.path === '/functions/groups')) {
+        const body = await readBody(req);
+        if (/<(adtcore:object|adtcore:objectReference)[\s>]/.test(body)) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/xml');
+            res.end(errorXml(`The request contains an invalid body (strict profile: this collection expects its own namespaced root element, not the generic ${/objectReference/.test(body) ? 'adtcore:objectReference' : 'adtcore:object'} form)`, 'ExceptionInvalidData'));
+            return { refused: true, req };
+        }
+        return { refused: false, req: replayReq(req, body) };
     }
     // Compat activation ONLY in strict: the modern path 404s before routing.
     if (ctx.path === '/repository/activation') {
         res.statusCode = 404;
         res.setHeader('Content-Type', 'application/xml');
         res.end(errorXml('Resource /sap/bc/adt/repository/activation does not exist (strict profile: activation lives on /sap/bc/adt/activation)', 'ExceptionResourceNotFound'));
-        return true;
+        return { refused: true, req };
     }
     // Legacy _action=DELETE does not exist in strict.
     if (ctx.url.searchParams.get('_action') === 'DELETE') {
         res.statusCode = 404;
         res.setHeader('Content-Type', 'application/xml');
         res.end(errorXml('No suitable resource found (strict profile: use /sap/bc/adt/deletion/delete)', 'ExceptionResourceNotFound'));
-        return true;
+        return { refused: true, req };
     }
     void state;
-    return false;
+    return { refused: false, req };
+}
+/**
+ * A replayable request stub for the strict create gate: the original stream
+ * was drained when the body was inspected, so the route handler receives a
+ * stub whose async iterator yields the buffered body once.
+ */
+function replayReq(req, body) {
+    const buffer = Buffer.from(body, 'utf8');
+    let delivered = false;
+    const stub = req;
+    stub[Symbol.asyncIterator] = async function* () {
+        if (delivered)
+            return;
+        delivered = true;
+        if (buffer.length > 0)
+            yield buffer;
+    };
+    return stub;
 }
 // --- Route handlers (one per table entry) ------------------------------------
 // ---- Discovery (AtomPub service doc) ----
@@ -426,7 +478,12 @@ function hDiscovery({ res, opts }) {
         ['/sap/bc/adt/oo/classes', 'application/vnd.sap.adt.oo.classes.v4+xml', 'Classes'],
         ['/sap/bc/adt/oo/interfaces', 'application/vnd.sap.adt.oo.interfaces.v5+xml', 'Interfaces'],
         ['/sap/bc/adt/programs/programs', 'application/vnd.sap.adt.programs.programs.v2+xml', 'Programs'],
-        ['/sap/bc/adt/ddls/sources', 'application/vnd.sap.adt.ddlSource.v2+xml', 'CDS Data Definitions'],
+        ['/sap/bc/adt/ddic/ddl/sources', 'application/vnd.sap.adt.ddlSource+xml', 'CDS Data Definitions'],
+        ['/sap/bc/adt/acm/dcl/sources', 'application/vnd.sap.adt.dclSource+xml', 'CDS Access Controls'],
+        ['/sap/bc/adt/ddic/ddlx/sources', 'application/vnd.sap.adt.ddic.ddlx.v1+xml', 'CDS Metadata Extensions'],
+        ['/sap/bc/adt/bo/behaviordefinitions', 'application/vnd.sap.adt.blues.v1+xml', 'RAP Behavior Definitions'],
+        ['/sap/bc/adt/ddic/srvd/sources', 'application/vnd.sap.adt.ddic.srvd.v1+xml', 'Service Definitions'],
+        ['/sap/bc/adt/businessservices/bindings', 'application/vnd.sap.adt.businessservices.servicebinding.v2+xml', 'Service Bindings'],
         ['/sap/bc/adt/runtime/dumps', 'application/atom+xml;type=feed', 'Runtime Dumps'],
         ['/sap/bc/adt/programs/programrun', 'text/plain', 'Program Execution'],
         ['/sap/bc/adt/oo/classrun', 'text/plain', 'Class Execution'],
@@ -985,7 +1042,7 @@ function hTransportDetail({ res, state, path, opts }) {
 async function hCreateObject({ res, req, state, url, path }) {
     const createMatch = CREATE_COLLECTIONS.exec(path);
     const body = await readBody(req);
-    const nameMatch = /(?:class|intf|prog|ddls|adtcore):name="([^"]+)"/.exec(body) ?? /adtcore:name="([^"]+)"/.exec(body);
+    const nameMatch = /(?:class|intf|program|group|ddl|dcl|ddlxsources|blue|srvd|doma|ttyp|mc|adtcore):name="([^"]+)"/.exec(body) ?? /adtcore:name="([^"]+)"/.exec(body);
     const descMatch = /adtcore:description="([^"]+)"/.exec(body);
     const pkgMatch = /<adtcore:packageRef adtcore:name="([^"]+)"/.exec(body);
     if (!nameMatch) {
@@ -1462,7 +1519,7 @@ function hAtcResultDetail({ res, state, path }) {
 </atcresult:resultList>`));
 }
 // --- The route table (dispatch order matters — do not reorder) ---------------
-const CREATE_COLLECTIONS = /^\/(oo\/classes|oo\/interfaces|programs\/programs|ddls\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|messageclass|msgclass|packages)$/;
+const CREATE_COLLECTIONS = /^\/(oo\/classes|oo\/interfaces|programs\/programs|functions\/groups|ddic\/ddl\/sources|acm\/dcl\/sources|ddic\/ddlx\/sources|bo\/behaviordefinitions|ddic\/srvd\/sources|ddic\/tables|ddic\/structures|ddic\/domains|ddic\/dataelements|ddic\/tabletypes|messageclass|msgclass|packages)$/;
 const TRANSPORT_RE = /^\/cts\/transportrequests\/([^/]+)(?:\/(release))?$/;
 // Route regexes are shared between the table entry and its handler — the
 // handlers' `match![1]!` captures rely on the two never drifting apart.
@@ -1750,8 +1807,20 @@ function typeForCollection(collection) {
             return 'INTF/OI';
         case 'programs/programs':
             return 'PROG/P';
-        case 'ddls/sources':
+        case 'functions/groups':
+            return 'FUGR/F';
+        case 'ddic/ddl/sources':
             return 'DDLS/DF';
+        case 'acm/dcl/sources':
+            return 'DCLS/DL';
+        case 'ddic/ddlx/sources':
+            return 'DDLX/EX';
+        case 'bo/behaviordefinitions':
+            return 'BDEF/BDO';
+        case 'ddic/srvd/sources':
+            return 'SRVD/SRV';
+        case 'ddls/sources':
+            return 'DDLS/DF'; // legacy spelling kept for old clients
         case 'ddic/tables':
             return 'TABL/DT';
         case 'ddic/structures':
@@ -1795,8 +1864,21 @@ function uriFor(type, name) {
             return type === 'PROG/I'
                 ? `/sap/bc/adt/programs/includes/${name.toLowerCase()}`
                 : `/sap/bc/adt/programs/programs/${name.toLowerCase()}`;
+        case 'FUGR':
+            // REAL-SYSTEM EVIDENCE: the object+source URIs live under the same
+            // /functions/groups prefix as the collection (the /fugr spelling 404s).
+            return `/sap/bc/adt/functions/groups/${name.toLowerCase()}`;
         case 'DDLS':
-            return `/sap/bc/adt/ddls/sources/${name.toLowerCase()}`;
+            // REAL-SYSTEM EVIDENCE: /ddic/ddl/sources (the /ddls spelling 404s).
+            return `/sap/bc/adt/ddic/ddl/sources/${name.toLowerCase()}`;
+        case 'DCLS':
+            return `/sap/bc/adt/acm/dcl/sources/${name.toLowerCase()}`;
+        case 'DDLX':
+            return `/sap/bc/adt/ddic/ddlx/sources/${name.toLowerCase()}`;
+        case 'BDEF':
+            return `/sap/bc/adt/bo/behaviordefinitions/${name.toLowerCase()}`;
+        case 'SRVD':
+            return `/sap/bc/adt/ddic/srvd/sources/${name.toLowerCase()}`;
         case 'TABL':
             return `/sap/bc/adt/ddic/tables/${name.toLowerCase()}`;
         case 'STRU':
@@ -1824,8 +1906,18 @@ function initialSourceFor(type, name) {
             return `INTERFACE ${name} PUBLIC.\nENDINTERFACE.`;
         case 'PROG':
             return `REPORT ${name}.\n\nWRITE / 'Hello'.`;
+        case 'FUGR':
+            return `FUNCTION-POOL ${name}.`;
         case 'DDLS':
-            return `@EndUserText.label: '${name}'\ndefine view ${name} as select from t100\n{\n  key msgno,\n      text\n}`;
+            return `@EndUserText.label: '${name}'\ndefine view entity ${name} as select from t100\n{\n  key msgno,\n      text\n}`;
+        case 'DCLS':
+            return `@EndUserText.label: '${name}'\n@MappingRole: true\ndefine role ${name} {\n  grant select on t100\n    to (select * from t000 where mandt = $session.client);\n}`;
+        case 'DDLX':
+            return `@EndUserText.label: '${name}'\n@Metadata.layer: #CORE\nannotate entity t100 with {\n  @UI.lineItem: [{ position: 10 }]\n  msgno;\n}`;
+        case 'BDEF':
+            return `managed implementation in class ${name} unique;\nstrict ( 2 );\ndefine behavior for t100 alias table\npersistent table t100\nlock master\nauthorization master ( instance )\n{\n  create;\n  update;\n  delete;\n}`;
+        case 'SRVD':
+            return `@EndUserText.label: '${name}'\ndefine service ${name} {\n  expose t100 as items;\n}`;
         case 'DOMA':
             return `DOMAIN ${name}.\n  DATA: length TYPE i VALUE 10.\nENDDOMAIN.`;
         case 'DTEL':

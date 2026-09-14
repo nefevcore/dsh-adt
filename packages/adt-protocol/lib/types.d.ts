@@ -497,8 +497,9 @@ export interface AdtSystemInfo {
 }
 /** Object types understood by the create service. (`PACK` was removed — it
  * had no create endpoint and could only ever fail; packages are created as
- * DEVC. Audit P3.) */
-export type AdtCreatableObjectType = 'CLAS' | 'INTF' | 'PROG' | 'FUNC' | 'DDLS' | 'TABL' | 'STRU' | 'MSAG' | 'DEVC';
+ * DEVC. Audit P3.) The DDIC/CDS/RAP additions below carry the wire forms
+ * verified on deloitte-kic + impc-dev (2026-09-14, scripts/verify-*). */
+export type AdtCreatableObjectType = 'CLAS' | 'INTF' | 'PROG' | 'FUNC' | 'DDLS' | 'DCLS' | 'DDLX' | 'BDEF' | 'SRVD' | 'TABL' | 'STRU' | 'DOMA' | 'DTEL' | 'TTYP' | 'MSAG' | 'DEVC';
 export interface AdtCreateObjectRequest {
     destination: string;
     type: AdtCreatableObjectType;

@@ -136,7 +136,7 @@ WRITE / lo_demo->greet( iv_name = p_name ).`,
         source: `PROGRAM zprog_demo_top.\n\nDATA: gv_title TYPE string VALUE 'demo'.\n\nDATA: gv_count TYPE i.`,
     },
     {
-        uri: '/sap/bc/adt/ddls/sources/zcds_demo',
+        uri: '/sap/bc/adt/ddic/ddl/sources/zcds_demo',
         type: 'DDLS/DF',
         category: 'DDLS',
         name: 'ZCDS_DEMO',

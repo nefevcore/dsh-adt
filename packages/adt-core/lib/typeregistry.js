@@ -88,24 +88,28 @@ const ROWS = [
         type: 'TTYP', adtType: 'TTYP/DT', uriPrefix: '/sap/bc/adt/ddic/tabletypes/',
         label: 'Table type', phase: 1,
         editMode: 'structured', structureKind: 'TTYP',
-        createEndpoint: '/ddic/tabletypes', createMediaType: 'application/vnd.sap.adt.tabletypes.v2+xml',
+        // REAL-SYSTEM EVIDENCE: create CT is the SINGULAR tabletype.v1.
+        createEndpoint: '/ddic/tabletypes', createMediaType: 'application/vnd.sap.adt.tabletype.v1+xml',
         editForms: ['structured', 'source'],
         mediaTypeVersions: ['v2', 'v1'],
         activates: 'ddic',
     },
     {
-        type: 'DDLS', adtType: 'DDLS/DF', uriPrefix: '/sap/bc/adt/ddls/sources/',
+        type: 'DDLS', adtType: 'DDLS/DF', uriPrefix: '/sap/bc/adt/ddic/ddl/sources/',
         label: 'CDS data definition', phase: 1,
         editMode: 'source',
-        createEndpoint: '/ddls/sources', createMediaType: 'application/vnd.sap.adt.ddlSource.v2+xml',
+        // REAL-SYSTEM EVIDENCE (deloitte + impc): collection/object URIs live at
+        // /ddic/ddl/sources (/ddls/sources 404s); CT ddlSource+xml (no v2).
+        createEndpoint: '/ddic/ddl/sources', createMediaType: 'application/vnd.sap.adt.ddlSource+xml',
         // sourceType: viewEntity | view | customEntity | extendView … (create param)
         activates: 'ddic',
     },
     {
-        type: 'DCLS', adtType: 'DCLS/DL', uriPrefix: '/sap/bc/adt/dcls/sources/',
+        type: 'DCLS', adtType: 'DCLS/DL', uriPrefix: '/sap/bc/adt/acm/dcl/sources/',
         label: 'CDS access control', phase: 1,
         editMode: 'source',
-        createEndpoint: '/acm/dcl/sources', createMediaType: 'application/vnd.sap.adt.dclSource.v1+xml',
+        // REAL-SYSTEM EVIDENCE: object URIs live under /acm/dcl/sources.
+        createEndpoint: '/acm/dcl/sources', createMediaType: 'application/vnd.sap.adt.dclSource+xml',
         activates: 'ddic',
     },
     {
@@ -141,7 +145,8 @@ const ROWS = [
         type: 'CLAS', adtType: 'CLAS/OC', uriPrefix: '/sap/bc/adt/oo/classes/',
         label: 'Class', phase: 2,
         editMode: 'source',
-        createEndpoint: '/oo/classes', createMediaType: 'application/vnd.sap.adt.oo.classes.v5+xml',
+        // REAL-SYSTEM EVIDENCE: create CT is classes.v4 (v5 406s on both systems).
+        createEndpoint: '/oo/classes', createMediaType: 'application/vnd.sap.adt.oo.classes.v4+xml',
         activates: 'none',
     },
     {
@@ -152,7 +157,7 @@ const ROWS = [
         activates: 'none',
     },
     {
-        type: 'FUNC', adtType: 'FUGR/F', uriPrefix: '/sap/bc/adt/fugr/',
+        type: 'FUNC', adtType: 'FUGR/F', uriPrefix: '/sap/bc/adt/functions/groups/',
         label: 'Function group', phase: 2,
         editMode: 'source',
         // REAL-SYSTEM EVIDENCE (deloitte-kic 2026-09-14): create collection is
@@ -165,7 +170,7 @@ const ROWS = [
     },
     // --- P3: RAP --------------------------------------------------------------
     {
-        type: 'BDEF', adtType: 'BDEF/BDO', uriPrefix: '/sap/bc/adt/bdef/sources/',
+        type: 'BDEF', adtType: 'BDEF/BDO', uriPrefix: '/sap/bc/adt/bo/behaviordefinitions/',
         label: 'Behavior definition', phase: 3,
         editMode: 'source',
         // REAL-SYSTEM EVIDENCE (deloitte-kic 2026-09-14): the create collection
@@ -176,7 +181,7 @@ const ROWS = [
         activates: 'ddic',
     },
     {
-        type: 'SRVD', adtType: 'SRVD/SRV', uriPrefix: '/sap/bc/adt/srvdef/sources/',
+        type: 'SRVD', adtType: 'SRVD/SRV', uriPrefix: '/sap/bc/adt/ddic/srvd/sources/',
         label: 'Service definition', phase: 3,
         editMode: 'source',
         // REAL-SYSTEM EVIDENCE (deloitte-kic 2026-09-14): create at

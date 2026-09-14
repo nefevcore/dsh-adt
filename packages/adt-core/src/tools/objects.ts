@@ -63,6 +63,12 @@ export function objectTools(deps: ToolDeps) {
         description: 'Development package; use $TMP for local objects.',
       },
       transport: { type: 'string', description: 'Transport request number when the package requires one.' },
+      source: {
+        type: 'string',
+        description:
+          'Source types (PROG/CLAS/INTF/FUNC/DDLS/DCLS/DDLX/BDEF/SRVD): full source written via the locked PUT chain after the create. ' +
+          'Empty string = placeholder (create only).',
+      },
       fields: {
         type: 'array',
         description:
@@ -180,6 +186,55 @@ export function objectTools(deps: ToolDeps) {
           activated: table.activated,
           ddlSource: table.ddlSource,
           messages: table.messages.map((m) => ({ severity: m.severity, text: m.text })),
+        };
+      }
+
+      // Source create+write in one call: create the object, then write the
+      // source through the locked PUT chain (verify-p234 real evidence:
+      // create → LOCK → PUT source/main → UNLOCK is the working sequence
+      // on all three environments).
+      const sourceArg = optStr(args.source);
+      if (sourceArg !== undefined && String(args.type).toUpperCase() !== 'TABL') {
+        const created = await entry.client.createObject(
+          {
+            destination: entry.config.name,
+            type: String(args.type) as AdtCreatableObjectType,
+            name: String(args.name),
+            description: String(args.description ?? ''),
+            packageName,
+            transport,
+          },
+          { signal: exec.signal },
+        );
+        if (!created.success || !created.uri) {
+          return {
+            success: false,
+            uri: created.uri ?? '',
+            name: String(args.name),
+            type: String(args.type),
+            messages: created.messages.map((m) => ({ severity: m.severity, text: m.text })),
+          };
+        }
+        const lock = await entry.client.lock(created.uri, { signal: exec.signal });
+        try {
+          await entry.client.writeSource(created.uri, sourceArg, {
+            lockHandle: lock.handle,
+            transport,
+            signal: exec.signal,
+          });
+        } finally {
+          try {
+            await entry.client.unlock(created.uri, lock.handle);
+          } catch {
+            ledger.register({ destination: entry.config.name, uri: created.uri, name: String(args.name), handle: lock.handle, note: 'create source-write unlock' });
+          }
+        }
+        return {
+          success: true,
+          uri: created.uri,
+          name: created.object?.name ?? String(args.name),
+          type: String(args.type),
+          messages: created.messages.map((m) => ({ severity: m.severity, text: m.text })),
         };
       }
 

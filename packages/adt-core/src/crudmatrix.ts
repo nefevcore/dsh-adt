@@ -79,6 +79,30 @@ export const CRUD_MATRIX: Record<string, Partial<Record<CrudVerb, CrudCell>>> = 
     update: { tool: 'adt_write_object', mode: 'source' },
     delete: { tool: 'adt_delete_object' },
   },
+  DCLS: {
+    create: { tool: 'adt_create_object' },
+    read: { tool: 'adt_read_object', mode: 'source' },
+    update: { tool: 'adt_write_object', mode: 'source' },
+    delete: { tool: 'adt_delete_object' },
+  },
+  DDLX: {
+    create: { tool: 'adt_create_object' },
+    read: { tool: 'adt_read_object', mode: 'source' },
+    update: { tool: 'adt_write_object', mode: 'source' },
+    delete: { tool: 'adt_delete_object' },
+  },
+  BDEF: {
+    create: { tool: 'adt_create_object' },
+    read: { tool: 'adt_read_object', mode: 'source' },
+    update: { tool: 'adt_write_object', mode: 'source' },
+    delete: { tool: 'adt_delete_object' },
+  },
+  SRVD: {
+    create: { tool: 'adt_create_object' },
+    read: { tool: 'adt_read_object', mode: 'source' },
+    update: { tool: 'adt_write_object', mode: 'source' },
+    delete: { tool: 'adt_delete_object' },
+  },
   TABL: {
     // Create: one-step DDL flow with `fields`, placeholder without.
     create: { tool: 'adt_create_object', mode: 'fields' },
@@ -128,7 +152,7 @@ export const CRUD_VERBS: readonly CrudVerb[] = ['create', 'read', 'update', 'del
 
 /** The matrix row order for rendering (creatables first, INCL beside PROG). */
 const ROW_ORDER = [
-  'CLAS', 'INTF', 'PROG', 'INCL', 'FUNC', 'DDLS',
+  'CLAS', 'INTF', 'PROG', 'INCL', 'FUNC', 'DDLS', 'DCLS', 'DDLX', 'BDEF', 'SRVD',
   'TABL', 'STRU', 'DOMA', 'DTEL', 'TTYP', 'MSAG', 'DEVC',
 ] as const;
 

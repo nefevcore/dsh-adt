@@ -1589,13 +1589,17 @@ export class AdtClient {
       ...(request.packageName ? { package: request.packageName } : {}),
       ...(request.transport ? { corrNr: request.transport } : {}),
     });
-    const body = buildCreateObjectRequest(request);
+    const body = buildCreateObjectRequest(request, this.destination.language || 'EN');
+    const contentType = createContentType(request.type);
     const res = await this.request({
       method: 'POST',
       path: `${endpoint()}${toQuery(query)}`,
       body,
-      contentType: createContentType(request.type),
-      accept: 'application/xml',
+      contentType,
+      // REAL-SYSTEM EVIDENCE (2026-09-14): strict gateways 406 a bare
+      // `application/xml` Accept on typed collections — offer the body's
+      // own media type (and the wildcard every gateway accepts).
+      accept: contentType === 'application/xml' ? 'application/xml, */*' : `${contentType}, */*`,
       stateful: true,
       timeoutMs: 120_000,
       signal: options.signal,
@@ -2536,17 +2540,28 @@ ${sets}
 
 function createContentType(type: string): string {
   const cat = type.split('/')[0]!;
+  // REAL-SYSTEM EVIDENCE (deloitte-kic + impc-dev, 2026-09-14,
+  // scripts/verify-p1-real.mjs / verify-p234-real.mjs): the exact media type
+  // each collection's create handler accepts. Three deliberate deviations
+  // from the "collection spelling" intuition:
+  //   - DDLS wants ddlSource+xml WITHOUT a version suffix (v2 406s),
+  //   - TTYP wants the SINGULAR tabletype.v1 (tabletypes.v2 is the GET face),
+  //   - MSAG takes plain application/xml.
   const map: Record<string, string> = {
     CLAS: 'application/vnd.sap.adt.oo.classes.v4+xml',
     INTF: 'application/vnd.sap.adt.oo.interfaces.v5+xml',
     PROG: 'application/vnd.sap.adt.programs.programs.v2+xml',
     FUNC: 'application/vnd.sap.adt.functions.groups.v3+xml',
-    DDLS: 'application/vnd.sap.adt.ddlSource.v2+xml',
+    DDLS: 'application/vnd.sap.adt.ddlSource+xml',
+    DCLS: 'application/vnd.sap.adt.dclSource+xml',
+    DDLX: 'application/vnd.sap.adt.ddic.ddlx.v1+xml',
+    BDEF: 'application/vnd.sap.adt.blues.v1+xml',
+    SRVD: 'application/vnd.sap.adt.ddic.srvd.v1+xml',
     TABL: 'application/vnd.sap.adt.tables.v2+xml',
     STRU: 'application/vnd.sap.adt.structures.v2+xml',
     DOMA: 'application/vnd.sap.adt.domains.v2+xml',
     DTEL: 'application/vnd.sap.adt.dataelements.v2+xml',
-    TTYP: 'application/vnd.sap.adt.tabletypes.v2+xml',
+    TTYP: 'application/vnd.sap.adt.tabletype.v1+xml',
     MSAG: 'application/xml',
     DEVC: 'application/vnd.sap.adt.packages.v2+xml',
   };
@@ -2574,9 +2589,43 @@ function metadataAccept(type: string | undefined): string {
   return map[cat] ?? 'application/xml';
 }
 
-function buildCreateObjectRequest(request: AdtCreateObjectRequest): string {
-  const ns = createNamespace(request.type);
-  const tag = createRootTag(request.type);
+/**
+ * The type-specific create body shape, ALL fields real-system verified
+ * (deloitte-kic + impc-dev, 2026-09-14). Strict gateways 400 the generic
+ * `<adtcore:object>` form on every one of these collections — each type
+ * wants its OWN namespaced root element:
+ *
+ *   type → [prefix, namespace URI, root tag]
+ *
+ * DDLS note: the ddlSource namespace has NO version suffix on the wire.
+ * SRVD note: the source type rides as a BODY attribute on the root
+ * (`srvd:srvdSourceType="S"`) — the query-parameter form 400s.
+ */
+const CREATE_ROOT_ELEMENTS: Record<string, { ns: string; nsUri: string; tag: string; extraAttrs?: string }> = {
+  CLAS: { ns: 'class', nsUri: 'http://www.sap.com/adt/oo/classes', tag: 'class:abapClass' },
+  INTF: { ns: 'intf', nsUri: 'http://www.sap.com/adt/oo/interfaces', tag: 'intf:abapInterface' },
+  PROG: { ns: 'program', nsUri: 'http://www.sap.com/adt/programs/programs', tag: 'program:abapProgram' },
+  FUNC: { ns: 'group', nsUri: 'http://www.sap.com/adt/functions/groups', tag: 'group:abapFunctionGroup' },
+  DDLS: { ns: 'ddl', nsUri: 'http://www.sap.com/adt/ddic/ddlsources', tag: 'ddl:ddlSource' },
+  DCLS: { ns: 'dcl', nsUri: 'http://www.sap.com/adt/acm/dclsources', tag: 'dcl:dclSource' },
+  DDLX: { ns: 'ddlxsources', nsUri: 'http://www.sap.com/adt/ddic/ddlxsources', tag: 'ddlxsources:ddlxSource' },
+  BDEF: { ns: 'blue', nsUri: 'http://www.sap.com/wbobj/blue', tag: 'blue:blueSource' },
+  SRVD: {
+    ns: 'srvd', nsUri: 'http://www.sap.com/adt/ddic/srvdsources', tag: 'srvd:srvdSource',
+    // REAL-SYSTEM EVIDENCE: sourceType is a body attribute, not a query param.
+    extraAttrs: ' srvd:srvdSourceType="S"',
+  },
+  TABL: { ns: 'blue', nsUri: 'http://www.sap.com/wbobj/blue', tag: 'blue:blueSource' },
+  STRU: { ns: 'blue', nsUri: 'http://www.sap.com/wbobj/blue', tag: 'blue:blueSource' },
+  DOMA: { ns: 'doma', nsUri: 'http://www.sap.com/dictionary/domain', tag: 'doma:domain' },
+  DTEL: { ns: 'blue', nsUri: 'http://www.sap.com/wbobj/dictionary/dtel', tag: 'blue:wbobj' },
+  TTYP: { ns: 'ttyp', nsUri: 'http://www.sap.com/dictionary/tabletype', tag: 'ttyp:tableType' },
+  // MSAG keeps its dedicated handler below (mc:messageClass, plain XML).
+  MSAG: { ns: 'mc', nsUri: 'http://www.sap.com/adt/MessageClass', tag: 'mc:messageClass' },
+};
+
+function buildCreateObjectRequest(request: AdtCreateObjectRequest, language: string): string {
+  const cat = request.type.split('/')[0]!;
   const props = Object.entries(request.properties ?? {})
     .map(([k, v]) => `    <adtcore:property adtcore:name="${escapeXml(k)}" adtcore:value="${escapeXml(v)}"/>`)
     .join('\n');
@@ -2585,83 +2634,40 @@ function buildCreateObjectRequest(request: AdtCreateObjectRequest): string {
   // which strict backends reject with HTTP 400: "expected attribute
   // {http://www.sap.com/adt/core}name" (ExceptionInvalidData).
   //
-  // Message classes are the odd one out: their create handler wants the
-  // MESSAGE-CLASS root element (<mc:messageClass>), not the generic
-  // <adtcore:object> — strict backends answer 400 "expected element
-  // {http://www.sap.com/adt/MessageClass}messageClass" otherwise
-  // (verified on an S/4HANA sandbox).
-  if (tag === 'mc:messageClass') {
+  // REAL-SYSTEM EVIDENCE (2026-09-14, three environments): language fields
+  // must match the LOGON language — EN on a ZH-language login answers 400
+  // ("master language does not match logon language"). `language` is the
+  // destination's configured logon language.
+  const root = CREATE_ROOT_ELEMENTS[cat];
+  if (root) {
+    const extras = root.extraAttrs ? ` ${root.extraAttrs.trim()}` : '';
     return `<?xml version="1.0" encoding="UTF-8"?>
-<mc:messageClass xmlns:mc="http://www.sap.com/adt/MessageClass" xmlns:adtcore="http://www.sap.com/adt/core"
-       adtcore:description="${escapeXml(request.description)}" adtcore:name="${escapeXml(request.name)}" adtcore:masterLanguage="EN">
+<${root.tag} xmlns:${root.ns}="${root.nsUri}" xmlns:adtcore="http://www.sap.com/adt/core"
+       adtcore:description="${escapeXml(request.description)}" adtcore:language="${escapeXml(language)}" adtcore:name="${escapeXml(request.name)}"
+       adtcore:type="${escapeXml(createAdtType(cat))}" adtcore:masterLanguage="${escapeXml(language)}"${extras}>
   <adtcore:packageRef adtcore:name="${escapeXml(request.packageName || '$TMP')}"/>
 ${props}
-</mc:messageClass>`;
+</${root.tag}>`;
   }
-  //
-  // The element namespace is only declared for the types that have one
-  // (audit P3): for the adtcore-defaulted types (TABL/DTEL/TTYP/DEVC)
-  // the old code declared `xmlns:adtcore="http://www.sap.com/adt/adtcore"`
-  // next to the real core namespace — a duplicate/bogus declaration strict
-  // backends reject.
-  const nsUri =
-    ns === 'class'
-      ? 'http://www.sap.com/adt/oo/classes'
-      : ns === 'intf'
-        ? 'http://www.sap.com/adt/oo/interfaces'
-        : ns === 'prog'
-          ? 'http://www.sap.com/adt/programs/programs'
-          : ns === 'fugr'
-            ? 'http://www.sap.com/adt/functions/groups'
-            : ns === 'ddls'
-              ? 'http://www.sap.com/adt/ddl'
-              : undefined;
-  const nsDecl = nsUri ? ` xmlns:${ns}="${nsUri}"` : '';
+  // Fallback (DEVC and unknown types): the generic adtcore:object form.
   return `<?xml version="1.0" encoding="UTF-8"?>
-<${tag}${nsDecl} xmlns:adtcore="http://www.sap.com/adt/core"
-       adtcore:description="${escapeXml(request.description)}" adtcore:language="EN" adtcore:name="${escapeXml(request.name)}"
-       adtcore:type="${escapeXml(request.type)}" adtcore:masterLanguage="EN">
+<adtcore:object xmlns:adtcore="http://www.sap.com/adt/core"
+       adtcore:description="${escapeXml(request.description)}" adtcore:language="${escapeXml(language)}" adtcore:name="${escapeXml(request.name)}"
+       adtcore:type="${escapeXml(request.type)}" adtcore:masterLanguage="${escapeXml(language)}">
   <adtcore:packageRef adtcore:name="${escapeXml(request.packageName || '$TMP')}"/>
 ${props}
-</${tag}>`;
+</adtcore:object>`;
 }
 
-function createNamespace(type: string): string {
-  const cat = type.split('/')[0]!;
-  switch (cat) {
-    case 'CLAS':
-      return 'class';
-    case 'INTF':
-      return 'intf';
-    case 'PROG':
-      return 'prog';
-    case 'FUNC':
-      return 'fugr';
-    case 'DDLS':
-      return 'ddls';
-    default:
-      return 'adtcore';
-  }
-}
-
-function createRootTag(type: string): string {
-  const cat = type.split('/')[0]!;
-  switch (cat) {
-    case 'CLAS':
-      return 'class:abapClass';
-    case 'INTF':
-      return 'intf:abapInterface';
-    case 'PROG':
-      return 'prog:abapProgram';
-    case 'FUNC':
-      return 'fugr:functionGroup';
-    case 'DDLS':
-      return 'ddls:dataDefinition';
-    case 'MSAG':
-      return 'mc:messageClass';
-    default:
-      return 'adtcore:object';
-  }
+/** The full ADT type code for a create (category-only inputs gain /xx). */
+function createAdtType(cat: string): string {
+  const map: Record<string, string> = {
+    CLAS: 'CLAS/OC', INTF: 'INTF/OI', PROG: 'PROG/P', FUNC: 'FUGR/F',
+    DDLS: 'DDLS/DF', DCLS: 'DCLS/DL', DDLX: 'DDLX/EX', BDEF: 'BDEF/BDO',
+    SRVD: 'SRVD/SRV', TABL: 'TABL/DT', STRU: 'STRU/DT', DOMA: 'DOMA/DD',
+    DTEL: 'DTEL/DE', TTYP: 'TTYP/DA', MSAG: 'MSAG/N',
+  };
+  return map[cat] ?? cat;
 }
 
 // --- Discovery --------------------------------------------------------------

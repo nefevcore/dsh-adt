@@ -545,15 +545,23 @@ export interface AdtSystemInfo {
 
 /** Object types understood by the create service. (`PACK` was removed — it
  * had no create endpoint and could only ever fail; packages are created as
- * DEVC. Audit P3.) */
+ * DEVC. Audit P3.) The DDIC/CDS/RAP additions below carry the wire forms
+ * verified on deloitte-kic + impc-dev (2026-09-14, scripts/verify-*). */
 export type AdtCreatableObjectType =
   | 'CLAS' // class
   | 'INTF' // interface
   | 'PROG' // program
   | 'FUNC' // function group
-  | 'DDLS' // CDS view
+  | 'DDLS' // CDS view (view entity)
+  | 'DCLS' // CDS access control
+  | 'DDLX' // CDS metadata extension
+  | 'BDEF' // RAP behavior definition
+  | 'SRVD' // service definition
   | 'TABL' // table
   | 'STRU' // structure
+  | 'DOMA' // domain
+  | 'DTEL' // data element
+  | 'TTYP' // table type
   | 'MSAG' // message class
   | 'DEVC'; // development package
 

@@ -210,3 +210,67 @@ test('strict: stateful discipline — dropping the sessiontype header mid-chain 
   assert.equal(res.status, 400);
   assert.match(await res.text(), /Service cannot be reached/);
 });
+
+test('strict: generic adtcore:object create body is 400 on typed collections (real gateway behavior)', async () => {
+  await raw('GET', '/sap/bc/adt/core/discovery', { accept: 'application/atomsvc+xml' });
+  const r = await raw('POST', '/sap/bc/adt/ddic/domains?package=%24TMP', {
+    accept: 'application/vnd.sap.adt.domains.v2+xml, */*',
+    ct: 'application/vnd.sap.adt.domains.v2+xml',
+    body: `<?xml version="1.0" encoding="UTF-8"?><adtcore:object xmlns:adtcore="http://www.sap.com/adt/core" adtcore:description="generic" adtcore:language="EN" adtcore:name="ZSTRICT_GENERIC" adtcore:type="DOMA/DD" adtcore:masterLanguage="EN"><adtcore:packageRef adtcore:name="$TMP"/></adtcore:object>`,
+  });
+  assert.equal(r.status, 400);
+  assert.match(r.text, /namespaced root element/);
+});
+
+test('strict: client.createObject passes the P1/P3 type chain (namespaced roots + typed Accept)', async () => {
+  const c = client();
+  await raw('GET', '/sap/bc/adt/core/discovery', { accept: 'application/atomsvc+xml' });
+  // DCLS: acm/dcl/sources with dcl:dclSource
+  const dcls = await c.createObject({
+    destination: 'strict-test', type: 'DCLS', name: 'ZSTRICT_DCLS',
+    description: 'strict dcls', packageName: '$TMP',
+  });
+  assert.equal(dcls.success, true, `DCLS create: ${JSON.stringify(dcls.messages)}`);
+  assert.match(dcls.uri!, /\/acm\/dcl\/sources\/zstrict_dcls$/);
+  // DDLS: /ddic/ddl/sources with ddl:ddlSource (ddlSource+xml, no v2)
+  const ddls = await c.createObject({
+    destination: 'strict-test', type: 'DDLS', name: 'ZSTRICT_DDLS',
+    description: 'strict ddls', packageName: '$TMP',
+  });
+  assert.equal(ddls.success, true, `DDLS create: ${JSON.stringify(ddls.messages)}`);
+  assert.match(ddls.uri!, /\/ddic\/ddl\/sources\/zstrict_ddls$/);
+  // BDEF: /bo/behaviordefinitions with blue:blueSource
+  const bdef = await c.createObject({
+    destination: 'strict-test', type: 'BDEF', name: 'ZSTRICT_BDEF',
+    description: 'strict bdef', packageName: '$TMP',
+  });
+  assert.equal(bdef.success, true, `BDEF create: ${JSON.stringify(bdef.messages)}`);
+  assert.match(bdef.uri!, /\/bo\/behaviordefinitions\/zstrict_bdef$/);
+  // SRVD: /ddic/srvd/sources with srvd:srvdSource + body sourceType attr
+  const srvd = await c.createObject({
+    destination: 'strict-test', type: 'SRVD', name: 'ZSTRICT_SRVD',
+    description: 'strict srvd', packageName: '$TMP',
+  });
+  assert.equal(srvd.success, true, `SRVD create: ${JSON.stringify(srvd.messages)}`);
+  assert.match(srvd.uri!, /\/ddic\/srvd\/sources\/zstrict_srvd$/);
+  // Cleanup through the deletion service (the fs delete engine path).
+  for (const type of ['DCLS', 'DDLS', 'BDEF', 'SRVD']) {
+    const r = await raw('POST', '/sap/bc/adt/deletion/delete', {
+      accept: 'application/vnd.sap.adt.deletion.response.v1+xml, */*',
+      ct: 'application/vnd.sap.adt.deletion.request.v1+xml',
+      body: `<?xml version="1.0"?><del:deletionRequest xmlns:del="http://www.sap.com/adt/deletion" xmlns:adtcore="http://www.sap.com/adt/core"><del:object adtcore:uri="${delUri(type)}"><del:transportNumber></del:transportNumber></del:object></del:deletionRequest>`,
+    });
+    assert.equal(r.status, 200, `${type} delete: ${r.text.slice(0, 120)}`);
+  }
+});
+
+/** Object URI by type on the strict mock (mirrors uriFor in server.ts). */
+function delUri(type: string): string {
+  switch (type) {
+    case 'DCLS': return '/sap/bc/adt/acm/dcl/sources/zstrict_dcls';
+    case 'DDLS': return '/sap/bc/adt/ddic/ddl/sources/zstrict_ddls';
+    case 'BDEF': return '/sap/bc/adt/bo/behaviordefinitions/zstrict_bdef';
+    case 'SRVD': return '/sap/bc/adt/ddic/srvd/sources/zstrict_srvd';
+    default: return `/sap/bc/adt/repository/objects/${type.toLowerCase()}`;
+  }
+}

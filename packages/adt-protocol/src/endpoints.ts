@@ -149,14 +149,44 @@ export const ENDPOINTS = {
      * posts here as well.)
      */
     FUNC: (query?: AdtQueryParams) => `${ADT_BASE}/functions/groups${toQuery(query)}`,
-    DDLS: (query?: AdtQueryParams) => `${ADT_BASE}/ddls/sources${toQuery(query)}`,
+    /**
+     * CDS data definitions. REAL-SYSTEM EVIDENCE (deloitte-kic + impc-dev,
+     * 2026-09-14): the collection and the object/source URIs live under
+     * `/ddic/ddl/sources` — the shorter `/ddls/sources` spelling 404s on
+     * these gateways. CT `application/vnd.sap.adt.ddlSource+xml` (NO v2 on
+     * the real wire), body root `<ddl:ddlSource>`.
+     */
+    DDLS: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/ddl/sources${toQuery(query)}`,
     TABL: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/tables${toQuery(query)}`,
     STRU: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/structures${toQuery(query)}`,
     DOMA: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/domains${toQuery(query)}`,
     DTEL: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/dataelements${toQuery(query)}`,
+    /**
+     * Table types. REAL-SYSTEM EVIDENCE (both systems, 2026-09-14): the
+     * CREATE media type is the SINGULAR `tabletype.v1+xml` (the collection
+     * spelling `tabletypes.v2+xml` is the v2 metadata face).
+     */
     TTYP: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/tabletypes${toQuery(query)}`,
     MSAG: (query?: AdtQueryParams) => `${ADT_BASE}/messageclass${toQuery(query)}`,
     DEVC: (query?: AdtQueryParams) => `${ADT_BASE}/packages${toQuery(query)}`,
+    // --- P1/P3 additions, all real-system verified 2026-09-14 -------------
+    /** CDS access control. CT dclSource.v1, body `<dcl:dclSource>`. */
+    DCLS: (query?: AdtQueryParams) => `${ADT_BASE}/acm/dcl/sources${toQuery(query)}`,
+    /** CDS metadata extension. CT ddic.ddlx.v1, body `<ddlxsources:ddlxSource>`. */
+    DDLX: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/ddlx/sources${toQuery(query)}`,
+    /**
+     * RAP behavior definition. REAL-SYSTEM EVIDENCE (deloitte-kic): the
+     * collection lives at `/bo/behaviordefinitions` (NOT `/bdef/sources`),
+     * CT blues.v1, body `<blue:blueSource>`; object URIs follow the same
+     * prefix.
+     */
+    BDEF: (query?: AdtQueryParams) => `${ADT_BASE}/bo/behaviordefinitions${toQuery(query)}`,
+    /**
+     * Service definition. CT ddic.srvd.v1; the source type rides as a BODY
+     * attribute (`srvd:srvdSourceType="S"`), not a query param (the query
+     * form 400s).
+     */
+    SRVD: (query?: AdtQueryParams) => `${ADT_BASE}/ddic/srvd/sources${toQuery(query)}`,
   },
 
   /** Modern deletion service (POST + `del:deletionRequest` body). */

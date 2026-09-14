@@ -114,14 +114,43 @@ export declare const ENDPOINTS: {
          * posts here as well.)
          */
         readonly FUNC: (query?: AdtQueryParams) => string;
+        /**
+         * CDS data definitions. REAL-SYSTEM EVIDENCE (deloitte-kic + impc-dev,
+         * 2026-09-14): the collection and the object/source URIs live under
+         * `/ddic/ddl/sources` — the shorter `/ddls/sources` spelling 404s on
+         * these gateways. CT `application/vnd.sap.adt.ddlSource+xml` (NO v2 on
+         * the real wire), body root `<ddl:ddlSource>`.
+         */
         readonly DDLS: (query?: AdtQueryParams) => string;
         readonly TABL: (query?: AdtQueryParams) => string;
         readonly STRU: (query?: AdtQueryParams) => string;
         readonly DOMA: (query?: AdtQueryParams) => string;
         readonly DTEL: (query?: AdtQueryParams) => string;
+        /**
+         * Table types. REAL-SYSTEM EVIDENCE (both systems, 2026-09-14): the
+         * CREATE media type is the SINGULAR `tabletype.v1+xml` (the collection
+         * spelling `tabletypes.v2+xml` is the v2 metadata face).
+         */
         readonly TTYP: (query?: AdtQueryParams) => string;
         readonly MSAG: (query?: AdtQueryParams) => string;
         readonly DEVC: (query?: AdtQueryParams) => string;
+        /** CDS access control. CT dclSource.v1, body `<dcl:dclSource>`. */
+        readonly DCLS: (query?: AdtQueryParams) => string;
+        /** CDS metadata extension. CT ddic.ddlx.v1, body `<ddlxsources:ddlxSource>`. */
+        readonly DDLX: (query?: AdtQueryParams) => string;
+        /**
+         * RAP behavior definition. REAL-SYSTEM EVIDENCE (deloitte-kic): the
+         * collection lives at `/bo/behaviordefinitions` (NOT `/bdef/sources`),
+         * CT blues.v1, body `<blue:blueSource>`; object URIs follow the same
+         * prefix.
+         */
+        readonly BDEF: (query?: AdtQueryParams) => string;
+        /**
+         * Service definition. CT ddic.srvd.v1; the source type rides as a BODY
+         * attribute (`srvd:srvdSourceType="S"`), not a query param (the query
+         * form 400s).
+         */
+        readonly SRVD: (query?: AdtQueryParams) => string;
     };
     /** Modern deletion service (POST + `del:deletionRequest` body). */
     readonly deletion: (query?: AdtQueryParams) => string;
