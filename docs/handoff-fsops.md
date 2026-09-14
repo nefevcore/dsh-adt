@@ -1,4 +1,4 @@
-# fs_ops 矩阵实施 — 交接文档（2026-09-14）
+# fs_ops 矩阵实施 — 交接文档（2026-09-14，第二 session 更新）
 
 > 本文档承接 `docs/ddic-fsops-matrix-plan.md`（完整计划与验证证据表）与 `docs/ddic-fsops-matrix-research.md`（协议调研）。
 > 本文档只记录「下一个 session 接手时需要立刻知道的事」：当前状态、关键决策判例、下一步任务与其入口。
@@ -7,32 +7,39 @@
 
 ## 1. 当前状态（一句话）
 
-**A 组移除批次已执行完毕**：9 个 CRUD 世代工具已从注册目录下架（实现保留为四工具内部引擎），目录 pin = **40**，
-全仓 **331/331** 绿。四工具 `adt_object_write/read/edit/delete` 是唯一 CRUD 面，矩阵/注册表/双档 mock/三环境真实验证全部就位。
+**A 组移除 + 4.1 write wire 修正已落地**：目录 pin = **40**，全仓 **334/334** 绿。
+四工具 `adt_object_write/read/edit/delete` 是唯一 CRUD 面；`client.createObject` 已按三环境实证改为
+类型专有命名空间根 + 正确 CT/Accept + language 参数化；strict mock 加了第七条保真门（泛型 create body = 400）。
 
 ```
-最新提交基线：8206557（docs/readme pnpm 说明）——本 session 全部改动未提交，工作区脏
-改动面：packages/adt-core（index/fsops/fsmatrix/typeregistry/selfcheck）、adt-protocol endpoints、
-       adt-mock server（strict 档）、dsh-plugin cli.ts persona、docs×4、README、测试×5、scripts（保留 8 个）
+提交基线（本 session）：
+  6ae52e8 feat(fs-ops): real-system create wire forms in client.createObject (4.1)
+  41c7492 refactor(fs-ops)!: remove group-A CRUD tools from the registered catalog (40 tools)
+  a63ed6a feat(fs-ops): type registry + fs matrix + four adt_object_* tools + strict mock profile
+工作区干净。首个 session 的全部改动已按 §7 分两笔提交完毕。
 ```
 
-## 2. 架构快照（接手即懂）
+## 2. 4.1 已完成内容（本 session）
 
-```
-typeregistry.ts   类型注册表 = 单一事实源（29 行：P1×9 + P2×5 + P3×3 + P4×12 长尾）
-    ↓ 派生（不可能漂移）
-fsmatrix.ts       verb × type 矩阵投影（yes/no/planned/unverified + via 引擎名 + 诚实拒绝文案）
-    ↓ 消费
-tools/fsops.ts    四工具 = 门面。engines 表按 `${verb}:${via}` 路由到内部实现函数
-    ↓ 路由目标
-engineMap         assembleAdtTools 构建但【不注册】的 9 个旧工具实现
-                  （read/write/objects/structure/packages 工具组——策略/OCC/锁链完整保留）
-```
+`packages/adt-protocol/src/client.ts`：
+- `CREATE_ROOT_ELEMENTS` 表：16 个可创建类型的命名空间根（DCLS=`dcl:dclSource`、DDLX=`ddlxsources:ddlxSource`、
+  BDEF/TABL/STRU=`blue:blueSource`、SRVD=`srvd:srvdSource`+body 属性 `srvd:srvdSourceType="S"`、DTEL=`blue:wbobj`、
+  TTYP=`ttyp:tableType`、DOMA=`doma:domain`、MSAG=`mc:messageClass`、PROG/CLAS/INTF/FUNC 各自官方根）
+- `createContentType` 修正：DDLS=`ddlSource+xml`（无 v2）、TTYP=单数 `tabletype.v1`、DCLS=`dclSource`（无 v1 后缀）、+DCLS/DDLX/BDEF/SRVD
+- Accept：类型化集合发 `{自身CT}, */*`（裸 application/xml 在严格网关 406）；MSAG 保持 `application/xml, */*`
+- language/masterLanguage 取 `destination.language`（impc ZH 实证：不匹配登录语言 = 400）
 
-- 动词语义：**write = create-or-override**（空内容=占位）；edit = read-then-patch；read 无 name = 矩阵卡；delete 独立于 write/edit 格
-- 已接线引擎：`read:structured|packageContent|source`、`edit:structured|source`、`write:source|structured|fields`（路由 create/write 实现函数）、`delete:delete`
-- frameworkPending 引擎：`read:metadata`、`write:none`（SRVB binding / VIEW 元数据等待各自提交）
-- 导出：`REMOVED_A_GROUP_TOOLS`（9 个已下架名，死引用测试的锚）、`CRUD_TO_FS_VERBS`（create→write, update→edit）
+`endpoints.ts`：DDLS 改 `/ddic/ddl/sources`（两系统实证，`/ddls/sources` 404）；新增 DCLS=`/acm/dcl/sources`、
+DDLX、BDEF=`/bo/behaviordefinitions`、SRVD=`/ddic/srvd/sources`；`AdtCreatableObjectType` 同步 +5（DOMA/DTEL/TTYP 也在类型中补全）。
+
+`adt-core`：typeregistry/resolve.ts TYPE_MAP/crudmatrix 的 uriPrefix 与 createEndpoint 全部对齐实证拼写
+（FUNC=`/functions/groups/`、BDEF=`/bo/behaviordefinitions/`、SRVD=`/ddic/srvd/sources/`、DCLS=`/acm/dcl/sources/`、DDLS=`/ddic/ddl/sources/`）。
+
+`adt_create_object`（内部引擎）：新增可选 `source` 参数 = create→lock→writeSource→unlock 一步链（verify 实证序列）。
+
+`adt-mock`：CREATE_COLLECTIONS/typeForCollection/uriFor/initialSourceFor/discovery 全部扩到新类型；
+strict 门扩面（typed Accept 门 + 第七门：泛型 `adtcore:object`/`adtcore:objectReference` create body → 400，
+带 body 重放 stub）。strict 测试 10 项（含 client.createObject 的 DCLS/DDLS/BDEF/SRVD 全链）。
 
 ## 3. 真实验证结论（已固化，勿重做）
 
@@ -44,24 +51,23 @@ engineMap         assembleAdtTools 构建但【不注册】的 9 个旧工具实
 | impc-dev (44300/110/ZH) | P1 25/25 + P2-P4 53/53 | **language/masterLanguage 属性必须匹配登录语言**（EN 在 ZH 系统→400）；MSAG URI 仅 `/messageclass/`（deloitte 是 `/msgclass/`，须 GET 探测自适应）；**messageclass create 残留自锁**且 LOCK 对已锁对象 403 不自刷新→RMW 前先无 handle UNLOCK；deletion 拒自闭合 `<del:transportNumber/>` |
 | impc-test (44300/300/ZH) | 系统策略拒绝一切 DDIC/RAP create（409 不可更改客户端）；MSAG 全链通 | 能力画像的活例证：wire 相同、策略决定 write 可用性 |
 
-**重要 wire 端点修正（已进代码）**：FUNC=`/functions/groups`（非 /fugr，endpoints.ts 已改）、BDEF=`/bo/behaviordefinitions`、SRVD sourceType 是 **body 属性** `srvd:srvdSourceType="S"`（非 query）、DDLS=`/ddic/ddl/sources`、DOMA fixValues 必须嵌在 `content>valueInformation` 内（外层块 PUT 200 但**静默不持久化**）、PROG/CLAS/INTF 创建必须类型专有命名空间根（泛型 objectReference→400）。
-
 **验证脚本**（可重复）：`scripts/verify-p1-real.mjs`、`scripts/verify-p234-real.mjs`（均已语言参数化：`node 脚本 <url> <client> <user> <pwd> [$TMP] [ZH]`）、`scripts/probe-env.mjs`、cleanup×4、`scripts/count-tools.mjs`。
 凭证（用户提供的测试系统）：deloitte-kic = 180.167.68.213:44304/100/168013；impc-dev = impcerpdev01.impc.com.cn:44300/110/abap04；impc-test = 同 host/300/support-ppmr。密码见对话记录/用户。
 
-**mock 双档位**：`createMockAdtServer({ profile: 'strict' })` 复刻 deloitte 六条实证形态（严格协商/compat 激活/LOCK 参数/全路径 deletion/stateful 纪律）；`legacy` 默认（demo 与旧测试语料）。`packages/adt-mock/test/strict.test.ts` 8 项锁定。
+**mock 双档位**：`createMockAdtServer({ profile: 'strict' })` 复刻 deloitte 七条实证形态（严格协商/compat 激活/LOCK 参数/全路径 deletion/stateful 纪律/泛型 body 拒绝）；`legacy` 默认（demo 与旧测试语料）。`packages/adt-mock/test/strict.test.ts` 10 项锁定。
 
 ## 4. 下一步任务（按优先级）
 
-### 4.1 【最高】write 引擎的真机 wire 修正
-**问题**：`write:source|structured|fields` 路由到的 `adt_create_object` 实现里 `client.createObject` 的 body 是泛型 objectReference + 旧媒体类型——真机上全部 400（三环境实证）。mock 绿 ≠ 真机绿。
-**任务**：把实证 body 形态修进 `packages/adt-protocol/src/client.ts` 的 `createObject`（类型专有命名空间根 + 正确 CT + language 参数化）。参照：
-- 事实源：`verify-p234-real.mjs` 里各类型 create 成功的 body 字符串（全部实证）
-- 类型→根元素/CT 对照：PROG=`program:abapProgram`、CLAS=`class:abapClass`(v4)、INTF=`intf:abapInterface`(v5)、FUNC=`group:abapFunctionGroup`(functions.groups.v3)、DOMA=`doma:domain`(domains.v2)、DTEL=`blue:wbobj`、TTYP=`ttyp:tableType`(**tabletype.v1 单数**)、TABL/STRU=`blue:blueSource`、DDLS=`ddl:ddlSource`(ddlSource 无 v2)、DCLS=`dcl:dclSource`、DDLX=`ddlxsources:ddlxSource`(ddic.ddlx.v1)、BDEF=`blue:blueSource`(blues.v1, `/bo/behaviordefinitions`)、SRVD=`srvd:srvdSource`(ddic.srvd.v1 + body 属性 sourceType="S")、MSAG=`mc:messageClass`(application/xml)
-- 同时修 createObject 的 Accept（真机要类型专有 Accept 或 `*/*`，泛 application/xml 406）
-- 锁：client.ts lock() 已带 accessMode=MODIFY（L813），无需改
-- 完成后用 verify-p1/p234 脚本对三环境跑回归
-**验收**：mock strict 档 + 真机 deloitte/impc-dev 双绿。
+### 4.1e 【最高】真机回归（唯一剩余的 4.1 验收项）
+4.1 的代码已全部落地且 mock strict 双绿，但**尚未对真机重跑**。用 verify 脚本对三环境回归：
+```
+node scripts/verify-p1-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]
+node scripts/verify-p234-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]
+```
+注意：verify 脚本测的是「裸 wire 形态」；要对齐 client.createObject 的新实现，理想做法是写一个
+走 AdtClient 的回归脚本（createObject for DCLS/DDLX/BDEF/SRVD + language=ZH 检查），或者临时用
+verify 脚本的 body 字符串与 `CREATE_ROOT_ELEMENTS` 逐项比对（已人工核对一致）。
+**验收**：deloitte（EN）+ impc-dev（ZH，验 language 参数化）双绿。
 
 ### 4.2 override 语义（write 的另一半）
 计划 §2.1：write+override=true 的锁内覆盖（源码型盲写 + 服务端哈希防同刻并发；结构化型=锁内 GET→全字段覆盖 RMW，`fixedValues: []` = 清空不与"未提供"混淆）。engineMap 的 write 实现函数可复用 `lockedWritePipeline`（write.ts L238，未导出——需导出或复制）。
@@ -93,23 +99,43 @@ parseDiscovery 全量 accepts + typestructure 探针 + source 形态懒探测 + 
 8. **SAP_SESSIONID 与 Basic auth 并存**：stateful 会话开过后再发无 stateful 头的变更请求 = ICM 会话死（"Service cannot be reached"）——这是 strict mock 的第 5 条 gate 的来源
 9. **deletion body**：URI 必须全路径 `/sap/bc/adt/...`（剥前缀→500）；impc 拒自闭合 transportNumber
 10. **别人系统上的对象**：impc 系统里有大量他人 Z 对象（ZSP_*/ZFG_*/ZTAB_CUSTOMER 等），清理脚本只删本会话前缀（见 `cleanup-final.mjs` 的 mine 正则与 `cleanup-round2.mjs` 的精确清单模式）
+11. **strict create 门消费了请求 body**：门内 `readBody` 后必须用重放 stub（`replayReq`）传给路由 handler，否则 handler 读到空 body（本 session 踩过：初版直接调不存在的 dispatch 函数）
+12. **mock 的 MSAG 对象 URI 是 `/msgclass/`，impc 真机只有 `/messageclass/`**：跨系统 MSAG 操作需要 GET 探测自适应（当前 client 未做，MSAG read/edit 在 impc 上会 404——4.4 画像工作的一部分）
 
 ## 6. 测试与命令速查
 
 ```
 pnpm build                 # 全仓构建（改 TS 后必跑，防旧 lib 假绿/假红）
-pnpm test                  # 全仓 331 项（~2-3 分钟）
-node --test packages/adt-core/test/fsmatrix.test.ts      # fs 矩阵 22 项（含死引用扫描）
-node --test packages/adt-mock/test/strict.test.ts        # strict 档 8 项
+pnpm test                  # 全仓 334 项（~1 分钟）
+node --test packages/adt-core/test/fsmatrix.test.ts      # fs 矩阵 23 项（含死引用扫描）
+node --test packages/adt-mock/test/strict.test.ts        # strict 档 10 项
 node scripts/count-tools.mjs                             # 目录计数（应为 40）
 node scripts/verify-p1-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]    # P1 真机回归
 node scripts/verify-p234-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]  # P2-P4 真机回归
 ```
 
-pin 锚点：agent_extras 目录 40；cli.test persona 死引用断言；fsmatrix 死引用文档扫描；crudmatrix 反向 pin（CRUD 表不得回归）。
+pin 锚点：agent_extras 目录 40；cli.test persona 死引用断言；fsmatrix 死引用文档扫描；crudmatrix 反向 pin（CRUD 表不得回归；createByType 键 = crudCreatableTypes 全等）。
 
-## 7. 未提交
+## 7. 已全部提交
 
-本 session 全部改动在工作区（git status 大量 M/??）。建议下个 session 开始时先 `git add -A && git commit` 分两个提交：
-1. `feat(fs-ops): type registry + fs matrix + four adt_object_* tools + strict mock profile + three-environment real verification`（core 内容）
-2. `refactor(fs-ops)!: remove group-A CRUD tools from the registered catalog (40 tools); persona/docs migrated`（下架批次——breaking change，发版说明需带新旧动词对照表）
+首个 session 的存量改动已按计划分两笔提交（`a63ed6a` 内容 + `41c7492` 下架批次 breaking change），
+本 session 的 4.1 wire 修正是第三笔（`6ae52e8`）。工作区干净，随时可发版或继续 4.1e/4.2。
+
+## 附：架构快照（不变）
+
+```
+typeregistry.ts   类型注册表 = 单一事实源（29 行：P1×9 + P2×5 + P3×3 + P4×12 长尾）
+    ↓ 派生（不可能漂移）
+fsmatrix.ts       verb × type 矩阵投影（yes/no/planned/unverified + via 引擎名 + 诚实拒绝文案）
+    ↓ 消费
+tools/fsops.ts    四工具 = 门面。engines 表按 `${verb}:${via}` 路由到内部实现函数
+    ↓ 路由目标
+engineMap         assembleAdtTools 构建但【不注册】的 9 个旧工具实现
+                  （read/write/objects/structure/packages 工具组——策略/OCC/锁链完整保留）
+```
+
+- 动词语义：**write = create-or-override**（空内容=占位）；edit = read-then-patch；read 无 name = 矩阵卡；delete 独立于 write/edit 格
+- 已接线引擎：`read:structured|packageContent|source`、`edit:structured|source`、`write:source|structured|fields`（路由 create/write 实现函数）、`delete:delete`
+- frameworkPending 引擎：`read:metadata`、`write:none`（SRVB binding / VIEW 元数据等待各自提交）
+- 导出：`REMOVED_A_GROUP_TOOLS`（9 个已下架名，死引用测试的锚）、`CRUD_TO_FS_VERBS`（create→write, update→edit）
+
