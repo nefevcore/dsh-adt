@@ -7,19 +7,38 @@
 
 ## 1. 当前状态（一句话）
 
-**A 组移除 + 4.1 write wire 修正已落地**：目录 pin = **40**，全仓 **334/334** 绿。
-四工具 `adt_object_write/read/edit/delete` 是唯一 CRUD 面；`client.createObject` 已按三环境实证改为
-类型专有命名空间根 + 正确 CT/Accept + language 参数化；strict mock 加了第七条保真门（泛型 create body = 400）。
+**4.1 全部完成（含真机验收）**：目录 pin = **40**，全仓 **334/334** 绿，真机回归
+deloitte（EN）17/17 + impc-dev（ZH）17/17 + 两环境裸 wire 25/25 与 53/53 全绿；
+impc-test 维持「策略拒绝 DDIC/RAP create」的能力画像（预期）。
+下一步是 4.2 override 语义。
 
 ```
 提交基线（本 session）：
+  7a22627 docs(handoff): second-session state
   6ae52e8 feat(fs-ops): real-system create wire forms in client.createObject (4.1)
   41c7492 refactor(fs-ops)!: remove group-A CRUD tools from the registered catalog (40 tools)
   a63ed6a feat(fs-ops): type registry + fs matrix + four adt_object_* tools + strict mock profile
-工作区干净。首个 session 的全部改动已按 §7 分两笔提交完毕。
+工作区干净（verify-create-real.mjs 待提交）。
 ```
 
-## 2. 4.1 已完成内容（本 session）
+## 2. 4.1e 真机验收结果（2026-09-14，第二 session）
+
+新脚本 `scripts/verify-create-real.mjs`：走 **AdtClient**（不是裸 wire）对四个 P1/P3 新类型
+（DCLS/DDLX/BDEF/SRVD）做 createObject→lock→writeSource→unlock→readSource→deleteObject 全链：
+
+```
+node scripts/verify-create-real.mjs <url> <client> <user> <pwd> [EN|ZH]
+```
+
+| 环境 | 结果 | 关键验证点 |
+|---|---|---|
+| deloitte-kic | 17/17 ✅ | CREATE_ROOT_ELEMENTS 四类型 + typed Accept 在真机通过 |
+| impc-dev (ZH) | 17/17 ✅ | **language 参数化实证**（旧代码 EN 属性 vs ZH 登录 = 400，新代码过） |
+| impc-test | create 全 409「不允许更改资源库对象」 | 预期能力画像：策略拒绝 ≠ wire 错误 |
+
+同时重跑裸 wire 脚本确认无回归：deloitte p1 25/25 + p234 53/53；impc-dev（ZH）p1 25/25 + p234 53/53。
+
+## 3. 4.1 已完成内容（代码面，本 session）
 
 `packages/adt-protocol/src/client.ts`：
 - `CREATE_ROOT_ELEMENTS` 表：16 个可创建类型的命名空间根（DCLS=`dcl:dclSource`、DDLX=`ddlxsources:ddlxSource`、
@@ -41,7 +60,7 @@ DDLX、BDEF=`/bo/behaviordefinitions`、SRVD=`/ddic/srvd/sources`；`AdtCreatabl
 strict 门扩面（typed Accept 门 + 第七门：泛型 `adtcore:object`/`adtcore:objectReference` create body → 400，
 带 body 重放 stub）。strict 测试 10 项（含 client.createObject 的 DCLS/DDLS/BDEF/SRVD 全链）。
 
-## 3. 真实验证结论（已固化，勿重做）
+## 4. 真实验证结论（已固化，勿重做）
 
 三环境全链验证完成，证据表在计划文档头部：
 
@@ -56,38 +75,27 @@ strict 门扩面（typed Accept 门 + 第七门：泛型 `adtcore:object`/`adtco
 
 **mock 双档位**：`createMockAdtServer({ profile: 'strict' })` 复刻 deloitte 七条实证形态（严格协商/compat 激活/LOCK 参数/全路径 deletion/stateful 纪律/泛型 body 拒绝）；`legacy` 默认（demo 与旧测试语料）。`packages/adt-mock/test/strict.test.ts` 10 项锁定。
 
-## 4. 下一步任务（按优先级）
+## 5. 下一步任务（按优先级）
 
-### 4.1e 【最高】真机回归（唯一剩余的 4.1 验收项）
-4.1 的代码已全部落地且 mock strict 双绿，但**尚未对真机重跑**。用 verify 脚本对三环境回归：
-```
-node scripts/verify-p1-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]
-node scripts/verify-p234-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]
-```
-注意：verify 脚本测的是「裸 wire 形态」；要对齐 client.createObject 的新实现，理想做法是写一个
-走 AdtClient 的回归脚本（createObject for DCLS/DDLX/BDEF/SRVD + language=ZH 检查），或者临时用
-verify 脚本的 body 字符串与 `CREATE_ROOT_ELEMENTS` 逐项比对（已人工核对一致）。
-**验收**：deloitte（EN）+ impc-dev（ZH，验 language 参数化）双绿。
-
-### 4.2 override 语义（write 的另一半）
+### 5.1 【最高】4.2 override 语义（write 的另一半）
 计划 §2.1：write+override=true 的锁内覆盖（源码型盲写 + 服务端哈希防同刻并发；结构化型=锁内 GET→全字段覆盖 RMW，`fixedValues: []` = 清空不与"未提供"混淆）。engineMap 的 write 实现函数可复用 `lockedWritePipeline`（write.ts L238，未导出——需导出或复制）。
 
-### 4.3 edit 的手术模式参数面（P2）
+### 5.2 edit 的手术模式参数面（P2）
 `mode:'block'|'method'` + oldText/newText/start/end/occurrence 透传（实现在 engineMap 的 edit 工具里，已有）——主要是 fsops schema 参数接线。
 
-### 4.4 能力画像（§3.5，P1 承诺项）
+### 5.3 能力画像（§3.5，P1 承诺项）
 parseDiscovery 全量 accepts + typestructure 探针 + source 形态懒探测 + AdtRegistry 画像缓存 + 矩阵卡双形态（带 destination=生效矩阵）。strict mock 就是画像的静态版。
 
-### 4.5 P1 收尾杂项
+### 5.4 P1 收尾杂项
 - DOMA_VALUE 虚拟行路由（fixedValues 子面；write=整块替换/delete=清空——形态已在 verify 脚本实证）
 - DDLS sourceType 参数化（viewEntity/view/...）
 - INCL write（P2 命名空间语义）
 - 真机残留检查脚本跑一遍（`cleanup-final.mjs` 等按环境跑，只删 Z 前缀探针对象）
 
-### 4.6 B 组（P2）
+### 5.5 B 组（P2）
 `adt_push_object` → `edit {sourceFile}`；`adt_read_textelements` → `read {type:'PROG', part:'textelements'}`。目录 40→38。
 
-## 5. 判例与红线（踩过的坑，勿重踩）
+## 6. 判例与红线（踩过的坑，勿重踩）
 
 1. **mock 绿 ≠ 真机绿**——一切 wire 结论以 verify 脚本对真机的实证为准（这是本次全部工作的方法论核心）
 2. **CRLF**：仓库文件多为 CRLF，PowerShell 里 `` `n `` 匹配 LF 的 replace 不生效——用 `edit` 工具或 `[regex]` 显式 `\r?\n`
@@ -100,9 +108,10 @@ parseDiscovery 全量 accepts + typestructure 探针 + source 形态懒探测 + 
 9. **deletion body**：URI 必须全路径 `/sap/bc/adt/...`（剥前缀→500）；impc 拒自闭合 transportNumber
 10. **别人系统上的对象**：impc 系统里有大量他人 Z 对象（ZSP_*/ZFG_*/ZTAB_CUSTOMER 等），清理脚本只删本会话前缀（见 `cleanup-final.mjs` 的 mine 正则与 `cleanup-round2.mjs` 的精确清单模式）
 11. **strict create 门消费了请求 body**：门内 `readBody` 后必须用重放 stub（`replayReq`）传给路由 handler，否则 handler 读到空 body（本 session 踩过：初版直接调不存在的 dispatch 函数）
-12. **mock 的 MSAG 对象 URI 是 `/msgclass/`，impc 真机只有 `/messageclass/`**：跨系统 MSAG 操作需要 GET 探测自适应（当前 client 未做，MSAG read/edit 在 impc 上会 404——4.4 画像工作的一部分）
+12. **mock 的 MSAG 对象 URI 是 `/msgclass/`，impc 真机只有 `/messageclass/`**：跨系统 MSAG 操作需要 GET 探测自适应（当前 client 未做，MSAG read/edit 在 impc 上会 404——5.3 画像工作的一部分）
+13. **脚本导入用编译产物**：scripts/*.mjs 引 adt-protocol 要用 `../packages/adt-protocol/lib/index.js`（src 是 .ts，直接引报 ERR_MODULE_NOT_FOUND）
 
-## 6. 测试与命令速查
+## 7. 测试与命令速查
 
 ```
 pnpm build                 # 全仓构建（改 TS 后必跑，防旧 lib 假绿/假红）
@@ -110,16 +119,18 @@ pnpm test                  # 全仓 334 项（~1 分钟）
 node --test packages/adt-core/test/fsmatrix.test.ts      # fs 矩阵 23 项（含死引用扫描）
 node --test packages/adt-mock/test/strict.test.ts        # strict 档 10 项
 node scripts/count-tools.mjs                             # 目录计数（应为 40）
-node scripts/verify-p1-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]    # P1 真机回归
-node scripts/verify-p234-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]  # P2-P4 真机回归
+node scripts/verify-p1-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]    # P1 真机回归（裸 wire）
+node scripts/verify-p234-real.mjs <url> <client> <user> <pwd> '$TMP' [ZH]  # P2-P4 真机回归（裸 wire）
+node scripts/verify-create-real.mjs <url> <client> <user> <pwd> [EN|ZH]   # 新 client wire 形态（AdtClient 全链）
 ```
 
 pin 锚点：agent_extras 目录 40；cli.test persona 死引用断言；fsmatrix 死引用文档扫描；crudmatrix 反向 pin（CRUD 表不得回归；createByType 键 = crudCreatableTypes 全等）。
 
-## 7. 已全部提交
+## 8. 已全部提交
 
 首个 session 的存量改动已按计划分两笔提交（`a63ed6a` 内容 + `41c7492` 下架批次 breaking change），
-本 session 的 4.1 wire 修正是第三笔（`6ae52e8`）。工作区干净，随时可发版或继续 4.1e/4.2。
+本 session 的 4.1 wire 修正（`6ae52e8`）与 4.1e 真机验收（`verify-create-real.mjs` + 三环境结果表）已收尾。
+工作区干净，随时可发版或继续 4.2（override 语义）。
 
 ## 附：架构快照（不变）
 
