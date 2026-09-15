@@ -2322,20 +2322,50 @@ export class AdtClient {
     options: { signal?: AbortSignal } = {},
   ): Promise<AdtTextElements> {
     const program = programName.toUpperCase();
+    // Each subsource demands its OWN vendor Accept on strict gateways
+    // (deloitte-kic: bare text/plain → 406 naming the required type; worse,
+    // "vendor, */*" → 200 with an HTML error BODY — the wildcard lets the
+    // gateway pick an HTML representation. So: exact vendor type, single).
+    const VENDOR_ACCEPT: Record<'symbols' | 'selections' | 'headings', string> = {
+      symbols: 'application/vnd.sap.adt.textelements.symbols.v1',
+      selections: 'application/vnd.sap.adt.textelements.selections.v1',
+      headings: 'application/vnd.sap.adt.textelements.headings.v1',
+    };
     const fetch = async (subsource: 'symbols' | 'selections' | 'headings'): Promise<string | undefined> => {
       try {
         const res = await this.request({
           path: ENDPOINTS.textElements(program, subsource),
-          accept: 'text/plain',
+          accept: VENDOR_ACCEPT[subsource],
           signal: options.signal,
         });
         return res.text;
       } catch (error) {
         if (options.signal?.aborted) throw error;
-        if (error instanceof AdtError && (error.status === 404 || error.status === 405)) {
+        if (error instanceof AdtError && error.status === 404) {
           // Distinguish "service absent" from "program unknown": a 404 on
           // the FIRST subsource with an empty result elsewhere is reported
           // by the caller; here we degrade per-subsource.
+          return undefined;
+        }
+        if (error instanceof AdtError && error.status === 406) {
+          // Older/other gateways name a DIFFERENT vendor type in the 406
+          // body ("Accepted content types: X") — trust it once.
+          const named = /Accepted content types?:\s*([^\r\n<]+)/i.exec(error.responseBody ?? '')?.[1]?.trim();
+          if (named && named !== VENDOR_ACCEPT[subsource]) {
+            try {
+              const res = await this.request({
+                path: ENDPOINTS.textElements(program, subsource),
+                accept: named,
+                signal: options.signal,
+              });
+              return res.text;
+            } catch (retryError) {
+              if (retryError instanceof AdtError && retryError.status === 404) return undefined;
+              throw retryError;
+            }
+          }
+        }
+        if (error instanceof AdtError && error.status === 405) {
           return undefined;
         }
         throw error;

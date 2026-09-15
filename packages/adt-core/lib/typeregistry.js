@@ -125,7 +125,8 @@ const ROWS = [
         label: 'Program', phase: 2,
         editMode: 'source',
         createEndpoint: '/programs/programs', createMediaType: 'application/vnd.sap.adt.programs.programs.v2+xml',
-        activates: 'none', aliases: ['PROG/P'],
+        activates: 'none', aliases: ['PROG/P', 'REPT'],
+        note: 'REPT (the REPT-prog textpool object) is an accepted alias; read part "textelements" exposes the textpool rows.',
     },
     {
         type: 'INCL', adtType: 'PROG/I', uriPrefix: '/sap/bc/adt/programs/includes/',

@@ -67,8 +67,8 @@ flowchart TB
 |---|---|
 | `adt_batch` | 协议级 $batch：多个 ADT 请求一次 HTTP 往返（默认只读 GET 扇出；写部分需 `allowBatchWrites` 开关） |
 | `adt_execute` | 在系统上运行程序 / `if_oo_adt_classrun` 类并取回控制台输出（写→激活→执行→观察闭环） |
-| `adt_list_dumps` / `adt_get_dump` | ST22 短转储错误分析（列表 + 三种视图详情） |
-| `adt_read_structure` / `adt_write_structure` | DDIC 结构化编辑器：MSAG/DOMA/DTEL/TTYP 的元数据级读写（read-modify-write 保属性） |
+| `adt_dumps` | ST22 短转储错误分析（列表 + 三种视图详情，无 dumpId=列表 / 带dumpId=详情） |
+| `adt_object_read/write/edit` 的 structured 面 | DDIC 结构化编辑器：MSAG/DOMA/DTEL/TTYP 的元数据级读写（read-modify-write 保属性） |
 | `adt_release_gate` | 预发布门禁：一次跑完语法 + ABAP Unit + ATC，输出 go/no-go，验证通过才 release |
 | `adt_export_objects` | 把包/对象集源码落盘为 `.abap` 文件（带类型后缀，abaplint 兼容），支持 git 版本化、离线评审、备份 |
 | `adt_local_check` | 导出源码后离线跑 abaplint（语法 + lint 规则），秒级反馈——「先本地验证，再一次性推送 SAP」 |

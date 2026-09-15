@@ -48,11 +48,25 @@ export declare const REMOVED_A_GROUP_TOOLS: readonly string[];
 /** Old verb → fs verb (migration note §6.5). */
 export declare const CRUD_TO_FS_VERBS: Readonly<Record<string, string>>;
 /**
- * Build the FULL `adt_*` tool catalog: 37 dedicated tools plus the four
- * fs_ops tools (write/read/edit/delete × type). The nine CRUD-era group-A
- * tools are BUILT (their full policy/OCC/lock chains are the engines the
- * four tools route to) but NOT registered — they exist only in the internal
- * routing map (docs/ddic-fsops-matrix-plan.md §6 removal batch).
+ * The SECOND consolidation batch (docs/tool-consolidation-plan.md, 0.9.0):
+ * group C (textelements → adt_object_read {part}), group D (list/get pairs →
+ * one tool each) and group E (debugger five → adt_debug). Implementations
+ * survive as internal engines / branches; the names no longer register.
+ */
+export declare const REMOVED_C_GROUP_TOOLS: readonly string[];
+export declare const REMOVED_D_GROUP_TOOLS: readonly string[];
+export declare const REMOVED_E_GROUP_TOOLS: readonly string[];
+/** Every name removed by the consolidation batch (C + D + E). */
+export declare const REMOVED_CONSOLIDATED_TOOLS: readonly string[];
+/** Old surface → new surface pointers for the consolidation batch. */
+export declare const CONSOLIDATION_MIGRATION: Readonly<Record<string, string>>;
+/**
+ * Build the FULL `adt_*` tool catalog: 28 dedicated tools plus the four
+ * fs_ops tools (write/read/edit/delete × type) — 32 registered. The nine
+ * CRUD-era group-A tools and the textelements tool (group C) are BUILT as
+ * internal engines (their full policy/OCC/lock chains feed the four fs_ops
+ * tools) but NOT registered; the D/E consolidations happen inside their own
+ * tool modules (docs/tool-consolidation-plan.md).
  */
 export declare function assembleAdtTools(deps: ToolDeps, host: ToolHost): import('./tooldef.js').DefinedTool[];
 export { AdtRegistry } from './registry.js';

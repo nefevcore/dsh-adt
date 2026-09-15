@@ -89,20 +89,15 @@ function tools(deps = { registry, ledger: new LockLedger() }, ctx: Context = fak
   return new Map(flat.map((t) => [t.name, t]));
 }
 
-test('adt_list_dumps / adt_get_dump: error analysis against the mock', async () => {
+test('adt_dumps: error analysis against the mock (list + detail, D-group)', async () => {
   const by = tools();
-  const list = await by.get('adt_list_dumps')!.execute({ user: 'DEMO' }, exec);
+  const list = await by.get('adt_dumps')!.execute({ user: 'DEMO' }, exec);
   assert.equal(list.count, 1);
   assert.equal(list.dumps[0]!.title, 'UNCAUGHT_EXCEPTION');
 
-  const detail = await by.get('adt_get_dump')!.execute({ dumpId: list.dumps[0]!.id, view: 'formatted' }, exec);
+  const detail = await by.get('adt_dumps')!.execute({ dumpId: list.dumps[0]!.id, view: 'formatted' }, exec);
   assert.equal(detail.view, 'formatted');
   assert.match(detail.raw!, /Runtime Errors: UNCAUGHT_EXCEPTION/);
-
-  await assert.rejects(
-    () => by.get('adt_get_dump')!.execute({}, exec),
-    /dumpId/,
-  );
 });
 
 test('adt_execute: runs programs and classrun classes; policy kill switch works', async () => {
@@ -1137,18 +1132,18 @@ test('edit/write verify persistence after the write (concurrent-overwrite regres
   }
 });
 
-test('adt_get_transport: a task number resolves to the parent request with a note', async () => {
+test('adt_transports: a task number resolves to the parent request with a note (D-group)', async () => {
   const by = tools();
 
   // S4HK900003 is a task of S4HK900001 (mock mirrors real CTO resolution).
-  const task = await by.get('adt_get_transport')!.execute({ number: 'S4HK900003' }, exec);
+  const task = await by.get('adt_transports')!.execute({ number: 'S4HK900003' }, exec);
   assert.equal(task.number, 'S4HK900001');
   assert.equal(task.requestedNumber, 'S4HK900003');
   assert.match(task.note ?? '', /task/i);
   assert.match(task.note ?? '', /S4HK900001/);
 
   // A direct request number → no note, numbers agree.
-  const direct = await by.get('adt_get_transport')!.execute({ number: 'S4HK900001' }, exec);
+  const direct = await by.get('adt_transports')!.execute({ number: 'S4HK900001' }, exec);
   assert.equal(direct.number, 'S4HK900001');
   assert.equal(direct.note, undefined);
 });

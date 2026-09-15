@@ -67,7 +67,7 @@ export function lifecycleTools(deps) {
             'verify leftovers with adt_version_diff (saved vs active). Also note adt_check passing does NOT guarantee ' +
             'activation succeeds — the activation preaudit has a wider scope (cross-object consistency, main program + ' +
             'includes joint check, duplicate declarations). ' +
-            'Pass `transport` when the objects\' package requires a transport request (see adt_list_transports).',
+            'Pass `transport` when the objects\' package requires a transport request (see adt_transports).',
         parameters: {
             ...OBJECTS_PARAM,
             transport: { type: 'string', description: 'Transport request number, e.g. S4HK900001.' },

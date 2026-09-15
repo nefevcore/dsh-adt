@@ -52,16 +52,18 @@ test('PERSONA_ROW: the ABAP persona — identity, tool guidance, transport disci
   assert.match(text, /no draft state and no undo/);
   // Tool guidance across the workflow phases of docs/dev-workflow.svg.
   // A-group removal: the nine CRUD-era names are GONE (they are internal
-  // engines of the four fs_ops tools) — the dead-reference assertion below
-  // pins that the persona cannot drift back to them.
+  // engines of the four fs_ops tools); C/D/E consolidation: textelements is
+  // a read `part`, the list/get pairs and the debugger family are single
+  // tools — the dead-reference assertion below pins that the persona cannot
+  // drift back to them.
   for (const marker of [
     'adt_permissions', 'adt_search',
-    'adt_object_write', 'adt_object_read', 'adt_object_edit', 'adt_object_delete', 'adt_read_textelements',
+    'adt_object_write', 'adt_object_read', 'adt_object_edit', 'adt_object_delete', "part:'textelements'",
     'adt_where_used', 'adt_cochange',
     'adt_check', 'adt_activate',
     'adt_run_unit_tests', 'adt_run_atc', 'adt_execute', 'adt_data_preview',
-    'adt_list_dumps', 'adt_debug_session',
-    'adt_release_gate', 'adt_object_versions', 'adt_version_diff', 'adt_get_transport',
+    'adt_dumps', 'adt_debug',
+    'adt_release_gate', 'adt_object_versions', 'adt_version_diff', 'adt_transports',
     'adt_batch', 'adt_export_objects', 'adt_local_check',
   ]) {
     assert.ok(text.includes(marker), `persona mentions ${marker}`);
@@ -70,6 +72,10 @@ test('PERSONA_ROW: the ABAP persona — identity, tool guidance, transport disci
     'adt_crud', 'adt_create_object', 'adt_read_object ', 'adt_read_structure',
     'adt_write_object', 'adt_edit_object', 'adt_write_structure',
     'adt_delete_object', 'adt_package_content', 'adt_push_object',
+    'adt_read_textelements', 'adt_list_atc_runs', 'adt_get_atc_result',
+    'adt_list_dumps', 'adt_get_dump', 'adt_list_transports', 'adt_get_transport',
+    'adt_debug_session', 'adt_debug_breakpoint', 'adt_debug_step',
+    'adt_debug_inspect', 'adt_debug_set_variable',
   ]) {
     assert.ok(!text.includes(removed), `persona must not mention removed tool ${removed}`);
   }
@@ -80,7 +86,7 @@ test('PERSONA_ROW: the ABAP persona — identity, tool guidance, transport disci
   // Transport discipline (the headline rule): user-provided request number,
   // explicit transport argument, never let the backend auto-create a task.
   assert.ok(text.includes('request number'));
-  assert.ok(text.includes('adt_list_transports'));
+  assert.ok(text.includes('adt_transports'));
   assert.match(text, /pass the transport argument explicitly/);
   assert.match(text, /never omit/);
   // Release stays a human decision.

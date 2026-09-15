@@ -1,9 +1,13 @@
 /**
- * adt_read_textelements — read the text elements of a program via the
- * STANDARD ADT textelements subsources (no Z components): text symbols (I),
- * selection texts (S) and list headings (H), returned as classic textpool
- * rows (ID/KEY/ENTRY/LENGTH). Write side deliberately deferred until the PUT
- * format is verified on a real system (plan P1-3).
+ * adt_read_textelements — INTERNAL ENGINE since the C-group consolidation
+ * (docs/tool-consolidation-plan.md §4): reached via
+ * `adt_object_read {type:'PROG'|'REPT', name, part:'textelements'}`.
+ *
+ * Reads the text elements of a program via the STANDARD ADT textelements
+ * subsources (no Z components): text symbols (I), selection texts (S) and
+ * list headings (H), returned as classic textpool rows (ID/KEY/ENTRY/LENGTH).
+ * Write side deliberately deferred until the PUT format is verified on a
+ * real system (plan P1-3).
  */
 import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, destinationOf, optStr, resolveToolObject, text, } from './common.js';

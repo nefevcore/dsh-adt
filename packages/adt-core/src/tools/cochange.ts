@@ -5,7 +5,7 @@
  * request's item list, and rank the objects that shared those requests.
  *
  * Data face: object version feeds (adt_object_versions — transport number
- * per saved version) + transport items (adt_get_transport) — both already in
+ * per saved version) + transport items (adt_transports) — both already in
  * the protocol client, no E070/E071 SQL needed. Limitation (stated in the
  * tool description): co-occurrence derives from SAVE history in this
  * system; objects whose versions never recorded a transport stay invisible.

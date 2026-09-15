@@ -79,6 +79,10 @@ export function fsOpsTools(deps: ToolDeps, tools: Map<string, RoutableTool>) {
       owner('adt_package_content').execute({ ...args, packageName: optStr(args.name) ?? optStr(args.packageName) } as never, exec as never) as never,
     'read:source': async (args, exec) =>
       owner('adt_read_object').execute(args as never, exec as never) as never,
+    // read: program text elements (PROG/REPT) — the textelements owner
+    // becomes an internal engine (docs/tool-consolidation-plan.md §4).
+    'read:textelements': async (args, exec) =>
+      owner('adt_read_textelements').execute(args as never, exec as never) as never,
     'read:metadata': frameworkPendingRouter('read:metadata'),
     // edit: structured RMW patches (properties/fixedValues/labels/messages/
     // description) — the owner chain (policy/lock/transport) runs unchanged.
@@ -130,10 +134,24 @@ export function fsOpsTools(deps: ToolDeps, tools: Map<string, RoutableTool>) {
     }
     const row = typeRegistryRow(type);
     if (!row) throw new Error(fsUnsupportedMessage(verb, type));
+    // The `part` parameter selects which FACE of the object read returns
+    // (docs/tool-consolidation-plan.md §4): 'source' is the default and every
+    // type supports it the same way; 'textelements' (PROG/REPT only) routes
+    // to the textelements engine instead of the source read.
+    const part = optStr(args.part) ?? 'source';
+    if (part !== 'source' && part !== 'textelements') {
+      throw new Error(`adt_object_read: unknown part '${part}' (source or textelements)`);
+    }
+    if (part === 'textelements' && verb !== 'read') {
+      throw new Error(`adt_object_${verb}: part 'textelements' is a read-only face (call adt_object_read with it)`);
+    }
     const cell = fsCell(verb, row.type)!;
-    if (cell.status !== 'yes') throw new Error(fsUnsupportedMessage(verb, row.type));
-    const engine = engines[`${verb}:${cell.via}`];
-    if (!engine) frameworkPending(verb, row.type, cell.via!);
+    const via = part === 'textelements' ? 'textelements' : cell.via!;
+    if (part === 'source' && cell.status !== 'yes') throw new Error(fsUnsupportedMessage(verb, row.type));
+    // part 'textelements' bypasses the matrix cell (it is a PROG-only face);
+    // the engine itself rejects non-PROG/REPT types with its own clear error.
+    const engine = engines[`${verb}:${via}`];
+    if (!engine) frameworkPending(verb, row.type, via);
     const result = await engine!(args, exec);
     return { ...result, verb, type: row.type };
   }
@@ -201,11 +219,16 @@ export function fsOpsTools(deps: ToolDeps, tools: Map<string, RoutableTool>) {
       name: 'adt_object_read',
       description:
         'Read an ABAP object: source types → source (with OCC snapshot), structured types ' +
-        '(DOMA/DTEL/TTYP/MSAG) → typed JSON, DEVC → package content. No `name` → the fs capability ' +
-        'matrix card (what write/read/edit/delete work per type).',
+        '(DOMA/DTEL/TTYP/MSAG) → typed JSON, DEVC → package content. `part:"textelements"` (PROG/REPT) ' +
+        'returns the program\'s textpool rows (text symbols / selection texts / list headings). ' +
+        'No `name` → the fs capability matrix card (what write/read/edit/delete work per type).',
       parameters: {
         ...typeParam,
         ...nameParam,
+        part: {
+          type: 'string',
+          description: "Which face to read: 'source' (default — source/typed JSON/package content by type) or 'textelements' (PROG/REPT: textpool rows I/S/H).",
+        },
         version: { type: 'string', description: 'active | inactive | saved | latest.' },
         context: { type: 'boolean', description: 'CLAS/INTF (P2): dependency-contract prologue.' },
         method: { type: 'string', description: 'CLAS/INTF (P2): method-level read window.' },
@@ -220,10 +243,24 @@ export function fsOpsTools(deps: ToolDeps, tools: Map<string, RoutableTool>) {
             verb: { type: 'string' },
             type: { type: 'string' },
             via: { type: 'string' },
+            program: { type: 'string', description: 'textelements part: the main program name.' },
+            elements: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'textelements part: textpool rows {id, key, entry, length?}.' },
+            counts: { type: 'object', additionalProperties: true, description: 'textelements part: symbols/selections/headings tallies.' },
           },
         },
         render: (_args, value) => {
           if (value.matrixCard) return text(value.matrixCard as string);
+          if (value.verb === 'read' && value.elements !== undefined) {
+            const counts = value.counts as { symbols?: number; selections?: number; headings?: number } | undefined;
+            const lines = [
+              `text elements of ${String(value.program ?? value.type)}: ${counts?.symbols ?? 0} symbol(s), ${counts?.selections ?? 0} selection(s), ${counts?.headings ?? 0} heading(s)`,
+              ...(value.elements as Array<{ id: string; key: string; entry: string; length?: number }>).map(
+                (e) => `- [${e.id}] ${e.key} = ${e.entry}${e.length ? ` (max ${e.length})` : ''}`,
+              ),
+            ];
+            if (value.note) lines.push(`Note: ${String(value.note)}`);
+            return text(lines.join('\n'));
+          }
           const summary = typeof value.source === 'string'
             ? `${(value.source as string).split('\n').length} source line(s)`
             : 'ok';
@@ -277,6 +314,12 @@ export function fsOpsTools(deps: ToolDeps, tools: Map<string, RoutableTool>) {
       isConcurrencySafe: () => false,
       execute: async (args, exec) => {
         const argsRecord = args as Record<string, unknown>;
+        // A `part` on a non-read verb can only ever be a mistake — refuse it
+        // BEFORE the patch-field validation so the caller sees the real cause
+        // (docs/tool-consolidation-plan.md §4: textelements is a read face).
+        if (optStr(argsRecord.part) && optStr(argsRecord.part) !== 'source') {
+          throw new Error(`adt_object_edit: part '${optStr(argsRecord.part)}' is a read-only face (call adt_object_read with it)`);
+        }
         const hasPatch =
           optStr(argsRecord.source) !== undefined || optStr(argsRecord.sourceFile) !== undefined ||
           argsRecord.properties !== undefined || argsRecord.fixedValues !== undefined ||

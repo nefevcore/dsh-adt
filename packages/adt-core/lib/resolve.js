@@ -9,6 +9,9 @@ export const TYPE_MAP = {
     'INTF/OI': { type: 'INTF/OI', uriPrefix: '/sap/bc/adt/oo/interfaces/', label: 'Interface' },
     PROG: { type: 'PROG/P', uriPrefix: '/sap/bc/adt/programs/programs/', label: 'Program' },
     'PROG/P': { type: 'PROG/P', uriPrefix: '/sap/bc/adt/programs/programs/', label: 'Program' },
+    // REPT (textpool-bearing program object) resolves like PROG — the
+    // textelements face is reached via adt_object_read {part:'textelements'}.
+    REPT: { type: 'PROG/P', uriPrefix: '/sap/bc/adt/programs/programs/', label: 'Program' },
     INCL: { type: 'PROG/I', uriPrefix: '/sap/bc/adt/programs/includes/', label: 'Include' },
     'PROG/I': { type: 'PROG/I', uriPrefix: '/sap/bc/adt/programs/includes/', label: 'Include' },
     DDLS: { type: 'DDLS/DF', uriPrefix: '/sap/bc/adt/ddic/ddl/sources/', label: 'CDS Data Definition' },

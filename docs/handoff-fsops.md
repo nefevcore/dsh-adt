@@ -93,7 +93,7 @@ parseDiscovery 全量 accepts + typestructure 探针 + source 形态懒探测 + 
 - 真机残留检查脚本跑一遍（`cleanup-final.mjs` 等按环境跑，只删 Z 前缀探针对象）
 
 ### 5.5 B 组（P2）
-`adt_push_object` → `edit {sourceFile}`；`adt_read_textelements` → `read {type:'PROG', part:'textelements'}`。目录 40→38。
+`adt_push_object` → `edit {sourceFile}`（已完成，引擎下架）；`adt_read_textelements` → `read {part:'textelements'}`（已完成，C 组——docs/tool-consolidation-plan.md §4）。目录 40→32（C/D/E 组全部落地：textelements 并入 read、list/get 三对合一、调试器五件套合一）。
 
 ## 6. 判例与红线（踩过的坑，勿重踩）
 

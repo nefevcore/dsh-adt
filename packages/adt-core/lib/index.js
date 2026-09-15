@@ -90,11 +90,55 @@ export const CRUD_TO_FS_VERBS = {
     update: 'edit',
 };
 /**
- * Build the FULL `adt_*` tool catalog: 37 dedicated tools plus the four
- * fs_ops tools (write/read/edit/delete × type). The nine CRUD-era group-A
- * tools are BUILT (their full policy/OCC/lock chains are the engines the
- * four tools route to) but NOT registered — they exist only in the internal
- * routing map (docs/ddic-fsops-matrix-plan.md §6 removal batch).
+ * The SECOND consolidation batch (docs/tool-consolidation-plan.md, 0.9.0):
+ * group C (textelements → adt_object_read {part}), group D (list/get pairs →
+ * one tool each) and group E (debugger five → adt_debug). Implementations
+ * survive as internal engines / branches; the names no longer register.
+ */
+export const REMOVED_C_GROUP_TOOLS = ['adt_read_textelements'];
+export const REMOVED_D_GROUP_TOOLS = [
+    'adt_list_atc_runs',
+    'adt_get_atc_result',
+    'adt_list_dumps',
+    'adt_get_dump',
+    'adt_list_transports',
+    'adt_get_transport',
+];
+export const REMOVED_E_GROUP_TOOLS = [
+    'adt_debug_session',
+    'adt_debug_breakpoint',
+    'adt_debug_step',
+    'adt_debug_inspect',
+    'adt_debug_set_variable',
+];
+/** Every name removed by the consolidation batch (C + D + E). */
+export const REMOVED_CONSOLIDATED_TOOLS = [
+    ...REMOVED_C_GROUP_TOOLS,
+    ...REMOVED_D_GROUP_TOOLS,
+    ...REMOVED_E_GROUP_TOOLS,
+];
+/** Old surface → new surface pointers for the consolidation batch. */
+export const CONSOLIDATION_MIGRATION = {
+    adt_read_textelements: "adt_object_read {type:'PROG', name, part:'textelements'}",
+    adt_list_atc_runs: 'adt_atc_runs {createdBy?, ageMin?, …}',
+    adt_get_atc_result: 'adt_atc_runs {displayId}',
+    adt_list_dumps: 'adt_dumps {user?, from?, to?, top?, skip?}',
+    adt_get_dump: 'adt_dumps {dumpId, view?}',
+    adt_list_transports: 'adt_transports {allUsers?, status?}',
+    adt_get_transport: 'adt_transports {number}',
+    adt_debug_session: "adt_debug {action:'listen'|'status'|'detach'}",
+    adt_debug_breakpoint: "adt_debug {action:'setBreakpoint'|'deleteBreakpoint'}",
+    adt_debug_step: "adt_debug {action:'step', step}",
+    adt_debug_inspect: "adt_debug {action:'variables'|'stack'}",
+    adt_debug_set_variable: "adt_debug {action:'setVariable', name, value}",
+};
+/**
+ * Build the FULL `adt_*` tool catalog: 28 dedicated tools plus the four
+ * fs_ops tools (write/read/edit/delete × type) — 32 registered. The nine
+ * CRUD-era group-A tools and the textelements tool (group C) are BUILT as
+ * internal engines (their full policy/OCC/lock chains feed the four fs_ops
+ * tools) but NOT registered; the D/E consolidations happen inside their own
+ * tool modules (docs/tool-consolidation-plan.md).
  */
 export function assembleAdtTools(deps, host) {
     const engines = [
@@ -103,6 +147,9 @@ export function assembleAdtTools(deps, host) {
         ...objectTools(deps),
         ...structureTools(deps),
         ...packageTools(deps),
+        // C-group: the textelements owner is an engine of adt_object_read
+        // {part:'textelements'} now (docs/tool-consolidation-plan.md §4).
+        ...textElementTools(deps),
     ];
     const engineMap = new Map(engines.map((t) => [t.name, t]));
     const registered = [
@@ -125,7 +172,6 @@ export function assembleAdtTools(deps, host) {
         ...executeTools(deps),
         ...selfcheckTools(deps),
         ...debuggerTools(deps),
-        ...textElementTools(deps),
         ...cochangeTools(deps),
     ];
     const fs = fsOpsTools(deps, engineMap);

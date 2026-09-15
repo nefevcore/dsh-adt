@@ -1,6 +1,6 @@
 # adt_* 工具清单 — 入参 / 返回参考
 
-> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **46 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代）。
+> 覆盖 `@nefevcore/abap-adt-dsh-plugin` 当前注册的全部 **32 个工具**（`adt_release_transport` 已按评审意见移除：释放传输是人工决策，协议客户端能力保留但不暴露给 Agent；`adt_batch_checks` 已由协议级 `adt_batch` + `adt_release_gate` 取代；0.9.0 精简批次：9 个 CRUD 工具并入 `adt_object_*` 四件套，`adt_push_object` 并入 edit 的 `sourceFile`，文本元素读取并入 read 的 `part`，list/get 三对与调试器五件套各并为单工具——见 `docs/tool-consolidation-plan.md`）。
 > 标记约定：🛡 = 经过**目标目的地**的权限策略校验；⏱ = 自定义超时；🔒 = 声明 `isConcurrencySafe`（可并发/只读）。
 > 通用参数 `destination`（string，可省略 = 默认目的地）适用于除 `adt_local_check` / `adt_permissions` / `adt_list_destinations` / `adt_list_gui_connections` / `adt_create_destination` 外的所有工具，下表不再重复。
 > 通用对象引用三元组：`objectUri`（精确 URI，优先）/ `name` / `type`（短码或 ADT 形式，如 CLAS 或 CLAS/OC）。
@@ -9,6 +9,8 @@
 ---
 
 ## 1. 系统与连接（7）
+
+> 自检/巡检也在本组：`adt_selfcheck` 对目的地做只读能力扫描。
 
 ### adt_list_destinations 🔒
 枚举配置的全部 ADT 目的地并逐个 ping（含**会话工作区文件** `<会话工作区>/<宿主配置目录>/destinations.yaml`——DSH 为 `.dsh-abap-adt`，目录随宿主声明——叠加后的完整视图）。
@@ -56,7 +58,7 @@
 - **oracle 交叉验证**：search↔read↔$batch↔package-content↔ping/system_info 两两独立印证——"搜索说对象存在而 read 说没有"即 `dead`。
 - **用途**：新系统接入验证、插件升级后回归、"为什么某能力什么都不返回"的第一诊断。设计借鉴 vsp 的 sweep.go（"十个能力广告了、注册了、可达、但从未答对过——全是手工发现的"）。
 
-## 2. 搜索与浏览（3）
+## 2. 搜索与浏览（2）
 
 ### adt_search 🔒
 对象名 + 源码全文双通道搜索，支持包过滤与分页。
@@ -64,10 +66,7 @@
 - **返回**：`query, count, offset, note?, objects[] { objectName, description, type, uri, packageName?, … }, sources[] { objectName, type, uri, line, lineNumber? }`。
 - 钳制/截断均写入 `note`（含「raise offset to N」提示下一页）。
 
-### （已并入 adt_object_read {type:"DEVC"}）
-列出包的**直接成员**（`$TMP` 为本地对象）。返回刻意精简：`name + type` 即可在其他工具中引用对象，uri/category 可推导、不再返回。
-- **入参**：`packageName`*。
-- **返回**：`packageName, count, objects[] { name, type }`。
+> 包成员清单（A 组并入）= `adt_object_read {type:"DEVC", name}`——列出包的直接成员（`$TMP` 为本地对象），返回刻意精简为 `{name, type}`。
 
 ### adt_where_used 🔒
 影响分析：谁引用/依赖该对象。后端无 usageReferences（404/405）时降级为 note + 替代建议。
@@ -79,9 +78,9 @@
 > A 组处置（0.9.0）：原 9 个 CRUD 工具（read/write/edit_object、create/delete_object、read/write_structure、package_content、crud 门面）已并为下面四个工具的内部引擎——签名统一 `(type, name)`，**端点由工具层解析，永不传 URI**。
 
 ### adt_object_read 🔒
-读对象：源码型 → 源码 + 本地 OCC 快照（sidecar 记录服务端内容哈希，冲突安全编辑的基础）；结构化型（DOMA/DTEL/TTYP/MSAG）→ typed JSON；DEVC → 包成员清单。**省略 name → 能力矩阵卡**（各类型 write/read/edit/delete 支持面）。
-- **入参**：`type`*（短码，矩阵行）；`name`；`startLine`/`endLine`（行窗口）；`snapshot`（默认 true）；`method`（方法级读取：只返回该 METHOD…ENDMETHOD. 块，行号仍按全源编址）；`context`（默认 false；true 附加依赖契约序言——超类/接口优先，预算内并发拉公共契约）；`raw`（结构化型附原始 wire XML）。
-- **返回**：源码型 `uri, name, type, source, totalLines, localCopy?, snapshotHash?, contextPrologue?`；结构化型 `kind, name, properties{}/messages[]/fixedValues[]/labels{}`；包 `objects[]`。全量读取（≤2000 行）重放为行号化 read 卡片。
+读对象：源码型 → 源码 + 本地 OCC 快照（sidecar 记录服务端内容哈希，冲突安全编辑的基础）；结构化型（DOMA/DTEL/TTYP/MSAG）→ typed JSON；DEVC → 包成员清单。**省略 name → 能力矩阵卡**（各类型 write/read/edit/delete 支持面）。**`part:"textelements"`（PROG/REPT，C 组并入）**：读程序的文本元素——TEXTPOOL 形状（I 文本符号/键 001…、S 选择文本、H 列表标题），行结构 ID/KEY/ENTRY/LENGTH；主程序名（include 的文本元素挂主程序）；全空时 note 提示程序未定义或后端不暴露；写侧暂缓（PUT 格式未真机验证，用 SE32/SE38）。
+- **入参**：`type`*（短码，矩阵行）；`name`；`part`（'source' 默认 | 'textelements'）；`startLine`/`endLine`（行窗口）；`snapshot`（默认 true）；`method`（方法级读取：只返回该 METHOD…ENDMETHOD. 块，行号仍按全源编址）；`context`（默认 false；true 附加依赖契约序言——超类/接口优先，预算内并发拉公共契约）；`raw`（结构化型附原始 wire XML）。
+- **返回**：源码型 `uri, name, type, source, totalLines, localCopy?, snapshotHash?, contextPrologue?`；结构化型 `kind, name, properties{}/messages[]/fixedValues[]/labels{}`；包 `objects[]`；文本元素 `program, elements[] {id, key, entry, length?}, counts {symbols, selections, headings}, note?`。全量读取（≤2000 行）重放为行号化 read 卡片。
 
 ### adt_object_write 🛡
 create-or-override：`type + name + description/packageName + 内容`一步建好。无内容 = 占位创建。DDIC/CDS 类型默认写后即激活。
@@ -114,7 +113,7 @@ create-or-override：`type + name + description/packageName + 内容`一步建�
 - **⚠ include 级联**（Agent 实测反馈）：**PROG 主程序 / FUGR 激活成功 ≠ 程序完整激活**——多数后端不级联激活其 include（TOP/SCR 等），工具只报告请求对象本身的结果。做法：**把主对象和全部 include 一起放进 `objects` 一次提交**（本工具天然支持批量），存疑时用 `adt_version_diff`（saved vs active）复核残余非激活对象。成功激活 PROG/FUGR 时输出会带此提示。
 - **激活失败时**：hints 提示 `adt_check` 通过不是激活会过的依据（preaudit 范围更宽），错误带行号/错误码，修复后将**全部相关对象**一起重新激活。
 
-## 5. 测试与 ATC（4）
+## 5. 测试与 ATC（3）
 
 ### adt_run_unit_tests ⏱330s
 运行 ABAP Unit（提交→轮询→JUnit 解析在客户端内完成）。
@@ -122,21 +121,17 @@ create-or-override：`type + name + description/packageName + 内容`一步建�
 - **返回**：`success, overall, total, passed, failed, skipped, errors, durationMs, classes[] { className, status, tests[] { methodName, status, durationMs, message? } }`。
 
 ### adt_run_atc ⏱660s
-对给定对象启动新 ATC run。run 会**落库**（在 adt_list_atc_runs 可见，工具触发的通常叫 "External Request + 时间戳"）；`durationMs` 为客户端实测整个 start→轮询→取结果的墙钟时间。
+对给定对象启动新 ATC run。run 会**落库**（在 adt_atc_runs 可见，工具触发的通常叫 "External Request + 时间戳"）；`durationMs` 为客户端实测整个 start→轮询→取结果的墙钟时间。
 - **入参**：`objects`*；`variant`（string）。
 - **返回**：`clean, findings[] { checkTitle, severity, message, objectName, uri?（该行所属对象的 URI——常为 include 而 objectName 是主程序）, line?, check? }, counts { INFO, WARNING, ERROR, CRITICAL, CATASTROPHIC }, durationMs, variant?, displayId?, title?, checkVariant?, aggregates?`。
-- **位置映射**（impc-dev 实战）：后端把程序全部 finding 挂在**主程序名**下而 `line` 是 include 内行号——先看每条 finding 的 `uri` 再跳行；权威 P1–P4 汇总以 `adt_list_atc_runs` 为准。
+- **位置映射**（impc-dev 实战）：后端把程序全部 finding 挂在**主程序名**下而 `line` 是 include 内行号——先看每条 finding 的 `uri` 再跳行；权威 P1–P4 汇总以 `adt_atc_runs` 为准。
 
-### adt_list_atc_runs 🔒
-列出系统上已存的 ATC run。后端差异大：多数要求至少一个过滤条件（缺省发当前用户），**子集实现只接受无参数查询**（任何过滤参数 400）——被拒的过滤自动回退无参数重试。
-- **入参**：`createdBy`、`ageMin`、`ageMax`（天）、`central`、`active`、`sysId`（子集后端忽略）。
-- **返回**：`count, runs[] { displayId, title?, checkVariant?, createdAt?, createdBy?, status?, kind?, aggregates?, attributes{} }`。
-- **P1–P4 汇总以本工具为准**（impc-dev 实战：单结果体不带 aggregates，明细里 P1–P4 恒 0）。
-
-### adt_get_atc_result 🔒
-按 displayId 复取一条已存 ATC 结果。
-- **入参**：`displayId`*；`includeExemptedFindings`（默认 false）。
-- **返回**：`displayId, title?, checkVariant?, clean, findings[]（含 uri?）, counts{}, aggregates?（结果体缺失时按 finding priority 推导）, durationMs, rawXml?`。
+### adt_atc_runs 🔒（D 组合并：list + detail 一体）
+ATC run 自省，**单工具两形**：**无 `displayId`** = 列系统上已存的 run（display id、创建者、时间戳、状态、P1–P4 汇总）；**带 `displayId`** = 取该 run 的完整结果（findings 带严重度、检查项、源位置，可含豁免项）。
+- **入参**：`displayId`（给出 = 详情形）；`includeExemptedFindings`（详情形，默认 false）；list 形过滤器：`createdBy`、`ageMin`/`ageMax`（天）、`central`、`active`、`sysId`。
+- **返回**：list 形 `count, runs[] { displayId, title?, checkVariant?, createdAt?, createdBy?, status?, kind?, aggregates?, attributes{} }`；detail 形 `displayIdResult, title?, checkVariant?, clean, findings[]（含 uri?）, counts{}, aggregates?（结果体缺失时按 finding priority 推导）, durationMs, rawXml?`。
+- **后端差异**：多数要求至少一个过滤条件（缺省发当前用户），**子集实现只接受无参数查询**（任何过滤参数 400）——被拒的过滤自动回退无参数重试。
+- **P1–P4 汇总以 list 形为准**（impc-dev 实战：单结果体不带 aggregates，明细里 P1–P4 恒 0）。
 
 ## 6. 传输与版本（4）
 
@@ -147,18 +142,13 @@ create-or-override：`type + name + description/packageName + 内容`一步建�
 - **入参**：对象三元组。
 - **返回**：`objectUri, versions[] { versionId, author?, updatedAt?, title?, transportRequest?, transportDescription? }`。
 
-### adt_list_transports 🔒
-列当前用户的传输请求。
-- **入参**：`allUsers`（默认 false）；`status`（默认 all；`modifiable`=未释放（别名 D）/ `released`（别名 R/L）/ 其他值透传后端）。
-- **返回**：`transports[] { number, description, status, category, owner, system, client, modifiable, target?, items?[] }`。
-- **状态过滤**（impc-dev 实战）：语义词**先翻译成后端字母码**（`modifiable`→`D`、`released`→`R`）再发（原样透传会匹配 0 行）；后端 400 拒绝 `status` 参数时自动去参重试 + 客户端侧过滤兜底。结论前仍建议与 `adt_get_transport` / `adt_object_versions` 交叉验证。
-- **策略**：仅受 enableTransports（传输族开关）约束。
-
-### adt_get_transport 🔒
-单个传输请求详情（含条目）。**只读，不再受 allowedTransports 约束**（传输号管控只针对编辑类操作）。
-- **入参**：`number`*。
-- **返回**：`number, requestedNumber?（请求的是任务号且被解析到父请求时）, note?（任务→父请求映射提示）, description, status, category, owner, system, client, modifiable, items[] { name, type, action, description? }`。
+### adt_transports 🔒（D 组合并：list + detail 一体）
+传输请求（CTO, Transport Organizer / SE10 / SE09）。**单工具两形**：**无 `number`** = 当前用户的请求列表（number、status、category、owner、可含 items）；**带 `number`** = 该请求详情（含条目清单）。
+- **入参**：`number`（给出 = 详情形，如 S4HK900001）；list 形：`allUsers`（默认 false）、`status`（默认 all；`modifiable`=未释放（别名 D）/ `released`（别名 R/L）/ 其他值透传后端）。
+- **返回**：list 形 `transports[] { number, description, status, category, owner, system, client, modifiable, target?, items?[] }`；detail 形 `number, requestedNumber?（请求的是任务号且被解析到父请求时）, note?（任务→父请求映射提示）, description, status, category, owner, system, client, modifiable, items[] { name, type, action, description? }`。
+- **状态过滤**（impc-dev 实战）：语义词**先翻译成后端字母码**（`modifiable`→`D`、`released`→`R`）再发（原样透传会匹配 0 行）；后端 400 拒绝 `status` 参数时自动去参重试 + 客户端侧过滤兜底。结论前仍建议与 detail 形 / `adt_object_versions` 交叉验证。
 - **任务号语义**（impc-dev 实战）：版本历史（adt_object_versions）记录的是**任务级**号码；传任务号查询时真实 CTO 后端返回**父请求**——比对返回的 `number` 与所传号码，后续操作用父号。
+- **策略**：仅受 enableTransports（传输族开关）约束——两分支都只读，请求号本身不受 allowedTransports 管控。
 
 ### adt_version_diff 🔒
 两版本对比。**默认 = saved vs active**——saved 是当前源码（存在 inactive 版时即 inactive），active 是最后一次激活的版本（`?version=active`）：**恰好是「已保存但尚未激活」的改动**，写后/激活后复核残余非激活对象（含 PROG 的 include）就用它。**只返回 unified diff + 标签 + 版本列表，不携带两侧全文**（上下文经济）。
@@ -210,24 +200,15 @@ create-or-override：`type + name + description/packageName + 内容`一步建�
 - **返回**：`kind, name, status, output, outputLines`。
 - **策略**：`allowExecution`（默认开；只读目的地的总闸——任意 ABAP 都可能改库）。
 
-### adt_list_dumps 🔒
-列 ABAP 短转储（ST22 feed）。运行/测试报运行时错误后定位 dump。
-- **入参**：`user`；`from`/`to`（YYYYMMDD 或 YYYYMMDDHHMMSS，服务端过滤）；`top`（默认 20，钳 1–100）；`skip`。
-- **返回**：`count, note?, dumps[] { id, title, category?, user?, updatedAt? }`。
-- **满页判定（多取一行）**：实际请求 `top+1` 行——多出一行即说明"还有更多"，note 写 `showing N, and there may be more; raise top, or page with skip=… / narrow by user / from / to`；恰好 N 行与"N 行还有更多"区分开，不编造总数。
+### adt_dumps 🔒（D 组合并：list + detail 一体）
+ABAP 短转储（ST22）读取，**单工具两形**：**无 `dumpId`** = 转储列表（feed）；**带 `dumpId`** = 单个转储详情（结构化分节/HTML 概览/纯文本分析视图）。
+- **入参**：`dumpId`（给出 = 详情形，来自 list 形的 id）；`view`（default=结构化分节 / summary=HTML / formatted=纯文本分析视图）；list 形：`user`（按会话用户过滤）、`from`/`to`（YYYYMMDD 或 YYYYMMDDHHMMSS，服务端过滤）、`top`（默认 20，钳 1–100）、`skip`。
+- **返回**：list 形 `count, note?, dumps[] { id, title, category?, user?, updatedAt? }`；detail 形 `id, view, title?, sections[] { name, value }, raw?`。
+- **满页判定（多取一行）**：list 形实际请求 `top+1` 行——多出一行即说明"还有更多"，note 写 `showing N, and there may be more; raise top, or page with skip=… / narrow by user / from / to`；恰好 N 行与"N 行还有更多"区分开，不编造总数。
 
-### adt_get_dump 🔒
-读单个转储详情（id 来自 adt_list_dumps）。
-- **入参**：`dumpId`*；`view`（default=结构化分节 / summary=HTML / formatted=纯文本分析视图）。
-- **返回**：`id, view, title?, sections[] { name, value }, raw?`。
+## 8c. 文本元素（并入 read 的 part）
 
-## 8c. 文本元素（1）
-
-### adt_read_textelements 🔒
-读程序的**文本元素**（标准 ADT 端点，无 Z 组件）：文本符号（I，键 001/002… 带 max length）/ 选择文本（S，参数与选择屏幕字段名）/ 列表标题（H，listHeader/columnHeader_N）。行结构即经典 TEXTPOOL（`READ TEXTPOOL` 同款 ID/KEY/ENTRY/LENGTH）。
-- **入参**：`name`*（**主程序**名——include 的文本元素挂在其主程序上）；`type`（PROG 或 REPT，默认 PROG）。
-- **返回**：`program, elements[] { id: I|S|H, key, entry, length? }, counts { symbols, selections, headings }, note?`（全空时 note 提示"程序未定义或后端不暴露该服务"）。
-- **写侧暂缓**：改动文本元素暂不支持（端点 PUT 格式需先在真实系统验证）；用 SE32/SE38 或传输处理。
+> **C 组处置（0.9.0）**：文本元素读取已并入 `adt_object_read {part:"textelements"}`——见 §3 的 adt_object_read 条目。
 
 ## 8d. 协变分析（1）
 
@@ -235,7 +216,7 @@ create-or-override：`type + name + description/packageName + 内容`一步建�
 传输共变分析（"什么通常一起变更"——vsp graph 的低成本切片）：读每个输入对象的版本历史取其传输号，展开这些请求的条目清单，按**共享传输数**排序共现对象。改前评估回归范围/评审清单。
 - **入参**：`objects`*（1..10 项，`{name*, type?}`）；`top`（默认 20，钳 1–50）；`maxTransports`（展开的传输数上限，默认 30，钳 1–50——超出截断并在 note 说明）。
 - **返回**：`inputs[], coChanges[] { name, type?, sharedTransports, transports[], description? }, analyzedTransports[], totalCandidates, note?`。
-- **数据面**：版本 feed + 传输条目（同 adt_object_versions / adt_get_transport），无 E070/E071 SQL；局限——保存历史未记录传输的对象不可见（新对象、他系统纯传输）。
+- **数据面**：版本 feed + 传输条目（同 adt_object_versions / adt_transports 的单请求形态），无 E070/E071 SQL；局限——保存历史未记录传输的对象不可见（新对象、他系统纯传输）。
 - **策略**：enableTransports 门（版本 feed 泄漏传输号，同 adt_object_versions）。
 
 ## 9. 数据预览（1）
@@ -249,34 +230,16 @@ create-or-override：`type + name + description/packageName + 内容`一步建�
 
 ---
 
-## 10. 调试器（5）— 标准 ADT REST，零服务端安装
+## 10. 调试器（1）— 标准 ADT REST，零服务端安装
 
-> 全族经 `/sap/bc/adt/debugger/*`（新式 ABAP 调试器），**策略总闸 `allowDebugger`（默认 false）**——调试持有有状态会话并可能停掉生产进程；prd profile 目的地硬拒。会话身份（terminalId/ideId）是**插件级**状态（src/debugger.ts）：一个 ADT 会话只能持一个调试会话，detach 后不能重 attach（重 listen 用全新身份）；插件卸载时自动 detach 全部监听器。断点为外部作用域（对目标用户生效）；标准代码断点常不触发（SAP 默认只停客户代码）。
+> 经 `/sap/bc/adt/debugger/*`（新式 ABAP 调试器），**策略总闸 `allowDebugger`（默认 false）**——调试持有有状态会话并可能停掉生产进程；prd profile 目的地硬拒。会话身份（terminalId/ideId）是**插件级**状态（src/debugger.ts）：一个 ADT 会话只能持一个调试会话，detach 后不能重 attach（重 listen 用全新身份）；插件卸载时自动 detach 全部监听器。断点为外部作用域（对目标用户生效）；标准代码断点常不触发（SAP 默认只停客户代码）。
 
-### adt_debug_session 🛡⏱
-管理调试会话：`listen`（注册监听器并**长轮询等待**断点命中；空响应 = 等待窗内无命中，监听器保持注册）/ `status`（本地会话 + 后端监听器注册表）/ `detach`（结束会话——之后需重新 listen）。
-- **入参**：`action`*（listen/status/detach）；`username`（调试目标用户，默认目的地用户）；`timeoutSeconds`（listen 等待窗 1–240s，默认 30）。
-- **返回**：`action, destination, hit?, timedOut?, conflict?, debuggee? { id, program, include, line, user, kind, … }, session?, backendListeners?, detached?, note?`。
-
-### adt_debug_breakpoint 🛡
-设/删**行断点**（外部作用域）。set 支持对象三元组解析 URI（自动补 `/source/main`），返回断点 id 供 delete。
-- **入参**：`action`*（set/delete）；set：对象三元组 + `line`*（1 起行号）；delete：`id`*（set 返回的断点号）；`username`。
-- **返回**：`action, destination, breakpoints?[] { id, uri, line, kind }, deleted?`。
-
-### adt_debug_step 🛡⏱
-单步停止的 debuggee：stepInto(F5) / stepOver(F6) / stepReturn(F7) / stepContinue(F8，跑到下个断点) / terminateDebuggee（终止调试进程）。
-- **入参**：`step`*（五选一）。
-- **返回**：`step, destination, result { step, debugSessionId?, program?, include?, line?, isSteppingPossible?, isTerminationPossible?, isDebuggeeChanged?, reachedBreakpoints[] }`。
-
-### adt_debug_inspect 🛡
-检查停止的 debuggee：`variables` 读指定变量值（`LV_COUNT`/`WA_MARA`/`IT_TABLE`…）；`stack` 读调用栈（program/include/line 逐帧；BASIS < ~7.51 无 `/debugger/stack` 端点——探测一次后本地回答 `unavailable` + 说明）。
-- **入参**：`action`*（variables/stack）；variables：`variables`*（非空名数组）。
-- **返回**：`action, destination, variables?[] { name, value?, declaredTypeName?, readOnly?, … }, stack? { entries[] { stackPosition, programName, includeName, line, … }, cursorIndex?, unavailable?, note? }`。
-
-### adt_debug_set_variable 🛡
-**改** debuggee 变量值（高危）。**双重 opt-in**：`allowDebugger` **且** `allowDebugVariables`（均默认 false）；只读变量被后端拒绝。
-- **入参**：`name`*（大写变量名）；`value`*（ABAP 字面量文本，如 `42` 或 `NEWTEXT`）。
-- **返回**：`name, value, destination`。
+### adt_debug 🛡⏱300s（E 组合并：五件套 → 单工具九动作）
+ABAP 代码在线调试闭环，**一个工具九个 action**。先 `setBreakpoint`，触发代码路径后 `listen`（长轮询等命中）；停止期间：`variables` 读变量值、`stack` 读调用栈（BASIS < ~7.51 无 `/debugger/stack` 端点——探测一次后本地回答 `unavailable` + 说明）、`step` 单步推进；`status` 查会话与后端监听器状态；`deleteBreakpoint` 按 id 删断点；**务必以 `detach` 收尾**——一个目的地一个调试会话，detach 后不可重 attach（重新 listen 用全新身份）。
+- **入参**：`action`*（listen/status/detach/setBreakpoint/deleteBreakpoint/step/variables/stack/setVariable）；`username`（调试目标用户，默认目的地用户——外部断点对该用户生效）；`timeoutSeconds`（listen 等待窗 1–240s，默认 30，空响应 = 窗内无命中、监听器保持注册）。
+- **action 专属参数**：setBreakpoint：`objectUri` 或 `name`+`type`（自动补 `/source/main`）+ `line`*（1 起行号）；deleteBreakpoint：`id`*（setBreakpoint 返回的断点号）；step：`step`*（stepInto= F5 / stepOver= F6 / stepReturn= F7 / stepContinue= F8 跑到下个断点 / terminateDebuggee 终止调试进程）；variables：`variables`*（非空大写名数组）；setVariable：`name`*（大写变量名）+ `value`*（ABAP 字面量文本）。
+- **返回**：`action, destination` + 按动作：`hit?, timedOut?, conflict?, debuggee? { id, program, include, line, user, kind, … }, session?, backendListeners?, detached?, breakpoints?[] { id, uri, line, kind }, deleted?, result { step, debugSessionId?, program?, include?, line?, isSteppingPossible?, isTerminationPossible?, isDebuggeeChanged?, reachedBreakpoints[] }, variables?[] { name, value?, declaredTypeName?, readOnly? }, stack? { entries[] { stackPosition, programName, includeName, line, … }, cursorIndex?, unavailable?, note? }, note`。
+- **`setVariable`（高危）双重 opt-in**：`allowDebugger` **且** `allowDebugVariables`（均默认 false）；只读变量被后端拒绝。
 
 ---
 

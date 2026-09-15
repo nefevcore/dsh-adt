@@ -6,7 +6,7 @@ import { builtinDefaults } from '../lib/config.js';
 import { readTools } from '../lib/tools/read.js';
 import { writeTools } from '../lib/tools/write.js';
 import { selfcheckTools, UNPROBED_TOOLS } from '../lib/tools/selfcheck.js';
-import { REMOVED_A_GROUP_TOOLS } from '../lib/index.js';
+import { REMOVED_A_GROUP_TOOLS, REMOVED_CONSOLIDATED_TOOLS } from '../lib/index.js';
 import { systemTools } from '../lib/tools/system.js';
 import { destinationTools } from '../lib/tools/destinations.js';
 import { searchTools } from '../lib/tools/search.js';
@@ -305,22 +305,27 @@ test('tool catalog: every adt_* tool accounted for (published numbers)', async (
     ...executeTools(deps),
     ...selfcheckTools(deps),
     ...debuggerTools(deps),
-    ...textElementTools(deps),
     ...cochangeTools(deps),
     // A-group removal (docs/ddic-fsops-matrix-plan.md §6): the nine CRUD-era
     // tools are no longer registered — they are internal engines of the four
-    // fs_ops tools below. 36 + 4 = 40.
+    // fs_ops tools below. C-group: textelements likewise became an engine of
+    // adt_object_read {part:'textelements'} (docs/tool-consolidation-plan.md
+    // §4). D/E groups folded inside their own modules. 28 + 4 = 32.
     ...fsOpsTools(deps, new Map<string, never>() as never),
   ];
   const names = all.map((t) => t.name).sort();
   assert.equal(new Set(names).size, names.length, 'duplicate tool name registered');
-  assert.equal(names.length, 40, `catalog size drifted: ${names.length} — update README/docs badge and this pin together`);
+  assert.equal(names.length, 32, `catalog size drifted: ${names.length} — update README/docs badge and this pin together`);
   assert.ok(names.includes('adt_selfcheck'));
   assert.ok(names.includes('adt_object_write') && names.includes('adt_object_read'));
   assert.ok(names.includes('adt_object_edit') && names.includes('adt_object_delete'));
   // The A-group names are gone from the REGISTERED face.
   for (const removed of REMOVED_A_GROUP_TOOLS) {
     assert.ok(!names.includes(removed), `${removed} must no longer register (A-group removal)`);
+  }
+  // The C/D/E consolidation names are gone from the REGISTERED face too.
+  for (const removed of REMOVED_CONSOLIDATED_TOOLS) {
+    assert.ok(!names.includes(removed), `${removed} must no longer register (C/D/E consolidation)`);
   }
   // Sweep coverage statement stays honest: covered + unprobed = full catalog.
   const covered = new Set(SWEPT_TOOLS);
@@ -338,9 +343,8 @@ const SWEPT_TOOLS = [
     'adt_object_read',
     'adt_where_used',
     'adt_object_versions',
-    'adt_list_dumps',
-    'adt_get_dump',
-    'adt_list_transports',
+    'adt_dumps',
+    'adt_transports',
     'adt_system_info',
     'adt_ping',
     'adt_batch',

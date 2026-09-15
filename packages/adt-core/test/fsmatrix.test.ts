@@ -354,6 +354,13 @@ test('dead-reference sweep: removed A-group tools are gone from user-facing docs
     'adt_crud', 'adt_create_object', 'adt_read_object', 'adt_read_structure',
     'adt_write_object', 'adt_edit_object', 'adt_write_structure',
     'adt_delete_object', 'adt_package_content',
+    // C/D/E consolidation (docs/tool-consolidation-plan.md)
+    'adt_read_textelements',
+    'adt_list_atc_runs', 'adt_get_atc_result',
+    'adt_list_dumps', 'adt_get_dump',
+    'adt_list_transports', 'adt_get_transport',
+    'adt_debug_session', 'adt_debug_breakpoint', 'adt_debug_step',
+    'adt_debug_inspect', 'adt_debug_set_variable',
   ];
   for (const rel of ['docs/agent-guide.md', 'docs/tool-reference.md', 'README.md']) {
     const path = join(docDir, rel);

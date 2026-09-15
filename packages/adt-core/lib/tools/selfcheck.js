@@ -30,9 +30,9 @@ const COVERED_TOOLS = new Set([
     'adt_object_read',
     'adt_where_used',
     'adt_object_versions',
-    'adt_list_dumps',
-    'adt_get_dump',
-    'adt_list_transports',
+    // D-group consolidation: the former list/get pairs are one tool now.
+    'adt_dumps',
+    'adt_transports',
     'adt_system_info',
     'adt_ping',
     'adt_batch',
@@ -44,20 +44,14 @@ const COVERED_TOOLS = new Set([
  */
 export const UNPROBED_TOOLS = [
     'adt_activate',
+    'adt_atc_runs',
     'adt_check',
     'adt_cochange',
     'adt_create_destination',
     'adt_data_preview',
-    'adt_debug_breakpoint',
-    'adt_debug_inspect',
-    'adt_debug_session',
-    'adt_debug_set_variable',
-    'adt_debug_step',
+    'adt_debug',
     'adt_execute',
     'adt_export_objects',
-    'adt_get_atc_result',
-    'adt_get_transport',
-    'adt_list_atc_runs',
     'adt_list_destinations',
     'adt_list_gui_connections',
     'adt_local_check',
@@ -66,8 +60,6 @@ export const UNPROBED_TOOLS = [
     'adt_object_edit',
     'adt_object_write',
     'adt_permissions',
-    'adt_push_object',
-    'adt_read_textelements',
     'adt_release_gate',
     'adt_run_atc',
     'adt_run_unit_tests',
@@ -302,9 +294,9 @@ export function selfcheckTools(deps) {
             pushObj('where-used', 'adt_where_used', whereUsedCap);
             pushObj('version feed', 'adt_object_versions', versionsCap);
             pushObj('active version read', 'adt_object_read', activeCap);
-            push('dump feed', 'adt_list_dumps', dumpsCap);
-            push('dump detail', 'adt_get_dump', dumpDetailCap);
-            push('transport feed', 'adt_list_transports', transportsCap);
+            push('dump feed', 'adt_dumps', dumpsCap);
+            push('dump detail', 'adt_dumps', dumpDetailCap);
+            push('transport feed', 'adt_transports', transportsCap);
             push('connectivity ping', 'adt_ping', pingCap);
             push('system info', 'adt_system_info', systemCap, pingCap.kind === 'ok' && systemCap.kind === 'error');
             pushObj('protocol $batch GET', 'adt_batch', batchCap);

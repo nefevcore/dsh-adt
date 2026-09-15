@@ -11,7 +11,7 @@
  *     lossless-JSON boundary sanitization (`deepCompact`),
  *   - the `abap-adt-preset` CLI (presets for DSH sessions).
  *
- * Everything else — the 46 `adt_*` tools, destination registry, policy,
+ * Everything else — the 32 `adt_*` tools, destination registry, policy,
  * OCC snapshots, debugger sessions, config layering — lives in the core and
  * is re-exported below for backward compatibility (the pre-0.7.0 `.` entry
  * exported the same surface).

@@ -639,7 +639,7 @@ export function writeTools(deps, ctx) {
             ...ACTIVATE_AFTER_WRITE_PARAM,
             transport: {
                 type: 'string',
-                description: 'Transport request number the change is recorded into, e.g. S4HK900001 (see adt_list_transports, ' +
+                description: 'Transport request number the change is recorded into, e.g. S4HK900001 (see adt_transports, ' +
                     'status=modifiable). When omitted the backend decides on lock — an object already in an open request ' +
                     'stays in it, otherwise the backend creates a NEW task/request. Pass `transport` to control that.',
             },

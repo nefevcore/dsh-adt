@@ -124,11 +124,11 @@ export function testingTools(deps: ToolDeps) {
     description:
       'Run ABAP Test Cockpit checks (ATC / SLIN-based, transaction ATC) on the given objects. Returns findings ' +
       'with severity, check and source ' +
-      'position, plus the result displayId (the run is STORED on the backend — it shows up in adt_list_atc_runs, ' +
+      'position, plus the result displayId (the run is STORED on the backend — it shows up in adt_atc_runs, ' +
       'usually titled "External Request + timestamp" for tool-triggered runs). `durationMs` is the wall-clock time ' +
       'of the whole run. POSITION MAPPING: findings can be reported under the MAIN program name while `line` counts ' +
       'in an INCLUDE — check each finding\'s `uri` before jumping to a line number. For authoritative P1–P4 ' +
-      'aggregates cross-check with adt_list_atc_runs. Pass `variant` to use a named ATC check variant.',
+      'aggregates cross-check with adt_atc_runs. Pass `variant` to use a named ATC check variant.',
     parameters: {
       ...OBJECTS_PARAM,
       variant: { type: 'string', description: 'ATC check variant name (backend-defined).' },
@@ -145,7 +145,7 @@ export function testingTools(deps: ToolDeps) {
           counts: ATC_COUNTS_SCHEMA,
           durationMs: { type: 'integer', required: true },
           variant: { type: 'string' },
-          displayId: { type: 'string', description: 'Result display id — pass to adt_get_atc_result to re-fetch.' },
+          displayId: { type: 'string', description: 'Result display id — pass to adt_atc_runs {displayId} to re-fetch.' },
           title: { type: 'string' },
           checkVariant: { type: 'string' },
           aggregates: ATC_AGGREGATES_SCHEMA,
@@ -157,7 +157,7 @@ export function testingTools(deps: ToolDeps) {
             `INFO ${value.counts.INFO}, WARNING ${value.counts.WARNING}, ERROR ${value.counts.ERROR}, ` +
             `CRITICAL ${value.counts.CRITICAL}, CATASTROPHIC ${value.counts.CATASTROPHIC} (${value.durationMs} ms)` +
             atcAggregatesSuffix(value.aggregates) +
-            `${value.displayId ? `\nResult displayId: ${value.displayId} (use adt_get_atc_result to re-fetch)` : ''}`,
+            `${value.displayId ? `\nResult displayId: ${value.displayId} (use adt_atc_runs {displayId} to re-fetch)` : ''}`,
           ...renderAtcFindings(value.findings),
         ];
         return text(lines.join('\n'));

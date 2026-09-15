@@ -90,7 +90,7 @@ Need to change an ABAP object?
 ├─ a precise spot you can quote     → edit {oldText, newText}  (quote verbatim from your read)
 ├─ a whole FORM/MODULE/block        → edit {start, end}        (bare closers resolve structurally)
 ├─ a rewrite / new file on disk     → edit {source|sourceFile}
-└─ huge file / local tooling        → read (snapshot) → edit the localCopy file → adt_push_object
+└─ huge file / local tooling        → read (snapshot) → edit the localCopy file → edit {sourceFile}
 ```
 
 Ambiguity is always an error that lists the candidates (`occurrence` picks
@@ -100,8 +100,8 @@ one); not-found errors list the closest lines so one re-read converges.
 DDIC 2.0 DDL (auto MANDT key) and ACTIVATES in one call — the output echoes
 the DDL it wrote. Field labels come from the field `description` or a data
 element passed as `type`. Need the selection-screen texts of a program you
-are about to change? `adt_read_textelements` returns them as textpool rows
-(I/S/H) in one read.
+are about to change? `adt_object_read {type:"PROG", name, part:"textelements"}`
+returns them as textpool rows (I/S/H) in one read.
 
 **One call, any verb?** The four `adt_object_*` tools are the verb face: write/read/
 update/delete to the dedicated tool that owns that verb×type — same policy
@@ -122,8 +122,8 @@ Two workflow rules separate reviewable changes from drive-by edits:
    diff; for whole-object rewrites show a unified diff against your last read.)
 2. **Check before you push big changes.** Small surgical edits via
    source edits already run a syntax check on the full source
-   afterwards. For whole-object rewrites ( 
-   `adt_push_object`), run `adt_check` on the object BEFORE writing — a
+   afterwards. For whole-object rewrites (edit with
+   `sourceFile`), run `adt_check` on the object BEFORE writing — a
    syntax error found after the write leaves an inactive broken object
    sitting under a released lock, and check-before-write avoids exactly
    that (check → lock → write → activate, never lock first).
@@ -143,23 +143,23 @@ Two workflow rules separate reviewable changes from drive-by edits:
 
 ## Error analysis loop
 
-`adt_execute` (console output) → `adt_list_dumps` / `adt_get_dump` (ST22:
-header, stack, termination point) → read the failing object (method-level +
-context) → fix → `adt_check` → `adt_run_unit_tests` → gate.
+`adt_execute` (console output) → `adt_dumps` (ST22: list without `dumpId`,
+detail with it — header, stack, termination point) → read the failing object
+(method-level + context) → fix → `adt_check` → `adt_run_unit_tests` → gate.
 
 ## Live debugging (when reading is not enough)
 
-The `adt_debug_*` family speaks the standard ADT debugger — no server-side
-install — but it is **off by default** (`allowDebugger` policy; variable
-WRITES additionally need `allowDebugVariables`). The loop:
+`adt_debug` speaks the standard ADT debugger — no server-side install — but
+it is **off by default** (`allowDebugger` policy; the `setVariable` action
+additionally needs `allowDebugVariables`). One tool, nine actions. The loop:
 
 ```
-adt_debug_breakpoint {action:"set", name, type, line}   → breakpoint id
-adt_debug_session   {action:"listen"}                   → BREAKPOINT HIT (empty = no hit yet)
-adt_debug_inspect   {action:"stack"}                    → where we are
-adt_debug_inspect   {action:"variables", variables:[…]} → what the values are
-adt_debug_step      {step:"stepOver" | "stepInto" | …}  → advance (F5/F6/F7/F8)
-adt_debug_session   {action:"detach"}                   → always end with this
+adt_debug {action:"setBreakpoint", name, type, line}   → breakpoint id
+adt_debug {action:"listen"}                             → BREAKPOINT HIT (empty = no hit yet)
+adt_debug {action:"stack"}                              → where we are
+adt_debug {action:"variables", variables:[…]}           → what the values are
+adt_debug {action:"step", step:"stepOver"|"stepInto"|…} → advance (F5/F6/F7/F8)
+adt_debug {action:"detach"}                             → always end with this
 ```
 
 Facts that save round-trips:
@@ -173,7 +173,7 @@ Facts that save round-trips:
   `unavailable`, stepping and variables still work.
 - `listen` waits (long-poll, default 30 s): set the breakpoint FIRST, then
   trigger the code path (e.g. `adt_execute`), then listen.
-- Changing variable values (`adt_debug_set_variable`) is the highest-risk
+- Changing variable values (`action:"setVariable"`) is the highest-risk
   call in the family — double opt-in by design.
 
 ## Policy errors are refusals, not failures
