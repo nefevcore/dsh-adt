@@ -6,18 +6,34 @@
 
 ## Critical limitations (read first)
 
-### 1. Data-preview SQL is ABAP SQL, not standard SQL
+### 1. Data-preview SQL: the tool adapts the dialect FOR you
 
 `adt_data_preview` (freestyle SQL) goes through the ADT data-preview engine —
-the same one ADT/Eclipse uses. Its dialect differs from what you may assume:
+the same one ADT/Eclipse uses. The dialect is ABAP SQL, but the tool now
+lints and rewrites the well-known traps automatically (each rewrite shows in
+the output note):
 
-| You might write | Verdict | Write instead |
-|---|---|---|
-| `ORDER BY col DESC` | ❌ rejected | `ORDER BY col DESCENDING` |
-| `ORDER BY col ASC` | ❌ rejected | `ORDER BY col ASCENDING` |
-| `LIMIT n` | ❌ not recognized | the `length` parameter (1–500) |
-| `GROUP BY`, `COUNT(*)`, `WHERE` | ✅ works | — |
-| Paging | use `offset`/`length` params | client-side windows |
+| You write | The tool does |
+|---|---|
+| `ORDER BY col DESC` / `ASC` | rewritten to `DESCENDING` / `ASCENDING` |
+| `LIMIT n [OFFSET m]` (trailing) | converted to the `length`/`offset` parameters |
+| `alias.col` | rewritten to `alias~col` (Open SQL selector) |
+| `<>` | rewritten to `!=` |
+| `COUNT(*)` tight parens | padded to `COUNT( * )` |
+| lines > 255 chars | soft-wrapped at whitespace |
+
+Beyond single-table SELECTs the tool COMPILES client-side: **JOINs (INNER/
+LEFT), aggregates (COUNT/SUM/MIN/MAX/AVG), GROUP BY/HAVING and
+IN (SELECT …)** each table is fetched with pushed-down predicates and
+joined/aggregated locally — exact over small sets, approximate beyond the
+row cap (the note says which tables were capped). For CDS views, the
+`associations: true` / `association: '_X'` parameters use the backend-side
+association navigation instead of any join.
+
+Still hard limits (parser-level, refused before any traffic): OR combined
+with LIKE, more than one LIKE per statement, UNION/INTERSECT/EXCEPT,
+double-quoted identifiers, multiple statements, and the mandt column in the
+SELECT list.
 
 ### 2. Writing is not activating — and activation does not cascade
 

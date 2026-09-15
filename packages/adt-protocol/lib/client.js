@@ -1203,6 +1203,40 @@ export class AdtClient {
             throw error;
         }
     }
+    /**
+     * List the associations of a CDS view (the associationlist action of the
+     * datapreview/cds collection — the metadata Eclipse shows when opening a
+     * data preview with associations).
+     */
+    async listCdsAssociations(entity, options = {}) {
+        const params = this.baseQuery({ action: 'associationlist', ddlSourceName: entity });
+        const res = await this.request({
+            path: ENDPOINTS.dataPreviewCdsAssociations(params),
+            accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
+            timeoutMs: 60_000,
+            signal: options.signal,
+        });
+        return parseCdsAssociations(res.text, entity);
+    }
+    /**
+     * Follow one association of a CDS view (the followassociation action):
+     * returns the associated rows for the source entity.
+     */
+    async followCdsAssociation(entity, association, options = {}) {
+        const top = Math.min(Math.max(options.top ?? 100, 1), 5000);
+        const params = this.baseQuery({ action: 'followassociation', ddlSourceName: entity, associationName: association, rowNumber: top });
+        const res = await this.request({
+            path: ENDPOINTS.dataPreviewCdsFollow(params),
+            accept: 'application/vnd.sap.adt.datapreview.table.v1+xml',
+            timeoutMs: 60_000,
+            signal: options.signal,
+        });
+        // `name` reflects what was previewed (the target the backend reports in
+        // its XML entity attribute — fall back to the path expression).
+        const parsed = parseDataPreview(res.text, '');
+        const name = parsed.name || `${entity}.${association}`;
+        return { ...parsed, name, association, source: entity };
+    }
     // ---------------------------------------------------------------------------
     // Version sources & lock state
     // ---------------------------------------------------------------------------
@@ -2526,6 +2560,33 @@ function parseWhereUsed(xml, objectUri) {
         references: refs,
     };
 }
+/** CDS associationlist parser: `associationlist` XML → association records.
+ *  The wire shape (from the discovery template + community captures) is a
+ *  list of association elements; attribute names vary by release, so both
+ *  the long forms and the terse ones are read. */
+function parseCdsAssociations(xml, entity) {
+    const associations = [];
+    for (const m of xml.matchAll(/<(?:[\w-]+:)?association\b([^>]*)\/?>/g)) {
+        const attrs = m[1] ?? '';
+        const get = (names) => {
+            for (const n of names) {
+                const hit = new RegExp(`(?:^|\\s)${n}="([^"]*)"`).exec(attrs);
+                if (hit)
+                    return hit[1];
+            }
+            return undefined;
+        };
+        const name = get(['name', 'associationName', 'association']);
+        if (!name)
+            continue;
+        associations.push({
+            name,
+            target: get(['target', 'targetEntity', 'ref']) || undefined,
+            cardinality: get(['cardinality', 'minMax', 'associationCardinality']) || undefined,
+        });
+    }
+    return { entity, associations };
+}
 /** Data-preview parser: column-major `dataPreview:` XML → row-major records. */
 function parseDataPreview(xml, name) {
     const totalRows = Number(localText(xml, 'totalRows') ?? 0) || 0;
@@ -2539,7 +2600,12 @@ function parseDataPreview(xml, name) {
         length: a.length !== undefined ? Number(a.length) || undefined : undefined,
     }));
     const sections = [...xml.matchAll(/<(?:[\w-]+:)?columns\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?columns>/g)];
-    const byColumn = sections.map((s) => [...s[1].matchAll(/<(?:[\w-]+:)?data\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?data>/g)].map((d) => d[1].replace(/<[^>]+>/g, '').trim()));
+    // Empty cells serialize as SELF-CLOSING `<data/>` (verified on an on-prem
+    // 7.5x backend, ZFIT_MONI_01): the naive paired-tag regex skips the empty
+    // element's opening tag and captures the NEXT cell's content, shifting the
+    // whole column up — the alt branch below matches the self-closing form and
+    // keeps the cell in place as ''.
+    const byColumn = sections.map((s) => [...s[1].matchAll(/<(?:[\w-]+:)?data\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w-]+:)?data>)/g)].map((d) => (d[1] ?? '').replace(/<[^>]+>/g, '').trim()));
     const rows = [];
     const maxRow = byColumn.reduce((max, col) => Math.max(max, col.length), 0);
     for (let r = 0; r < maxRow; r++) {
@@ -2550,7 +2616,9 @@ function parseDataPreview(xml, name) {
         rows.push(row);
     }
     const parsed = {
-        name,
+        // Prefer the entity the backend actually reports; the caller's `name` is
+        // the fallback (association navigation passes '' to let the target win).
+        name: parseAttrs(xml).entity || name,
         totalRows,
         queryExecutionTime: Number.isFinite(queryExecutionTime) ? queryExecutionTime : undefined,
         columns,

@@ -223,10 +223,12 @@ ABAP 短转储（ST22）读取，**单工具两形**：**无 `dumpId`** = 转储
 
 ### adt_data_preview 🔒
 读表 / CDS 视图行数据，或跑 freestyle SELECT（SE16/SE16N 式数据浏览器）。`kind` 枚举**与其他工具的类型码完全一致**（TABL/VIEW/STRU/DDLS，对齐 ADT URI 命名空间 /ddic/tables、/ddic/views、/ddic/structures、/ddls），模型无需切换命名体系。
-- **入参**：`name`（大写实体名）+ `kind`（enum TABL/VIEW/STRU/DDLS，默认 TABL），或 `sql`（二选一）；`length`（行数窗口，默认 100，钳 1–5000；旧别名 `top`）；`offset`（跳过前 N 行——行范围 = offset..offset+length，客户端分页，SQL 路径同样生效）。
-- **返回**：`source, name, offset, totalRows, note?, queryExecutionTime?, columns[] { name, type, description?, length? }, rows[], rawXml?`。
+- **入参**：`name`（大写实体名）+ `kind`（enum TABL/VIEW/STRU/DDLS，默认 TABL），或 `sql`（二选一）；`length`（行数窗口，默认 100，钳 1–5000；旧别名 `top`）；`offset`（跳过前 N 行——行范围 = offset..offset+length，客户端分页，SQL 路径同样生效）；`associations: true`（列出 CDS 视图的 association：名称/目标/基数）；`association: '_Name'`（跟随一条 association，返回关联目标行——CDS 场景的后端侧 JOIN）。
+- **返回**：`source, name, offset, totalRows, note?, queryExecutionTime?, columns[] { name, type, description?, length? }, rows[], rawXml?`；SQL 编译路径 `source` 为 `sql (compiled)`，note 携带执行的每条生成语句与保真度说明。
+- **方言自适应（sql-lint）**：DESC/ASC→DESCENDING/ASCENDING、尾部 LIMIT/OFFSET→length/offset 参数、`alias.col`→`alias~col`、`<>`→`!=`、聚合括号 padding、超 255 字符行软换行——每次改写记入 note。硬拒（解析器级）：OR+LIKE、多 LIKE、UNION/INTERSECT/EXCEPT、双引号标识符、多语句。
+- **客户端编译（sql-compiler）**：JOIN（INNER/LEFT）/聚合/GROUP BY/HAVING/IN(SELECT) 自动降级为「每表单查 + 谓词下推 + 本地哈希连接/聚合」——小集合精确，超出行上限近似（note 标明被截断的表）。
 - ABAP Cloud 阻止直连 DB 表（CDS/SQL 可用）；无 datapreview 服务的 profile 给明确错误。
-- **读侧治理（blockedTables）**：目的地启用 `blockedTablesProfile` 后，两条路径都在**发请求前**解析目标表（SQL 走 FROM/JOIN 提取器）并过敏感表目录——命中即 `[POLICY] blockedTables: <表> — <类别>: <理由>` 拒绝（**零请求**，deny 无豁免通道）；`allowedTables` 豁免的读取照常并带审计 note。目录分层：minimal（银行/客户供应商 PII/地址/认证/HR/税务）⊂ standard（+交易单据等受保护业务数据）⊂ strict（+审计日志/通信工作流/`Z*` 命名空间）。
+- **读侧治理（blockedTables）**：目的地启用 `blockedTablesProfile` 后，两条路径都在**发请求前**解析目标表（SQL 走 FROM/JOIN 提取器，编译路径在生成每条子查询前对原始 SQL 全量检查）并过敏感表目录——命中即 `[POLICY] blockedTables: <表> — <类别>: <理由>` 拒绝（**零请求**，deny 无豁免通道）；`allowedTables` 豁免的读取照常并带审计 note。目录分层：minimal（银行/客户供应商 PII/地址/认证/HR/税务）⊂ standard（+交易单据等受保护业务数据）⊂ strict（+审计日志/通信工作流/`Z*` 命名空间）。
 
 ---
 

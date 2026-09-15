@@ -279,6 +279,11 @@ test('data preview returns columns and rows (ddic + cds + freestyle)', async () 
   assert.equal(cds.rows.length, 5); // exactly `top` generated rows
   assert.equal(cds.rows[0]?.ID, '1');
   assert.equal(cds.rows.at(-1)?.TEXT, 'Row 5');
+  // Odd rows carry self-closing empty TEXT cells (real wire form): they must
+  // stay IN PLACE as '' instead of shifting later values up.
+  assert.equal(cds.rows[1]?.TEXT, '');
+  assert.equal(cds.rows[3]?.TEXT, '');
+  assert.equal(cds.rows[1]?.ID, '2'); // neighbors unaffected
 
   const ddic = await c.dataPreview('T001', 'ddic');
   assert.ok(ddic.columns.some((col) => col.name === 'MANDT'));

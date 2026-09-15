@@ -142,6 +142,37 @@ test('dataPreview: the SQL fallback refuses entity names with non-DDIC character
   });
 });
 
+test('runSqlQuery: self-closing <data/> empty cells keep their row position (wire truth from IMPC D01)', async () => {
+  // Verbatim wire shape captured from an on-prem 7.5x backend (ZFIT_MONI_01):
+  // empty cells serialize as <dataPreview:data/> and MUST parse as '' in
+  // place — the old paired-tag regex skipped them and shifted every later
+  // value of the column up (rows silently misaligned vs the GUI preview).
+  const wire = `<?xml version="1.0" encoding="utf-8"?>
+<dataPreview:tableData xmlns:dataPreview="http://www.sap.com/adt/dataPreview">
+<dataPreview:totalRows>0</dataPreview:totalRows>
+<dataPreview:columns><dataPreview:metadata dataPreview:name="ZID" dataPreview:type="C"/><dataPreview:dataSet>
+<dataPreview:data>CONFIG</dataPreview:data><dataPreview:data>S06_01</dataPreview:data>
+</dataPreview:dataSet></dataPreview:columns>
+<dataPreview:columns><dataPreview:metadata dataPreview:name="ZTEXT" dataPreview:type="C"/><dataPreview:dataSet>
+<dataPreview:data>通用配置信息</dataPreview:data><dataPreview:data/><dataPreview:data>今日支付金额/笔数</dataPreview:data>
+</dataPreview:dataSet></dataPreview:columns>
+</dataPreview:tableData>`;
+  const { fetch } = recordingFetch(() => xml(wire));
+  const client = new AdtClient(destination, fetch);
+
+  const result = await client.runSqlQuery('SELECT ZID, ZTEXT FROM ZFIT_MONI_01');
+  // Row count follows the longest column (ZTEXT: 3 cells).
+  assert.equal(result.rows.length, 3);
+  assert.equal(result.rows[0]?.ZTEXT, '通用配置信息');
+  // The self-closing cell stays an in-place empty string…
+  assert.equal(result.rows[1]?.ZTEXT, '');
+  // …and does NOT swallow the next value (今日支付金额/笔数 lands on row 3,
+  // not shifted onto S06_01's row).
+  assert.equal(result.rows[1]?.ZID, 'S06_01');
+  assert.equal(result.rows[2]?.ZTEXT, '今日支付金额/笔数');
+  assert.equal(result.rows[2]?.ZID, null); // ZID column ran out of cells
+});
+
 test('createObject: surfaces the CORRNR reported in the create response (M7)', async () => {
   // The POST flows through the CSRF probe first — serve a token there.
   const { fetch } = recordingFetch((url) => {

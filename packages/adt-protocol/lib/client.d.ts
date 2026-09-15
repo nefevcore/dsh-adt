@@ -18,7 +18,7 @@
 import { type XmlNode } from './xml.js';
 import { type AdtCreateTableRequest } from './tableddl.js';
 import { type AdtTextElements } from './textelements.js';
-import type { AdtActivationResult, AdtAtcResult, AdtAtcRunSummary, AdtBatchRequestPart, AdtBatchResponsePart, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtCreateTableResult, AdtDebugBreakpoint, AdtDebugListenResult, AdtDebugStack, AdtDebugStepResult, AdtDebugVariable, AdtDestination, AdtDiscovery, AdtDumpDetail, AdtDumpSummary, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtObjectVersion, AdtObjectLockInfo, AdtRunResult, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtStructureChanges, AdtStructureData, AdtStructureKind, AdtStructureWriteResult, AdtSystemInfo, AdtTransport, AdtUnitRunResult, AdtWhereUsedResult, AdtDataPreview } from './types.js';
+import type { AdtActivationResult, AdtAtcResult, AdtAtcRunSummary, AdtBatchRequestPart, AdtBatchResponsePart, AdtCheckResult, AdtCreateObjectRequest, AdtCreateObjectResult, AdtCreateTableResult, AdtDebugBreakpoint, AdtDebugListenResult, AdtDebugStack, AdtDebugStepResult, AdtDebugVariable, AdtDestination, AdtDiscovery, AdtDumpDetail, AdtDumpSummary, AdtMessage, AdtObjectRef, AdtObjectSearchHit, AdtObjectVersion, AdtObjectLockInfo, AdtRunResult, AdtSearchResult, AdtSource, AdtSourceSearchHit, AdtStructureChanges, AdtStructureData, AdtStructureKind, AdtStructureWriteResult, AdtSystemInfo, AdtTransport, AdtUnitRunResult, AdtWhereUsedResult, AdtDataPreview, AdtCdsAssociationList, AdtCdsAssociationNavigation } from './types.js';
 /** Error raised for HTTP-level or protocol-level failures. */
 export declare class AdtError extends Error {
     readonly status?: number | undefined;
@@ -291,6 +291,22 @@ export declare class AdtClient {
         top?: number;
         signal?: AbortSignal;
     }): Promise<AdtDataPreview>;
+    /**
+     * List the associations of a CDS view (the associationlist action of the
+     * datapreview/cds collection — the metadata Eclipse shows when opening a
+     * data preview with associations).
+     */
+    listCdsAssociations(entity: string, options?: {
+        signal?: AbortSignal;
+    }): Promise<AdtCdsAssociationList>;
+    /**
+     * Follow one association of a CDS view (the followassociation action):
+     * returns the associated rows for the source entity.
+     */
+    followCdsAssociation(entity: string, association: string, options?: {
+        top?: number;
+        signal?: AbortSignal;
+    }): Promise<AdtCdsAssociationNavigation>;
     /** Fetch the source of one object version by its content URI (from getVersions). */
     getVersionSource(contentUri: string, options?: {
         signal?: AbortSignal;

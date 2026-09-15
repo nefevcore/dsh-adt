@@ -88,6 +88,14 @@ export const ENDPOINTS = {
   dataPreviewFreestyle: (query?: AdtQueryParams) =>
     `${ADT_BASE}/datapreview/freestyle${toQuery(query)}`,
 
+  /** CDS associations of a data-preview entity (action=associationlist). */
+  dataPreviewCdsAssociations: (query?: AdtQueryParams) =>
+    `${ADT_BASE}/datapreview/cds${toQuery(query)}`,
+
+  /** Follow one CDS association (action=followassociation). */
+  dataPreviewCdsFollow: (query?: AdtQueryParams) =>
+    `${ADT_BASE}/datapreview/cds${toQuery(query)}`,
+
   /** Repository node structure (package contents, tree browsing). */
   nodeStructure: (query?: AdtQueryParams) =>
     `${ADT_BASE}/repository/nodestructure${toQuery(query)}`,

@@ -68,6 +68,10 @@ export const ENDPOINTS = {
     dataPreviewCds: (name, query) => `${ADT_BASE}/datapreview/cds/${encodeURIComponent(name)}${toQuery(query)}`,
     /** Freestyle SQL data preview. */
     dataPreviewFreestyle: (query) => `${ADT_BASE}/datapreview/freestyle${toQuery(query)}`,
+    /** CDS associations of a data-preview entity (action=associationlist). */
+    dataPreviewCdsAssociations: (query) => `${ADT_BASE}/datapreview/cds${toQuery(query)}`,
+    /** Follow one CDS association (action=followassociation). */
+    dataPreviewCdsFollow: (query) => `${ADT_BASE}/datapreview/cds${toQuery(query)}`,
     /** Repository node structure (package contents, tree browsing). */
     nodeStructure: (query) => `${ADT_BASE}/repository/nodestructure${toQuery(query)}`,
     /** Activate a list of objects (POST + `method=activate`). */

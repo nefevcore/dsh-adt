@@ -15,41 +15,15 @@ import { AdtError, type AdtDataPreview } from '@nefevcore/abap-adt-protocol';
 import { extractTablesFromSql } from '../tableblocklist.js';
 import type { AdtPolicy } from '../policy.js';
 import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, optStr, text, type ToolDeps } from './common.js';
+import { lintFreestyleSql, SqlLintError } from './sql-lint.js';
+import { compileAndRun, collectTables, needsCompilation, parseSelect, stripSingleTableAlias, SqlCompilerError } from './sql-compiler.js';
 
 /**
- * Client-side freestyle-SQL pre-check for constructs the ADT data-preview
- * endpoint does not support (usage reports 1.1/1.2, IMPC D01): JOINs,
- * subqueries and aggregate functions all fail with MISLEADING backend errors
- * ("only one SELECT statement allowed" / "Unknown column name MIN(...)" /
- * name-character complaints) — detect them locally and fail with the actual
- * reason and the workaround, before any traffic.
+ * Client-side freestyle-SQL handling: the P1 lint (sql-lint.ts) rewrites the
+ * well-known dialect traps, and the P2 compiler (sql-compiler.ts) degrades
+ * multi-table / aggregate statements into single-table fetches with local
+ * evaluation. What remains here is orchestration only.
  */
-function assertFreestyleSqlSupported(sql: string): void {
-  const fail = (reason: string, remedy: string): never => {
-    throw new Error(
-      `adt_data_preview: freestyle SQL does not support ${reason} (the backend error for this is misleading). ` +
-        `Remedy: ${remedy}`,
-    );
-  };
-  // JOIN in any form: FROM A ... JOIN B / LEFT/RIGHT/FULL [OUTER] JOIN.
-  if (/\b(?:left|right|full|inner|outer)?\s*join\b/i.test(sql)) {
-    fail(
-      'JOIN',
-      'query the tables separately (single-table SELECT only) and correlate the results locally',
-    );
-  }
-  // Subqueries: a nested '(' + SELECT anywhere.
-  if (/\(\s*select\b/i.test(sql)) {
-    fail('subqueries', 'flatten to single-table SELECTs and combine locally');
-  }
-  // Aggregates: COUNT/SUM/MIN/MAX/AVG as function calls (not column names).
-  if (/\b(?:count|sum|min|max|avg)\s*\(/i.test(sql)) {
-    fail(
-      'aggregate functions',
-      'fetch the rows (<=500 per call) and compute counts/min/max locally',
-    );
-  }
-}
 
 /** True when a backend 400 says the SQL references a column that does not
  *  exist — the error text itself is accurate but costly to iterate on, so the
@@ -124,9 +98,12 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
         'set blockedTablesProfile — reads of sensitive tables (e.g. customer/bank/HR data like KNA1, LFA1, ' +
         'BUT000, USR02) are then refused with the reason BEFORE any request is sent. ' +
         'Note: ABAP Cloud (BTP) blocks direct database-table preview; CDS views and freestyle SQL work there. ' +
-        'Freestyle SQL restrictions: SINGLE-TABLE SELECT only — no JOIN, no subqueries, no aggregate functions ' +
-        '(COUNT/SUM/MIN/MAX/AVG) and no client column (mandt) in the SELECT list; the backend rejects all of ' +
-        'these (with misleading errors — the tool pre-checks and tells you the actual reason). To learn a ' +
+        'The sql dialect is ADAPTED automatically: DESC/ASC→DESCENDING/ASCENDING, LIMIT n→the `length` param, ' +
+        'alias.col→alias~col, <>→!=, long lines wrapped (every rewrite shows in the note). JOINs, aggregates ' +
+        '(COUNT/SUM/MIN/MAX/AVG), GROUP BY/HAVING and IN (SELECT …) are COMPILED client-side: each table is ' +
+        'fetched single-table (predicates pushed down) and joined/aggregated locally — exact over small sets, ' +
+        'approximate beyond the row cap (noted in the output). OR+LIKE and multiple LIKEs are refused (parser ' +
+        'limit; run one SELECT per pattern). No mandt column in the SELECT list. To learn a ' +
         "table's real columns, preview it with name+kind and length=1 and read the `columns` list.",
       parameters: {
         name: { type: 'string', description: 'Table or CDS view name (uppercase), e.g. ZCDS_DEMO, T001.' },
@@ -134,6 +111,18 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
           type: 'string',
           enum: ['TABL', 'VIEW', 'STRU', 'DDLS'],
           description: 'Entity kind (same type codes as other tools; aligned with the ADT URI namespaces). Default TABL.',
+        },
+        associations: {
+          type: 'boolean',
+          description:
+            'List the CDS associations of the entity (name+kind, DDLS): name, target and cardinality of each. ' +
+            'The JOIN-alternative for CDS views — follow one with the `association` parameter.',
+        },
+        association: {
+          type: 'string',
+          description:
+            "Follow ONE CDS association of the entity (e.g. '_Bookings') and return the associated rows — " +
+            'the backend-side join over the association. Pair with name+kind (DDLS).',
         },
         sql: { type: 'string', description: 'Freestyle SQL SELECT to run (alternative to name+kind).' },
         length: {
@@ -212,12 +201,32 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
               );
             }
             if (error instanceof AdtError && error.status === 400) {
+              const msg = error.message ?? '';
+              // Column-selector dialects DISAGREE per backend (IMPC-class:
+              // `~` expected; kic-class: `.` expected) — a selector complaint
+              // suggests the OTHER spelling.
+              if (/[~.]\s*is expected|not allowed here/i.test(msg) || /~/.test(msg)) {
+                const swap = /is expected/i.test(msg) && /\./.test(msg) ? 'column selector: this backend expects `.` (alias.col) — you wrote `~`' : 'column selector: this backend may expect `~` (alias~col) — you wrote `.`';
+                throw new Error(
+                  `SQL rejected by the backend (HTTP 400): ${msg}. Common cause: ${swap}. ` +
+                    'Drop the alias in single-table SELECTs (bare column names pass everywhere).',
+                );
+              }
+              // Association endpoints on some backends need a stateful
+              // launchfreestyle session (GET action → 400 "DDL source could
+              // not be read") — point at the source-reading alternative.
+              if (/DDL source.*could not be read/i.test(msg)) {
+                throw new Error(
+                  `Association navigation is not reachable on this backend (HTTP 400): ${msg}. ` +
+                    `Alternative: read the association definitions from the view's DDL source — ` +
+                    `adt_read_object { name: '${name}', type: 'DDLS' } and look for the association clauses.`,
+                );
+              }
               // The most common freestyle-SQL 400 on on-prem backends: the
               // client column (mandt) in the SELECT list — the parser rejects
               // cross-client field access outright. Only reword when the
               // backend actually says so (audit P3: ANY sql 400 used to be
               // misattributed to mandt).
-              const msg = error.message ?? '';
               if (/mandt|cross.?client/i.test(msg)) {
                 throw new Error(
                   `SQL rejected by the backend (HTTP 400): ${msg}. Common cause: the client column ` +
@@ -283,30 +292,64 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
 
         const sql = optStr(args.sql);
         if (sql) {
-          // Light SELECT-only lint (audit M3): the freestyle endpoint is a
-          // read-only data-preview API — refuse anything that does not lead
-          // with SELECT instead of relying on the backend parser alone.
-          if (!/^\s*select[\s(]/i.test(sql)) {
-            throw new Error(
-              'adt_data_preview: `sql` accepts a SELECT statement only (the data-preview API is read-only). ' +
-                `Got: ${sql.trim().slice(0, 60)}${sql.trim().length > 60 ? '…' : ''}`,
-            );
-          }
-          // Read-side governance: every FROM/JOIN target is resolved and
-          // checked BEFORE the request is sent — a blocked table answers
-          // [POLICY] with zero traffic to SAP. This runs BEFORE the
-          // unsupported-construct pre-check on purpose: governance denials
-          // outrank syntax advice (a JOIN over a blocked table reports the
-          // POLICY reason, not the JOIN reason).
+          // P1 dialect lint (sql-lint.ts): SELECT-only gate, well-known trap
+          // rewrites, hard refusals for what the dialect cannot express.
+          const linted = lintFreestyleSql(sql);
+          // Read-side governance FIRST (denials outrank syntax advice): every
+          // FROM/JOIN target of the ORIGINAL statement is resolved and
+          // checked BEFORE any request is sent — zero traffic on denial.
           applyReadGovernance(entry.policy, extractTablesFromSql(sql), 'adt_data_preview (sql)', notes);
-          // Unsupported-construct pre-check (usage reports 1.1/1.2): JOINs,
-          // subqueries and aggregates fail remotely with MISLEADING errors —
-          // catch them here, with the actual reason and remedy, zero traffic.
-          assertFreestyleSqlSupported(sql);
-          // Fetch offset+length rows (within the cap) and slice, so the SQL
-          // path honors the same offset/length row-range as entity previews.
+          // P2 compilation decision: single-table plain SELECTs go straight
+          // to the endpoint (dialect-linted); anything richer (JOIN /
+          // aggregate / GROUP BY / HAVING / IN-subquery) is compiled into
+          // single-table fetches + local evaluation (sql-compiler.ts).
+          let compiled = false;
+          try {
+            const ast = parseSelect(linted.sql);
+            compiled = needsCompilation(ast);
+          } catch (error) {
+            if (error instanceof SqlCompilerError) {
+              // Shape the parser cannot handle — if the backend can, let it
+              // try (the lint already refused what we KNOW fails); otherwise
+              // surface the compiler's remedy.
+              const singleTable = !/\bjoin\b|\bgroup\s+by\b|\bhaving\b/i.test(linted.sql) && !/\bin\s*\(\s*select\b/i.test(linted.sql);
+              if (!singleTable) throw error;
+            } else {
+              throw error;
+            }
+          }
+          if (linted.rewrites.length > 0) {
+            notes.push(`sql dialect rewrites: ${linted.rewrites.map((r) => r.detail).join('; ')}`);
+          }
           const paging = resolveRowWindow(args, notes);
-          const result = await run(() => entry.client.runSqlQuery(sql, { top: paging.fetchTop, signal: exec.signal }));
+          if (compiled) {
+            const result = await compileAndRun(linted.sql, (fetchSql, fetchOpts) =>
+              run(() => entry.client.runSqlQuery(fetchSql, { top: fetchOpts.top, signal: fetchOpts.signal ?? exec.signal })),
+            { length: paging.length, offset: paging.offset, signal: exec.signal });
+            for (const n of result.notes) notes.push(n);
+            notes.push(`compiled client-side — statements executed: ${result.executedSqls.join(' ; ')}`);
+            return {
+              source: 'sql (compiled)',
+              name: 'QUERY',
+              client: entry.config.client,
+              offset: paging.offset,
+              totalRows: result.rows.length,
+              note: notes.length ? notes.join('; ') : undefined,
+              columns: result.columns,
+              rows: result.rows,
+            };
+          }
+          // Single-table path: normalize to the bare (alias-free) spelling —
+          // backends disagree on selector grammar (a~col vs a.col) and some
+          // reject bare FROM aliases with a MISLEADING "only one SELECT"
+          // error; bare names pass everywhere. Then fetch offset+length rows
+          // (within the cap) and slice, honoring the entity-preview window.
+          const bare = stripSingleTableAlias(linted.sql);
+          if (bare && bare !== linted.sql) {
+            notes.push('single-table statement normalized: alias dropped, column prefixes stripped (selector grammar varies by backend)');
+            linted.sql = bare;
+          }
+          const result = await run(() => entry.client.runSqlQuery(linted.sql, { top: paging.fetchTop, signal: exec.signal }));
           const rows = pageRows(result.rows, paging.offset, paging.length, notes);
           return toOutput('sql', result.name, result, paging, rows);
         }
@@ -322,6 +365,46 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
         // read target (for a CDS view this checks the VIEW name — its base
         // tables cannot be resolved client-side; exempt or mask at view level).
         applyReadGovernance(entry.policy, [name], 'adt_data_preview', notes);
+
+        // CDS association navigation (P3): `associations` lists them,
+        // `association` follows one — the backend-side join for CDS views.
+        const wantAssociations = args.associations === true;
+        const followAssociation = optStr(args.association);
+        if (wantAssociations || followAssociation) {
+          if (mode !== 'cds') {
+            throw new Error('adt_data_preview: `associations`/`association` apply to CDS views (kind=DDLS) only');
+          }
+          if (wantAssociations && !followAssociation) {
+            const list = await run(() => entry.client.listCdsAssociations(name, { signal: exec.signal }));
+            return {
+              source: 'associations',
+              name,
+              client: entry.config.client,
+              offset: 0,
+              totalRows: list.associations.length,
+              note: notes.length ? notes.join('; ') : undefined,
+              columns: [
+                { name: 'NAME', type: 'CHAR' },
+                { name: 'TARGET', type: 'CHAR' },
+                { name: 'CARDINALITY', type: 'CHAR' },
+              ],
+              rows: list.associations.map((a) => ({
+                NAME: a.name,
+                TARGET: a.target ?? '',
+                CARDINALITY: a.cardinality ?? '',
+              })),
+            };
+          }
+          if (followAssociation) {
+            const paging = resolveRowWindow(args, notes);
+            const result = await run(() =>
+              entry.client.followCdsAssociation(name, followAssociation, { top: paging.fetchTop, signal: exec.signal }),
+            );
+            const rows = pageRows(result.rows, paging.offset, paging.length, notes);
+            return toOutput(`association ${followAssociation}`, result.name, result, paging, rows);
+          }
+        }
+
         if (typeof args.length === 'number' && typeof args.top === 'number' && args.length !== args.top) {
           notes.push('both `length` and `top` given; `length` wins (`top` is a deprecated alias)');
         }

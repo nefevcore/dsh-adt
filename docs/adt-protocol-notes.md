@@ -235,6 +235,7 @@ TABL/STRU 不在结构化编辑器范围：现代系统上它们有 DDL 源（`/
 | **ATC finding 全挂主程序名、行号却是 include 的** | 后端把程序所有 finding 嵌在主程序 `object` 下，位置在 finding 自己的 `location` URI 里 | 解析出 `locationUri`（`#start=` 前的 URI 部分），工具输出为每条 finding 的 `uri` 字段，渲染时标注 `(in <include>)` |
 | **`adt_get_transport` 传任务号返回父请求** | 真实 CTO 行为：任务号解析到父请求（版本历史记录的是任务级号） | 保留该行为，输出 `requestedNumber` + `note` 显式标出任务→父请求映射 |
 | **`adt_system_info` release 为空** | release 藏在备用 feature 键里 | 依次探测 JSON `release`、`release`、`SAP_SYSTEM_RELEASE`、`SAP_BASIS_RELEASE`、`SAP_SYSTEM_RELEASE_ID`（注意用 `||`，空串不能短路） |
+| **`adt_data_preview` 结果与 GUI 对不上（ZFIT_MONI_01，impc-test）** | 列主序 XML 中空单元格序列化为**自闭合** `<dataPreview:data/>`；旧解析正则只配对开闭标签，跳过空元素后捕获下一个单元格内容，空格后的 `.replace(/<[^>]+>/g,'')` 把吞入的空标签洗掉——含空值的列整体上移错位（S06_01 显示 S06_03 的 ZTEXT/ZIMPL） | 解析正则加自闭合分支：`/<(?:[\w-]+:)?data\b[^>]*?(?:\/>|>([\s\S]*?)<\/…data>)/g`，空单元格原地保位为 `''`。另一同源现象：freestyle 查询 `totalRows` 恒为 0（后端不统计），`9/0 row(s)` 属实——工具层已回退为 fetch 数并注明 |
 | **编辑报成功但源码被静默打回原样**（本次最大事故） | 同一开发账号的另一个会话持有旧缓冲区，在写入解锁**之后**整缓冲保存覆盖；写前 OCC 哈希校验只保护写前窗口，感知不到写后覆盖；版本库还留下 99999 临时版本号加剧误判 | 三个写工具（edit/write/push）在解锁后**回读验证**：与所写内容做容错比对（CRLF/行尾空白），不一致 → `persisted:false` + 醒目告警（重读重做、勿激活）；读失败 → `persisted:undefined` + 提示回读确认。回读结果同时刷新本地快照（OCC 基准 = 真实服务端状态） |
 
 ### 标准操作顺序（沉淀）

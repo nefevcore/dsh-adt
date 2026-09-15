@@ -176,6 +176,31 @@ export interface AdtDataPreview {
   rawXml?: string;
 }
 
+/** One CDS association of a data-preview entity (associationlist action). */
+export interface AdtCdsAssociation {
+  /** Association name as used in path expressions (e.g. `_Booking`). */
+  name: string;
+  /** Target entity name (fully qualified when the backend sends it so). */
+  target?: string;
+  /** Association cardinality text as reported (e.g. `1..*`). */
+  cardinality?: string;
+}
+
+/** Result of listing a CDS entity's associations. */
+export interface AdtCdsAssociationList {
+  entity: string;
+  associations: AdtCdsAssociation[];
+}
+
+/** Result of following one association (the navigation action returns a
+ *  data-preview table of the target, scoped to the source row). */
+export interface AdtCdsAssociationNavigation extends AdtDataPreview {
+  /** The association that was followed (e.g. `_Booking`). */
+  association: string;
+  /** The source entity the navigation started from. */
+  source: string;
+}
+
 // ---------------------------------------------------------------------------
 // Debugger (standard ADT REST debugger, /sap/bc/adt/debugger/*)
 // ---------------------------------------------------------------------------

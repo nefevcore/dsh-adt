@@ -64,6 +64,10 @@ export declare const ENDPOINTS: {
     readonly dataPreviewCds: (name: string, query?: AdtQueryParams) => string;
     /** Freestyle SQL data preview. */
     readonly dataPreviewFreestyle: (query?: AdtQueryParams) => string;
+    /** CDS associations of a data-preview entity (action=associationlist). */
+    readonly dataPreviewCdsAssociations: (query?: AdtQueryParams) => string;
+    /** Follow one CDS association (action=followassociation). */
+    readonly dataPreviewCdsFollow: (query?: AdtQueryParams) => string;
     /** Repository node structure (package contents, tree browsing). */
     readonly nodeStructure: (query?: AdtQueryParams) => string;
     /** Activate a list of objects (POST + `method=activate`). */

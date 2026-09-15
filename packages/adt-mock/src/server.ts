@@ -130,7 +130,14 @@ function dataPreviewXml(entity: string, query = '', rows = 2): string {
   const count = Math.max(1, Math.min(rows, 5000));
   const mandt = Array.from({ length: count }, () => '<dataPreview:data>100</dataPreview:data>').join('');
   const ids = Array.from({ length: count }, (_, i) => `<dataPreview:data>${i + 1}</dataPreview:data>`).join('');
-  const texts = Array.from({ length: count }, (_, i) => `<dataPreview:data>Row ${i + 1}</dataPreview:data>`).join('');
+  // TEXT column mirrors the real wire form (on-prem 7.5x): empty cells are
+  // SELF-CLOSING <dataPreview:data/> and every other cell is blank — a
+  // regression guard for the parser's empty-cell handling (values used to
+  // shift up by one per skipped empty element).
+  const texts = Array.from(
+    { length: count },
+    (_, i) => (i % 2 === 1 ? '<dataPreview:data/>' : `<dataPreview:data>Row ${i + 1}</dataPreview:data>`),
+  ).join('');
   return `<dataPreview:dataPreview xmlns:dataPreview="http://www.sap.com/adt/datapreview" entity="${xmlEscape(entity)}">
   <dataPreview:totalRows>1234</dataPreview:totalRows>
   <dataPreview:queryExecutionTime>1.5</dataPreview:queryExecutionTime>
@@ -764,6 +771,51 @@ function hDataPreviewFreestyle({ res, url }: RequestCtx): void {
   const rowNumber = Number(url.searchParams.get('rowNumber') ?? 2) || 2;
   res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
   res.end(adtXml(dataPreviewXml('QUERY', sql, rowNumber)));
+}
+
+// ---- CDS associations (datapreview/cds action=associationlist / followassociation) ----
+
+/** Mock association catalog: every CDS entity carries these two. */
+const CDS_ASSOCIATIONS: Record<string, Array<{ name: string; target: string; cardinality: string }>> = {
+  ZCDS_DEMO: [
+    { name: '_Carrier', target: 'ZCDS_CARRIER', cardinality: '1..1' },
+    { name: '_Bookings', target: 'ZCDS_BOOKING', cardinality: '1..*' },
+  ],
+};
+
+function hDataPreviewCdsAssociations({ res, url }: RequestCtx): void {
+  const action = url.searchParams.get('action');
+  const entity = (url.searchParams.get('ddlSourceName') ?? '').toUpperCase();
+  const list = CDS_ASSOCIATIONS[entity] ?? [];
+  if (action === 'associationlist') {
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
+    res.end(
+      adtXml(
+        `<assoc:associationlist xmlns:assoc="http://www.sap.com/adt/datapreview">\n` +
+          list.map((a) => `  <assoc:association name="${a.name}" target="${a.target}" cardinality="${a.cardinality}"/>`).join('\n') +
+          `\n</assoc:associationlist>`,
+      ),
+    );
+    return;
+  }
+  if (action === 'followassociation') {
+    const associationName = url.searchParams.get('associationName') ?? '';
+    const hit = list.find((a) => a.name.toUpperCase() === associationName.toUpperCase());
+    if (!hit) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/xml');
+      res.end(errorXml(`Association ${associationName} does not exist on ${entity}`));
+      return;
+    }
+    const rowNumber = Number(url.searchParams.get('rowNumber') ?? 2) || 2;
+    res.setHeader('Content-Type', 'application/vnd.sap.adt.datapreview.table.v1+xml');
+    // The entity attribute carries the TARGET (what a real backend reports).
+    res.end(adtXml(dataPreviewXml(hit.target, '', rowNumber)));
+    return;
+  }
+  res.statusCode = 400;
+  res.setHeader('Content-Type', 'application/xml');
+  res.end(errorXml(`Unsupported action '${action}' on /datapreview/cds`));
 }
 
 // ---- Runtime dumps (ST22 short-dump analysis) ----
@@ -1922,6 +1974,11 @@ const ROUTES: Route[] = [
     match: (c) => DATA_PREVIEW_DDIC_RE.test(c.path) || DATA_PREVIEW_CDS_RE.test(c.path),
     handler: hDataPreview,
   },
+  // CDS association actions live on the COLLECTION (/datapreview/cds with
+  // ?action=…) — must precede the entity sub-resource route above in
+  // matching order (kept after for the same-path precedence: the entity RE
+  // requires a trailing segment, so no conflict — but registered first anyway).
+  { method: 'GET', match: (c) => c.path === '/datapreview/cds' && c.url.searchParams.has('action'), handler: hDataPreviewCdsAssociations },
   { method: 'GET', match: (c) => c.path === '/datapreview/freestyle', handler: hDataPreviewFreestyle },
   // Runtime dumps
   { method: 'GET', match: (c) => c.path === '/runtime/dumps', handler: hDumpsList },

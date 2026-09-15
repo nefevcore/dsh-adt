@@ -179,38 +179,32 @@ test('blockedTables custom pattern extends the catalog per destination', async (
 // Usage-report optimizations (adt-tool-usage-notes, NWBC 403 session)
 // ---------------------------------------------------------------------------
 
-test('freestyle SQL pre-check: JOIN / subquery / aggregates fail LOCALLY with the actual reason (usage 1.1/1.2)', async () => {
+test('freestyle SQL pipeline: JOIN / subquery / aggregates compile client-side (usage 1.1/1.2, upgraded)', async () => {
   const tools = dataPreviewTools({ registry: plainRegistry, ledger: new LockLedger() });
   const preview = tools[0]!;
-  // JOIN（含 LEFT JOIN 变体）：报错说 JOIN 不支持 + 本地关联变通，而不是误导性的"仅允许一个 SELECT"
-  await assert.rejects(
-    () => preview.execute({ sql: 'SELECT h.* FROM AGR_HIER h LEFT JOIN AGR_TEXTS t ON h.OBJECT_ID = t.OBJECT_ID' }, exec),
-    (error: unknown) => {
-      assert.match((error as Error).message, /does not support JOIN/i);
-      assert.match((error as Error).message, /separately.*locally|correlate/i);
-      return true;
-    },
+  // JOIN（含 LEFT JOIN 变体）：编译为多表拉取 + 本地关联（不再本地拒绝）
+  const joined = await preview.execute(
+    { sql: 'SELECT * FROM AGR_HIER h LEFT JOIN AGR_TEXTS t ON h.OBJECT_ID = t.OBJECT_ID', length: 5 },
+    exec,
   );
-  // 子查询
-  await assert.rejects(
-    () => preview.execute({ sql: 'SELECT * FROM T001 WHERE BUKRS IN (SELECT BUKRS FROM T001)' }, exec),
-    /does not support subqueries/i,
+  assert.equal(joined.source, 'sql (compiled)');
+  assert.match(joined.note ?? '', /compiled client-side/);
+  assert.match(joined.note ?? '', /FROM AGR_HIER/);
+  assert.match(joined.note ?? '', /FROM AGR_TEXTS/);
+  // 子查询（IN SELECT）同样编译
+  const subq = await preview.execute(
+    { sql: 'SELECT * FROM T001 WHERE BUKRS IN (SELECT BUKRS FROM T001)', length: 5 },
+    exec,
   );
-  // 聚合（别名也在 SELECT 里——不进入后端就被拦）
-  await assert.rejects(
-    () => preview.execute({ sql: 'SELECT COUNT(*) AS CNT, MIN(OBJECT_ID) AS MIN_ID FROM AGR_HIER' }, exec),
-    (error: unknown) => {
-      assert.match((error as Error).message, /does not support aggregate functions/i);
-      assert.match((error as Error).message, /compute.*locally/i);
-      return true;
-    },
+  assert.equal(subq.source, 'sql (compiled)');
+  // 聚合（含别名）本地计算
+  const agg = await preview.execute(
+    { sql: 'SELECT COUNT(*) AS CNT, MIN(OBJECT_ID) AS MIN_ID FROM AGR_HIER', length: 5 },
+    exec,
   );
-  // COUNT(*) 的 * 形态（无别名陷阱：此前后端报"非法名字字符"）
-  await assert.rejects(
-    () => preview.execute({ sql: 'SELECT COUNT(*) FROM AGR_HIER' }, exec),
-    /does not support aggregate functions/i,
-  );
-  // 普通单表 SELECT 不受影响（governance off registry 放行到 mock）
+  assert.equal(agg.source, 'sql (compiled)');
+  assert.match(agg.note ?? '', /aggregation computed client-side/);
+  // 普通单表 SELECT 不受影响（直发，governance off registry 放行到 mock）
   const ok = await preview.execute({ sql: 'SELECT * FROM ZAFW_FLIGHT' }, exec);
   assert.equal(ok.source, 'sql');
 });
