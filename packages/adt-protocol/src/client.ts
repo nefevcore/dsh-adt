@@ -609,7 +609,10 @@ export class AdtClient {
       features['SAP_SYSTEM_RELEASE'] ||
       features['SAP_BASIS_RELEASE'] ||
       features['SAP_SYSTEM_RELEASE_ID'] ||
-      '';
+      // Usage report 2.1: none of the known keys populated (this backend
+      // shape exists — IMPC D01) — an EMPTY string reads like missing data;
+      // name the situation instead.
+      '(not exposed by this backend — no release key in systeminformation JSON or discovery features)';
     const abapCloud = Object.keys(features).some((k) => k.toLowerCase().includes('cloud'));
     return {
       destination: this.destination.name,
@@ -2420,7 +2423,17 @@ export class AdtClient {
   async ping(options: { signal?: AbortSignal } = {}): Promise<{ ok: boolean; status?: number; detail?: string }> {
     try {
       const discovery = await this.discover({ signal: options.signal });
-      return { ok: true, detail: `discovery advertised ${discovery.services.length} services` };
+      // Usage report 2.1: a 0-service discovery reads like a broken connection
+      // but the endpoint answering (auth accepted) IS the reachability proof —
+      // say so instead of letting "advertised 0 services" be misread as a
+      // fault. adt_system_info reports the same shape for context.
+      return {
+        ok: true,
+        detail:
+          discovery.services.length > 0
+            ? `discovery advertised ${discovery.services.length} services`
+            : 'discovery reachable but advertised 0 services (not fatal — the ADT core endpoints answer even when this backend does not populate the discovery index)',
+      };
     } catch (error) {
       if (error instanceof AdtError) {
         return { ok: false, status: error.status, detail: error.message };

@@ -82,6 +82,9 @@ export function systemTools(deps: ToolDeps) {
               `System ID: ${value.systemId}`,
               `Release: ${value.release}`,
               `ABAP Cloud: ${value.abapCloud ? 'yes' : 'no'}`,
+              ...(value.client || value.userName
+                ? [`Session: client ${value.client ?? '?'}${value.userName ? `, user ${value.userName}` : ''}${value.language ? `, language ${value.language}` : ''}`]
+                : []),
               `Advertised services: ${value.serviceCount}`,
               ...(value.features ? Object.entries(value.features).map(([k, v]) => `  ${k}: ${v}`) : []),
             ].join('\n'),
@@ -90,7 +93,13 @@ export function systemTools(deps: ToolDeps) {
       isConcurrencySafe: () => true,
       execute: async (args, exec) => {
         const entry = await registry.require(destinationOf(args), sessionCwd(exec));
-        return entry.client.systemInfo({ signal: exec.signal });
+        const info = await entry.client.systemInfo({ signal: exec.signal });
+        // Usage report 3: the backend endpoint does not always populate the
+        // client — fall back to the DESTINATION's logged-on client so the
+        // mandt context is always visible (client-dependent tables read
+        // differently per client; one machine often holds 110+300 side by side).
+        if (!info.client) info.client = entry.config.client;
+        return info;
       },
     }),
 

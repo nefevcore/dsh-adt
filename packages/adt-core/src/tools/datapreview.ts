@@ -16,7 +16,48 @@ import { extractTablesFromSql } from '../tableblocklist.js';
 import type { AdtPolicy } from '../policy.js';
 import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, isAdtServiceUnavailable, optStr, text, type ToolDeps } from './common.js';
 
-/** Map the shared type-code namespace onto the two preview API modes. */
+/**
+ * Client-side freestyle-SQL pre-check for constructs the ADT data-preview
+ * endpoint does not support (usage reports 1.1/1.2, IMPC D01): JOINs,
+ * subqueries and aggregate functions all fail with MISLEADING backend errors
+ * ("only one SELECT statement allowed" / "Unknown column name MIN(...)" /
+ * name-character complaints) — detect them locally and fail with the actual
+ * reason and the workaround, before any traffic.
+ */
+function assertFreestyleSqlSupported(sql: string): void {
+  const fail = (reason: string, remedy: string): never => {
+    throw new Error(
+      `adt_data_preview: freestyle SQL does not support ${reason} (the backend error for this is misleading). ` +
+        `Remedy: ${remedy}`,
+    );
+  };
+  // JOIN in any form: FROM A ... JOIN B / LEFT/RIGHT/FULL [OUTER] JOIN.
+  if (/\b(?:left|right|full|inner|outer)?\s*join\b/i.test(sql)) {
+    fail(
+      'JOIN',
+      'query the tables separately (single-table SELECT only) and correlate the results locally',
+    );
+  }
+  // Subqueries: a nested '(' + SELECT anywhere.
+  if (/\(\s*select\b/i.test(sql)) {
+    fail('subqueries', 'flatten to single-table SELECTs and combine locally');
+  }
+  // Aggregates: COUNT/SUM/MIN/MAX/AVG as function calls (not column names).
+  if (/\b(?:count|sum|min|max|avg)\s*\(/i.test(sql)) {
+    fail(
+      'aggregate functions',
+      'fetch the rows (<=500 per call) and compute counts/min/max locally',
+    );
+  }
+}
+
+/** True when a backend 400 says the SQL references a column that does not
+ *  exist — the error text itself is accurate but costly to iterate on, so the
+ *  rewording points at the one-round self-correction path (preview the entity
+ *  structure for the real column list; usage report 1.3). */
+function isUnknownColumnError(message: string): boolean {
+  return /unknown column name/i.test(message);
+}
 const KIND_TO_MODE: Record<string, 'ddic' | 'cds'> = {
   TABL: 'ddic',
   VIEW: 'ddic',
@@ -83,8 +124,10 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
         'set blockedTablesProfile — reads of sensitive tables (e.g. customer/bank/HR data like KNA1, LFA1, ' +
         'BUT000, USR02) are then refused with the reason BEFORE any request is sent. ' +
         'Note: ABAP Cloud (BTP) blocks direct database-table preview; CDS views and freestyle SQL work there. ' +
-        'Freestyle SQL restriction: the SELECT list must NOT include the client column (mandt) — the backend ' +
-        'SQL parser rejects cross-client field access with HTTP 400; select the business columns only.',
+        'Freestyle SQL restrictions: SINGLE-TABLE SELECT only — no JOIN, no subqueries, no aggregate functions ' +
+        '(COUNT/SUM/MIN/MAX/AVG) and no client column (mandt) in the SELECT list; the backend rejects all of ' +
+        'these (with misleading errors — the tool pre-checks and tells you the actual reason). To learn a ' +
+        "table's real columns, preview it with name+kind and length=1 and read the `columns` list.",
       parameters: {
         name: { type: 'string', description: 'Table or CDS view name (uppercase), e.g. ZCDS_DEMO, T001.' },
         kind: {
@@ -110,6 +153,7 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
           properties: {
             source: { type: 'string', required: true },
             name: { type: 'string', required: true },
+            client: { type: 'string', description: 'Logged-on SAP client (mandt) of the destination — client-dependent tables read differently per client.' },
             offset: { type: 'integer', required: true },
             totalRows: { type: 'integer', required: true },
             note: { type: 'string' },
@@ -139,7 +183,7 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
         },
         render: (_args, value) => {
           const lines = [
-            `Data preview of ${value.name} (${value.source})${value.offset > 0 ? ` [rows from offset ${value.offset}]` : ''}: ` +
+            `Data preview of ${value.name} (${value.source})${value.client ? ` [client ${value.client}]` : ''}${value.offset > 0 ? ` [rows from offset ${value.offset}]` : ''}: ` +
               `${value.rows.length}/${value.totalRows} row(s)` +
               `${value.queryExecutionTime !== undefined ? `, ${value.queryExecutionTime}ms` : ''}`,
             ...(value.note ? [`Note: ${value.note}`] : []),
@@ -181,6 +225,20 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
                     'business columns only.',
                 );
               }
+              // Unknown column (usage report 1.3): the error text is accurate
+              // but column guessing costs a round trip per miss. Point at the
+              // one-round self-correction: preview the entity structure with
+              // length=1 and read the real column list from `columns`.
+              if (isUnknownColumnError(msg)) {
+                const table = extractTablesFromSql(String(optStr(args.sql) ?? '')).join(', ');
+                throw new Error(
+                  `SQL rejected by the backend (HTTP 400): ${msg}. ` +
+                    (table
+                      ? `Get ${table}'s real column list in one round: adt_data_preview { name: '${table}', kind: 'TABL', length: 1 } ` +
+                        '— the returned `columns` carry the exact names; then rewrite the SELECT with those.'
+                      : 'Preview the target entity with length=1 to get its real column list, then rewrite the SELECT with those names.'),
+                );
+              }
             }
             throw error;
           }
@@ -194,17 +252,34 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
           result: AdtDataPreview,
           paging: { offset: number },
           rows: AdtDataPreview['rows'],
-        ) => ({
-          source,
-          name,
-          offset: paging.offset,
-          totalRows: result.totalRows,
-          note: notes.length ? notes.join('; ') : undefined,
-          queryExecutionTime: result.queryExecutionTime,
-          columns: result.columns,
-          rows,
-          rawXml: result.rawXml,
-        });
+        ) => {
+          // totalRows fidelity (usage report 1.4): some backends always report
+          // 0 in the XML even when rows came back — fall back to the fetched
+          // count and say so, so "are there more rows" stays answerable.
+          let totalRows = result.totalRows;
+          if (totalRows === 0 && rows.length > 0) {
+            totalRows = rows.length;
+            notes.push(
+              `totalRows reported by the backend as 0 despite ${rows.length} fetched row(s); using the fetched count ` +
+                '("more rows available" notes are the reliable signal for paging)',
+            );
+          }
+          return {
+            source,
+            name,
+            // Logged-on client (usage report 3): client-dependent tables read
+            // differently per mandt and the success payload showed no client —
+            // surface the destination's so wrong-client reads are diagnosable.
+            client: entry.config.client,
+            offset: paging.offset,
+            totalRows,
+            note: notes.length ? notes.join('; ') : undefined,
+            queryExecutionTime: result.queryExecutionTime,
+            columns: result.columns,
+            rows,
+            rawXml: result.rawXml,
+          };
+        };
 
         const sql = optStr(args.sql);
         if (sql) {
@@ -219,8 +294,15 @@ export function dataPreviewTools(deps: ToolDeps, ctx?: ToolHost) {
           }
           // Read-side governance: every FROM/JOIN target is resolved and
           // checked BEFORE the request is sent — a blocked table answers
-          // [POLICY] with zero traffic to SAP.
+          // [POLICY] with zero traffic to SAP. This runs BEFORE the
+          // unsupported-construct pre-check on purpose: governance denials
+          // outrank syntax advice (a JOIN over a blocked table reports the
+          // POLICY reason, not the JOIN reason).
           applyReadGovernance(entry.policy, extractTablesFromSql(sql), 'adt_data_preview (sql)', notes);
+          // Unsupported-construct pre-check (usage reports 1.1/1.2): JOINs,
+          // subqueries and aggregates fail remotely with MISLEADING errors —
+          // catch them here, with the actual reason and remedy, zero traffic.
+          assertFreestyleSqlSupported(sql);
           // Fetch offset+length rows (within the cap) and slice, so the SQL
           // path honors the same offset/length row-range as entity previews.
           const paging = resolveRowWindow(args, notes);

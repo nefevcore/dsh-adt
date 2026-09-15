@@ -174,3 +174,88 @@ test('blockedTables custom pattern extends the catalog per destination', async (
     await customRegistry.dispose();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Usage-report optimizations (adt-tool-usage-notes, NWBC 403 session)
+// ---------------------------------------------------------------------------
+
+test('freestyle SQL pre-check: JOIN / subquery / aggregates fail LOCALLY with the actual reason (usage 1.1/1.2)', async () => {
+  const tools = dataPreviewTools({ registry: plainRegistry, ledger: new LockLedger() });
+  const preview = tools[0]!;
+  // JOIN（含 LEFT JOIN 变体）：报错说 JOIN 不支持 + 本地关联变通，而不是误导性的"仅允许一个 SELECT"
+  await assert.rejects(
+    () => preview.execute({ sql: 'SELECT h.* FROM AGR_HIER h LEFT JOIN AGR_TEXTS t ON h.OBJECT_ID = t.OBJECT_ID' }, exec),
+    (error: unknown) => {
+      assert.match((error as Error).message, /does not support JOIN/i);
+      assert.match((error as Error).message, /separately.*locally|correlate/i);
+      return true;
+    },
+  );
+  // 子查询
+  await assert.rejects(
+    () => preview.execute({ sql: 'SELECT * FROM T001 WHERE BUKRS IN (SELECT BUKRS FROM T001)' }, exec),
+    /does not support subqueries/i,
+  );
+  // 聚合（别名也在 SELECT 里——不进入后端就被拦）
+  await assert.rejects(
+    () => preview.execute({ sql: 'SELECT COUNT(*) AS CNT, MIN(OBJECT_ID) AS MIN_ID FROM AGR_HIER' }, exec),
+    (error: unknown) => {
+      assert.match((error as Error).message, /does not support aggregate functions/i);
+      assert.match((error as Error).message, /compute.*locally/i);
+      return true;
+    },
+  );
+  // COUNT(*) 的 * 形态（无别名陷阱：此前后端报"非法名字字符"）
+  await assert.rejects(
+    () => preview.execute({ sql: 'SELECT COUNT(*) FROM AGR_HIER' }, exec),
+    /does not support aggregate functions/i,
+  );
+  // 普通单表 SELECT 不受影响（governance off registry 放行到 mock）
+  const ok = await preview.execute({ sql: 'SELECT * FROM ZAFW_FLIGHT' }, exec);
+  assert.equal(ok.source, 'sql');
+});
+
+test('governance denial outranks the SQL syntax pre-check (usage 1.1 + P0-1 合序)', async () => {
+  const tools = dataPreviewTools({ registry, ledger: new LockLedger() });
+  await assert.rejects(
+    () => tools[0]!.execute({ sql: 'select id from ZAFW_FLIGHT f join LFA1 v on 1 = 1' }, exec),
+    (error: unknown) => {
+      assert.ok(error instanceof AdtPolicyError);
+      assert.equal(error.rule, 'blockedTables');
+      return true;
+    },
+  );
+});
+
+test('success payload carries the logged-on client (usage 3)', async () => {
+  const tools = dataPreviewTools({ registry: plainRegistry, ledger: new LockLedger() });
+  const result = await tools[0]!.execute({ name: 'ZAFW_FLIGHT' }, exec);
+  assert.equal(result.client, '000', 'demo destination logs on client 000');
+  const rendered = (tools[0]!.output.render({}, result as never) as unknown as Array<{ text: string }>)[0]!.text;
+  assert.match(rendered, /\[client 000\]/);
+});
+
+test('totalRows=0 with rows present falls back to the fetched count with a note (usage 1.4)', async () => {
+  // 直接构造 result 形状走 toOutput：mock 的 totalRows 是 1234，为验证 0 回退
+  // 用一个假 registry 注入固定 totalRows=0 的 client。
+  const zeroRowsClient = {
+    dataPreview: async () => ({
+      name: 'X',
+      totalRows: 0,
+      queryExecutionTime: 12,
+      columns: [{ name: 'ID', type: 'INT4' }],
+      rows: [{ ID: '1' }, { ID: '2' }, { ID: '3' }],
+    }),
+  };
+  const entry = {
+    config: { name: 'zero', client: '100' },
+    mock: true,
+    client: zeroRowsClient,
+    policy: AdtPolicy.resolve({}),
+  };
+  const tools = dataPreviewTools({ registry: { require: async () => entry } as never, ledger: new LockLedger() });
+  const result = await tools[0]!.execute({ name: 'ANYTAB' }, exec);
+  assert.equal(result.totalRows, 3, '0 despite rows → fetched count');
+  assert.match(result.note!, /totalRows reported by the backend as 0 despite 3/);
+  assert.equal(result.client, '100');
+});
