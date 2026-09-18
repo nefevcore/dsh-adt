@@ -306,7 +306,7 @@ test('transport selection: user-specified request wins over the lock-assigned on
   assert.equal(versions[0]?.transportRequest, 'S4HK900001');
 
   // 4. adt_edit_object honors the same semantics.
-  (await registry.require()).client.updateSource(
+  await (await registry.require()).client.updateSource(
     '/sap/bc/adt/oo/classes/zcl_demo',
     'CLASS zcl_demo DEFINITION PUBLIC CREATE PUBLIC.\n  PUBLIC SECTION.\n    METHODS greet.\nENDCLASS.\n\nCLASS zcl_demo IMPLEMENTATION.\n  METHOD greet.\n  ENDMETHOD.\nENDCLASS.',
     { transport: 'S4HK900001' },
