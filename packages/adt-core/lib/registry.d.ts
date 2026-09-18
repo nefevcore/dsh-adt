@@ -4,6 +4,8 @@ import { AdtPolicy } from './policy.js';
 import { type HostProfile } from './hostprofile.js';
 export interface RegistryDestination {
     config: AdtDestination;
+    /** Free-text connection description from the config (for adt_list_destinations). */
+    description?: string;
     /** `true` when backed by the in-process mock server. */
     mock: boolean;
     client: AdtClient;
@@ -110,6 +112,7 @@ export declare class AdtRegistry {
     /** Probe every destination of a view (workspace-aware); updates cached status. */
     pingAll(signal?: AbortSignal, cwd?: string): Promise<Array<{
         name: string;
+        description?: string;
         mock: boolean;
         ok: boolean;
         detail: string;

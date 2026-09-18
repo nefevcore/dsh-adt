@@ -24,6 +24,10 @@ export function systemTools(deps) {
                                 additionalProperties: false,
                                 properties: {
                                     name: { type: 'string', required: true },
+                                    description: {
+                                        type: 'string',
+                                        description: 'Free-text connection description from the config — what this system is for.',
+                                    },
                                     mock: { type: 'boolean', required: true },
                                     ok: { type: 'boolean', required: true },
                                     detail: { type: 'string', required: true },
@@ -33,7 +37,8 @@ export function systemTools(deps) {
                     },
                 },
                 render: (_args, value) => text(value.destinations
-                    .map((d) => `- ${d.name}${d.mock ? ' (mock)' : ''}: ${d.ok ? 'reachable' : 'UNREACHABLE'} — ${d.detail}`)
+                    .map((d) => `- ${d.name}${d.mock ? ' (mock)' : ''}: ${d.ok ? 'reachable' : 'UNREACHABLE'} — ${d.detail}` +
+                    (d.description ? `\n    ${d.description}` : ''))
                     .join('\n')),
             },
             isConcurrencySafe: () => true,

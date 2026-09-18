@@ -29,6 +29,13 @@ declare const destinationSchema: z<Schemastery.ObjectS<{
     name: z<string, string>;
     /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
     url: z<string, string>;
+    /**
+     * Free-text description of the connection (what the system is for, which
+     * project/team/landscape it belongs to). Shown by adt_list_destinations
+     * so an agent can pick the right destination for a task — write it for
+     * your future self, not for the machine.
+     */
+    description: z<string, string>;
     /** SAP client (mandant). */
     client: z<string, string>;
     /** Logon language, e.g. `EN`, `ZH`. */
@@ -76,6 +83,13 @@ declare const destinationSchema: z<Schemastery.ObjectS<{
     name: z<string, string>;
     /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
     url: z<string, string>;
+    /**
+     * Free-text description of the connection (what the system is for, which
+     * project/team/landscape it belongs to). Shown by adt_list_destinations
+     * so an agent can pick the right destination for a task — write it for
+     * your future self, not for the machine.
+     */
+    description: z<string, string>;
     /** SAP client (mandant). */
     client: z<string, string>;
     /** Logon language, e.g. `EN`, `ZH`. */
@@ -164,6 +178,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     destinations: z<({
         name?: string | null | undefined;
         url?: string | null | undefined;
+        description?: string | null | undefined;
         client?: string | null | undefined;
         language?: string | null | undefined;
         username?: string | null | undefined;
@@ -189,6 +204,13 @@ export declare const Config: z<Schemastery.ObjectS<{
         name: z<string, string>;
         /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
         url: z<string, string>;
+        /**
+         * Free-text description of the connection (what the system is for, which
+         * project/team/landscape it belongs to). Shown by adt_list_destinations
+         * so an agent can pick the right destination for a task — write it for
+         * your future self, not for the machine.
+         */
+        description: z<string, string>;
         /** SAP client (mandant). */
         client: z<string, string>;
         /** Logon language, e.g. `EN`, `ZH`. */
@@ -277,6 +299,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     destinations: z<({
         name?: string | null | undefined;
         url?: string | null | undefined;
+        description?: string | null | undefined;
         client?: string | null | undefined;
         language?: string | null | undefined;
         username?: string | null | undefined;
@@ -302,6 +325,13 @@ export declare const Config: z<Schemastery.ObjectS<{
         name: z<string, string>;
         /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
         url: z<string, string>;
+        /**
+         * Free-text description of the connection (what the system is for, which
+         * project/team/landscape it belongs to). Shown by adt_list_destinations
+         * so an agent can pick the right destination for a task — write it for
+         * your future self, not for the machine.
+         */
+        description: z<string, string>;
         /** SAP client (mandant). */
         client: z<string, string>;
         /** Logon language, e.g. `EN`, `ZH`. */

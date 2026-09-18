@@ -110,6 +110,30 @@ test('WorkspaceConfigStore.write: creates the file with header, atomically, and 
   }
 });
 
+test('WorkspaceConfigStore.write: a set description renders as a real line; unset, a commented invitation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'abap-adt-ws-'));
+  try {
+    const store = new WorkspaceConfigStore();
+    const { path } = store.write(dir, () => ({
+      destinations: [
+        bareDest('described') as never,
+        dest('plain') as never,
+      ].map((d, i) => (i === 0 ? { ...(d as Record<string, unknown>), description: 'IMPC S/4 财务开发系统' } : d)) as never,
+    }));
+    const raw = readFileSync(path, 'utf8');
+    // Set → real line right after url (where a reader looks first).
+    assert.match(raw, /url: https:\/\/described\.example\.com\n    description: IMPC S\/4 财务开发系统/);
+    // Unset → commented template, never a defaulted real line.
+    assert.match(raw, /# description: +# free-text connection description/);
+    assert.doesNotMatch(raw, /^ {4}description: $/m);
+    // …and the hand-edited value survives a later managed rewrite.
+    store.write(dir, (current) => current);
+    assert.match(readFileSync(path, 'utf8'), /description: IMPC S\/4 财务开发系统/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('WorkspaceConfigStore.write: unset options land as commented templates with their defaults', () => {
   const dir = mkdtempSync(join(tmpdir(), 'abap-adt-ws-'));
   try {
@@ -481,6 +505,43 @@ test('adt_create_destination: a non-identifier passwordEnv is rejected before an
       /not a valid credential reference/,
     );
     assert.equal(existsSync(join(ws, '.dsh-abap-adt')), false, 'nothing written on refusal');
+  } finally {
+    await registry.dispose();
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('adt_create_destination: a description travels into the file, the entry and pingAll', async () => {
+  const ws = mkdtempSync(join(tmpdir(), 'abap-adt-tool-'));
+  const registry = await AdtRegistry.create({ ...builtinDefaults(), demo: false });
+  try {
+    const create = destinationTools({ registry, ledger: new LockLedger() }, { get: () => undefined } as never).find((t) => t.name === 'adt_create_destination')!;
+    const exec = { signal: undefined, agent: { session: { header: { cwd: ws } } } } as never;
+    const result = (await create.execute(
+      {
+        name: 'impc',
+        url: 'https://impc.example.com',
+        description: 'IMPC S/4 财务开发系统, 客户100',
+        username: 'DEV',
+      } as never,
+      exec,
+    )) as { destination: { description?: string } };
+    // Echoed back to the caller…
+    assert.equal(result.destination.description, 'IMPC S/4 财务开发系统, 客户100');
+    // …written as a real YAML line right after url…
+    const raw = readFileSync(join(ws, '.dsh-abap-adt', 'destinations.yaml'), 'utf8');
+    assert.match(raw, /url: https:\/\/impc\.example\.com\n    description: ('?")?IMPC S\/4 财务开发系统, 客户100/);
+    // …and visible on the registry entry (what adt_list_destinations reports).
+    const entry = await registry.require('impc', ws);
+    assert.equal(entry.description, 'IMPC S/4 财务开发系统, 客户100');
+    // An overwrite WITHOUT a new description keeps the existing prose.
+    await create.execute(
+      { name: 'impc', url: 'https://impc2.example.com', username: 'DEV', overwrite: true } as never,
+      exec,
+    );
+    const kept = await registry.require('impc', ws);
+    assert.equal(kept.description, 'IMPC S/4 财务开发系统, 客户100');
+    assert.equal(kept.config.url, 'https://impc2.example.com', 'the url WAS updated');
   } finally {
     await registry.dispose();
     rmSync(ws, { recursive: true, force: true });

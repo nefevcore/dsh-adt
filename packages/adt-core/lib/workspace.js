@@ -153,6 +153,10 @@ function renderDestination(dest, lines, profile) {
         else
             templates.push(template);
     };
+    emit('description', {
+        label: 'description: ',
+        description: 'free-text connection description — what this system is for; shown by adt_list_destinations',
+    });
     emit('client', { label: `client: ${scalar('000')}`, description: 'SAP client (mandant), e.g. "100"' });
     emit('language', { label: `language: ${scalar('EN')}`, description: 'logon language' });
     emit('username', { label: `username: ${scalar('YOUR_USER')}`, description: 'ABAP user name' });

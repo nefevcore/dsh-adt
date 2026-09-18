@@ -323,6 +323,13 @@ export function destinationTools(deps, ctx) {
                         'in import mode overrides the URL derived from the GUI entry (use when a web dispatcher serves /sap/bc/adt).',
                 },
                 client: { type: 'string', description: 'SAP client (mandant). Defaults: GUI entry, else 000.' },
+                description: {
+                    type: 'string',
+                    description: 'Free-text description of the connection — what this system is for, which project/team/landscape it ' +
+                        'belongs to (e.g. "IMPC S/4 财务开发系统, 客户100"). Shown by adt_list_destinations so the right ' +
+                        'destination can be picked for a task later; in update mode (overwrite) an omitted description is ' +
+                        'left unchanged.',
+                },
                 language: { type: 'string', description: 'Logon language (GUI entry, else EN).' },
                 username: { type: 'string', description: 'ABAP user (GUI shortcut entry when present).' },
                 password: {
@@ -450,6 +457,7 @@ export function destinationTools(deps, ctx) {
                             properties: {
                                 name: { type: 'string', required: true },
                                 url: { type: 'string', required: true },
+                                description: { type: 'string', description: 'Free-text connection description, when set.' },
                                 client: { type: 'string' },
                                 language: { type: 'string' },
                                 username: { type: 'string' },
@@ -524,6 +532,7 @@ export function destinationTools(deps, ctx) {
                     `${value.action === 'created' ? 'Created' : 'Updated'} destination "${value.destination.name}" ` +
                         `-> ${value.destination.url} (client ${value.destination.client ?? '000'}) in`,
                     `  ${value.file}`,
+                    value.destination.description ? `  description: ${value.destination.description}` : '',
                     value.setAsDefault ? '  (set as the workspace default destination)' : '',
                     value.importedFromGui
                         ? `  imported from SAP GUI: ${value.importedFromGui.name} (${value.importedFromGui.uuid})`
@@ -662,6 +671,9 @@ export function destinationTools(deps, ctx) {
                         'pass an explicit reachable url, or re-run with force: true to save it anyway.');
                 }
                 const destOut = { name, url: parsedUrl.toString().replace(/\/+$/, '') };
+                const description = trimmedArgStr(args.description);
+                if (description !== undefined)
+                    destOut.description = description;
                 if (client !== undefined)
                     destOut.client = client;
                 if (language !== undefined)

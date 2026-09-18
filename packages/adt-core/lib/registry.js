@@ -18,6 +18,7 @@ function clientCacheKey(dest, inputs, password) {
     return JSON.stringify({
         n: dest.name,
         u: dest.url,
+        d: dest.description,
         c: dest.client,
         l: dest.language,
         un: dest.username,
@@ -214,6 +215,7 @@ export class AdtRegistry {
         };
         const entry = {
             config: adtDest,
+            description: dest.description,
             mock: false,
             client: new AdtClient(adtDest),
             // Global defaults overlaid with the destination's own policy block and
@@ -298,7 +300,13 @@ export class AdtRegistry {
         for (const [name, entry] of view.destinations) {
             const status = await entry.client.ping({ signal });
             entry.status = { ...status, checkedAt: new Date().toISOString() };
-            results.push({ name, mock: entry.mock, ok: status.ok, detail: status.detail ?? '' });
+            results.push({
+                name,
+                description: entry.description,
+                mock: entry.mock,
+                ok: status.ok,
+                detail: status.detail ?? '',
+            });
         }
         return results;
     }
@@ -337,7 +345,12 @@ export class AdtRegistry {
                 throw new Error(`destination "${dest.name}" already exists in the workspace file (url: ${existing.url}). ` +
                     'Pass overwrite: true to replace it.');
             }
-            const upserted = upsertDestination(current, dest);
+            // An update that does not pass a description keeps the existing one —
+            // overwriting an entry must not silently erase the user's prose.
+            const merged = existing && dest.description === undefined && existing.description !== undefined
+                ? { ...dest, description: existing.description }
+                : dest;
+            const upserted = upsertDestination(current, merged);
             created = upserted.created;
             return options.setDefault ? { ...upserted.layer, defaultDestination: dest.name } : upserted.layer;
         });

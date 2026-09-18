@@ -58,6 +58,13 @@ const destinationSchema = z.object({
   name: z.string().required(),
   /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
   url: z.string().required(),
+  /**
+   * Free-text description of the connection (what the system is for, which
+   * project/team/landscape it belongs to). Shown by adt_list_destinations
+   * so an agent can pick the right destination for a task — write it for
+   * your future self, not for the machine.
+   */
+  description: z.string(),
   /** SAP client (mandant). */
   client: z.string(),
   /** Logon language, e.g. `EN`, `ZH`. */
@@ -207,6 +214,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set<string>([...SCALAR_KEYS, 'destinations', 'c
 const KNOWN_DESTINATION_KEYS = new Set<string>([
   'name',
   'url',
+  'description',
   'client',
   'language',
   'username',
