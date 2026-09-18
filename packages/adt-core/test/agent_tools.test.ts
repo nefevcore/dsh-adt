@@ -1654,6 +1654,33 @@ test('P3: adt_object_versions is gated by enableTransports (transport numbers le
   }
 });
 
+test('FUGR: a function module resolves through search onto its /fmodules/ URI (FM-404 regression)', async () => {
+  const by = tools();
+  // A bare FM name + type=FUNC used to build the GROUP URI by convention
+  // (/functions/groups/zfm_demo → 404, no such group); the FM really lives at
+  // /functions/groups/{parent}/fmodules/{fm} and only search knows the parent.
+  const read = await by.get('adt_read_object')!.execute({ name: 'ZFM_DEMO', type: 'FUNC' }, exec);
+  assert.equal(read.uri, '/sap/bc/adt/functions/groups/zfg_demo/fmodules/zfm_demo');
+  assert.equal(read.type, 'FUGR/FF');
+  assert.ok(read.source.includes('FUNCTION zfm_demo'));
+
+  // The explicit ADT type works the same way.
+  const byType = await by.get('adt_read_object')!.execute({ name: 'ZFM_DEMO', type: 'FUGR/FF' }, exec);
+  assert.equal(byType.uri, '/sap/bc/adt/functions/groups/zfg_demo/fmodules/zfm_demo');
+
+  // The group container still resolves by convention (same URI as search's).
+  const group = await by.get('adt_read_object')!.execute({ name: 'ZFG_DEMO', type: 'FUGR' }, exec);
+  assert.equal(group.uri, '/sap/bc/adt/functions/groups/zfg_demo');
+  assert.equal(group.type, 'FUGR/F');
+
+  // An FM the backend does not know must NOT fall back to a fabricated
+  // group URI — that 404s with a confusing error instead of a clear one.
+  await assert.rejects(
+    () => by.get('adt_read_object')!.execute({ name: 'ZFM_NO_SUCH', type: 'FUNC' }, exec),
+    /no exact search match/,
+  );
+});
+
 test('P3: data preview rows are capped at 500 (context hygiene)', async () => {
   const by = tools();
   const result = await by.get('adt_data_preview')!.execute(

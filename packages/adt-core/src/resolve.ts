@@ -28,6 +28,11 @@ export const TYPE_MAP: Record<string, { type: string; uriPrefix: string; label: 
   'SRVD/SRV': { type: 'SRVD/SRV', uriPrefix: '/sap/bc/adt/ddic/srvd/sources/', label: 'Service Definition' },
   FUNC: { type: 'FUGR/F', uriPrefix: '/sap/bc/adt/functions/groups/', label: 'Function Group' },
   'FUGR/F': { type: 'FUGR/F', uriPrefix: '/sap/bc/adt/functions/groups/', label: 'Function Group' },
+  // A function MODULE (FUGR/FF) is a SUB-object: its URI carries the parent
+  // group (/functions/groups/{group}/fmodules/{fm}) and the group name cannot
+  // be derived from the FM name — resolve via search (see below).
+  FM: { type: 'FUGR/FF', uriPrefix: '', label: 'Function Module' },
+  'FUGR/FF': { type: 'FUGR/FF', uriPrefix: '', label: 'Function Module' },
   TABL: { type: 'TABL/DT', uriPrefix: '/sap/bc/adt/ddic/tables/', label: 'Table' },
   'TABL/DT': { type: 'TABL/DT', uriPrefix: '/sap/bc/adt/ddic/tables/', label: 'Table' },
   STRU: { type: 'STRU/DT', uriPrefix: '/sap/bc/adt/ddic/structures/', label: 'Structure' },
@@ -114,21 +119,40 @@ export async function resolveObject(
     // — and agents routinely pass type=PROG for includes. Ask the search
     // index for the exact object and use ITS uri/type; fall back to the
     // by-convention URI when search is unavailable or finds nothing.
-    if (t.type === 'PROG/P' || t.type === 'PROG/I') {
+    if (t.type === 'PROG/P' || t.type === 'PROG/I' || t.type === 'FUGR/F' || t.type === 'FUGR/FF') {
       try {
         const hits = await client.searchObjects(name, { maxResults, signal });
         const exact = hits.find((h) => h.objectName.toUpperCase() === name);
-        if (exact && (exact.type === 'PROG/P' || exact.type === 'PROG/I')) {
+        if (
+          exact &&
+          ((t.type === 'PROG/P' || t.type === 'PROG/I') && (exact.type === 'PROG/P' || exact.type === 'PROG/I') ||
+            (t.type === 'FUGR/F' || t.type === 'FUGR/FF') && (exact.type === 'FUGR/F' || exact.type === 'FUGR/FF'))
+        ) {
           return {
             uri: exact.uri,
             type: exact.type,
             name,
-            category: 'PROG',
+            category: exact.type.split('/')[0],
           };
         }
       } catch {
-        // search unavailable → conventional URI below
+        // search unavailable → conventional URI below (FUGR/F only; FUGR/FF
+        // has no name-derivable URI and falls through to search below).
       }
+    }
+    // FUGR family (container OR module): the search-exact branch above
+    // already returned when the backend knew the object. A conventional URI
+    // is worthless here — a function MODULE's URI carries its parent group
+    // (/functions/groups/{group}/fmodules/{fm}, not derivable from the name),
+    // and a GROUP hit by an FM-style name (agents pass type=FUNC for function
+    // modules — ZFM_* vs ZFG_* never coincide) 404s as a fabricated group.
+    // Fail with guidance instead of a guaranteed-404 URI.
+    if (t.type === 'FUGR/F' || t.type === 'FUGR/FF') {
+      throw new Error(
+        `adt: no exact search match for '${name}' (type ${t.type}) — its URI depends on backend facts: ` +
+          'a function module lives at /functions/groups/{parent}/fmodules/{fm} (the parent is not derivable from the name). ' +
+          'Pass `objectUri` (from adt_search output) or the exact name of the group/module.',
+      );
     }
     return { uri: `${t.uriPrefix}${name.toLowerCase()}`, type: t.type, name, category: t.type.split('/')[0] };
   }

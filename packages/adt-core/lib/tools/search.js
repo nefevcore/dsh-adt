@@ -1,5 +1,6 @@
 import { defineTool } from '../tooldef.js';
 import { sessionCwd, DESTINATION_PARAM, clampWithNote, destinationOf, optStr, text } from './common.js';
+import { typeLabel as typeLabelOf } from '../resolve.js';
 /** Upper bound for presentation metadata: past this the UI falls back to the
  * generic card rather than persisting a huge copy of the search result. */
 const SEARCH_META_MAX_ENTRIES = 500;
@@ -215,7 +216,15 @@ export function searchTools(deps) {
                     count: result.count,
                     offset,
                     note: notes.length ? notes.join('; ') : undefined,
-                    objects: window.filter((h) => h.kind === 'object').map((h) => objects[h.index]),
+                    objects: window
+                        .filter((h) => h.kind === 'object')
+                        // typeLabel from the backend is often empty for sub-object types
+                        // (e.g. FUGR/FF) — fall back to the local label so agents see
+                        // "Function Module", not "".
+                        .map((h) => {
+                        const o = objects[h.index];
+                        return o.typeLabel ? o : { ...o, typeLabel: typeLabelOf(o.type) };
+                    }),
                     sources: window.filter((h) => h.kind === 'source').map((h) => sources[h.index]),
                 };
             },

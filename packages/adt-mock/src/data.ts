@@ -189,6 +189,36 @@ WRITE / lo_demo->greet( iv_name = p_name ).`,
     source: `PROGRAM zprog_demo_top.\n\nDATA: gv_title TYPE string VALUE 'demo'.\n\nDATA: gv_count TYPE i.`,
   },
   {
+    uri: '/sap/bc/adt/functions/groups/zfg_demo',
+    type: 'FUGR/F',
+    category: 'FUGR',
+    name: 'ZFG_DEMO',
+    description: 'Demo function group',
+    packageName: 'ZPACK_DEMO',
+    masterLanguage: 'EN',
+    changedAt: NOW,
+    changedBy: 'DEMO',
+    source: `FUNCTION-POOL zfg_demo.`,
+  },
+  {
+    // Function MODULE — a SUB-object whose URI carries the parent group
+    // (/functions/groups/{group}/fmodules/{fm}). Reproduces the real-world
+    // FM-404: resolving an FM by bare name+type must go through search,
+    // never by convention (the group name is not derivable from the FM name).
+    uri: '/sap/bc/adt/functions/groups/zfg_demo/fmodules/zfm_demo',
+    type: 'FUGR/FF',
+    category: 'FUGR',
+    name: 'ZFM_DEMO',
+    description: 'Demo function module of ZFG_DEMO',
+    packageName: 'ZPACK_DEMO',
+    masterLanguage: 'EN',
+    changedAt: NOW,
+    changedBy: 'DEMO',
+    source: `FUNCTION zfm_demo.
+  WRITE / 'hello from ZFM_DEMO'.
+ENDFUNCTION.`,
+  },
+  {
     uri: '/sap/bc/adt/ddic/ddl/sources/zcds_demo',
     type: 'DDLS/DF',
     category: 'DDLS',
