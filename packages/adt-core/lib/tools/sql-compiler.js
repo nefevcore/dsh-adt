@@ -635,8 +635,8 @@ function condToSqlBare(c) {
             return `${c.left.column} ${c.op} ${c.right.numeric ? right : `'${right.replace(/'/g, "''")}'`}`;
         }
         case 'in': {
-            const values = c.list.map((l) => (l.numeric ? l.value : `'${l.value.replace(/'/g, "''")}'`)).join(', ');
-            return values.length > 0 ? `${c.left.column} ${c.not ? 'NOT ' : ''}IN ( ${values} )` : null;
+            const values = c.list.map((l) => (l.numeric ? l.value : `'${l.value.replace(/'/g, "''")}'`)).join(',');
+            return values.length > 0 ? `${c.left.column} ${c.not ? 'NOT ' : ''}IN(${values})` : null;
         }
         case 'isnull': {
             return c.not ? `${c.left.column} != ''` : `${c.left.column} = ''`;
@@ -666,8 +666,8 @@ function condToSql(c, alias) {
         case 'in': {
             if (c.left.alias !== alias)
                 return null;
-            const values = c.list.map((l) => (l.numeric ? l.value : `'${l.value.replace(/'/g, "''")}'`)).join(', ');
-            return values.length > 0 ? `${alias}~${c.left.column} ${c.not ? 'NOT ' : ''}IN ( ${values} )` : null;
+            const values = c.list.map((l) => (l.numeric ? l.value : `'${l.value.replace(/'/g, "''")}'`)).join(',');
+            return values.length > 0 ? `${alias}~${c.left.column} ${c.not ? 'NOT ' : ''}IN(${values})` : null;
         }
         case 'isnull': {
             if (c.left.alias !== alias)
@@ -1275,8 +1275,8 @@ function renderCond(c) {
         }
         case 'in': {
             const left = `${c.left.alias ? `${c.left.alias}~` : ''}${c.left.column}`;
-            const values = c.list.map((l) => (l.numeric ? l.value : `'${l.value.replace(/'/g, "''")}'`)).join(', ');
-            return `${left} ${c.not ? 'NOT ' : ''}IN ( ${values} )`;
+            const values = c.list.map((l) => (l.numeric ? l.value : `'${l.value.replace(/'/g, "''")}'`)).join(',');
+            return `${left} ${c.not ? 'NOT ' : ''}IN(${values})`;
         }
         case 'isnull': {
             const left = `${c.left.alias ? `${c.left.alias}~` : ''}${c.left.column}`;

@@ -198,3 +198,44 @@ test('compile: DISTINCT dedupes output rows', async () => {
   );
   assert.deepEqual(result.rows.map((r) => r.STATUS), ['CLOSED', 'OPEN']);
 });
+
+test('render: pushed-down IN lists are tight-parened (single and multi value)', async () => {
+  const sent: string[] = [];
+  const recording = (sql: string, opts: { top: number }) => {
+    sent.push(sql);
+    return fakeRunQuery(sql, opts);
+  };
+  await compileAndRun(
+    "SELECT o.id FROM orders o JOIN customers c ON o.cust = c.id WHERE o.status IN ('OPEN')",
+    recording,
+    { length: 10, offset: 0 },
+  );
+  await compileAndRun(
+    "SELECT o.id FROM orders o JOIN customers c ON o.cust = c.id WHERE o.status IN( 'OPEN' , 'CLOSED' )",
+    recording,
+    { length: 10, offset: 0 },
+  );
+  const inSqls = sent.filter((s) => /\bIN\s*\(/i.test(s));
+  assert.equal(inSqls.length, 2);
+  for (const s of inSqls) {
+    assert.match(s, /IN\('[^']*'(?:,'[^']*')*\)/i);
+    assert.doesNotMatch(s, /IN\s+\(/i);
+    assert.doesNotMatch(s, /IN\(\s|\s\)/i);
+  }
+});
+
+test('render: IN-subquery subfetch renders tight-parened nested IN', async () => {
+  const sent: string[] = [];
+  const recording = (sql: string, opts: { top: number }) => {
+    sent.push(sql);
+    return fakeRunQuery(sql, opts);
+  };
+  await compileAndRun(
+    "SELECT o.id FROM orders o WHERE o.cust IN ( SELECT c.id FROM customers c WHERE c.name IN ('ALPHA') )",
+    recording,
+    { length: 10, offset: 0 },
+  );
+  const inner = sent.find((s) => /FROM\s+CUSTOMERS/i.test(s));
+  assert.ok(inner);
+  assert.match(inner!, /NAME\s+IN\('ALPHA'\)/i);
+});
