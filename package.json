@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "build": "tsc -b && tsc -p packages/adt-core && tsc -p packages/dsh-plugin-abap-adt",
-    "test": "pnpm build && node --test --test-timeout=60000 packages/adt-protocol/test/xml.test.ts packages/adt-protocol/test/transports.test.ts packages/adt-protocol/test/quirks.test.ts packages/adt-protocol/test/client.test.ts packages/adt-mock/test/integration.test.ts packages/adt-mock/test/strict.test.ts packages/adt-core/test/policy.test.ts packages/adt-core/test/read_policy.test.ts packages/adt-core/test/sql_lint.test.ts packages/adt-core/test/sql_compiler.test.ts packages/adt-core/test/datapreview_p23.test.ts packages/adt-core/test/debugger.test.ts packages/adt-core/test/table_create.test.ts packages/adt-core/test/textelements.test.ts packages/adt-core/test/cochange.test.ts packages/adt-core/test/crudmatrix.test.ts packages/adt-core/test/fsmatrix.test.ts packages/adt-core/test/local_check.test.ts packages/adt-core/test/versions.test.ts packages/adt-core/test/gate.test.ts packages/adt-core/test/config_file.test.ts packages/adt-core/test/sapgui.test.ts packages/adt-core/test/probe.test.ts packages/adt-core/test/workspace.test.ts packages/adt-core/test/hostprofile.test.ts packages/adt-core/test/agent_tools.test.ts packages/adt-core/test/agent_extras.test.ts packages/dsh-plugin-abap-adt/test/cli.test.ts packages/dsh-plugin-abap-adt/test/reload.test.ts",
+    "test": "pnpm build && node --test --test-timeout=60000 packages/adt-protocol/test/xml.test.ts packages/adt-protocol/test/transports.test.ts packages/adt-protocol/test/quirks.test.ts packages/adt-protocol/test/client.test.ts packages/adt-mock/test/integration.test.ts packages/adt-mock/test/strict.test.ts packages/adt-core/test/policy.test.ts packages/adt-core/test/read_policy.test.ts packages/adt-core/test/sql_lint.test.ts packages/adt-core/test/sql_compiler.test.ts packages/adt-core/test/datapreview_p23.test.ts packages/adt-core/test/debugger.test.ts packages/adt-core/test/table_create.test.ts packages/adt-core/test/textelements.test.ts packages/adt-core/test/cochange.test.ts packages/adt-core/test/crudmatrix.test.ts packages/adt-core/test/fsmatrix.test.ts packages/adt-core/test/local_check.test.ts packages/adt-core/test/versions.test.ts packages/adt-core/test/gate.test.ts packages/adt-core/test/config_file.test.ts packages/adt-core/test/sapgui.test.ts packages/adt-core/test/probe.test.ts packages/adt-core/test/workspace.test.ts packages/adt-core/test/hostprofile.test.ts packages/adt-core/test/agent_tools.test.ts packages/adt-core/test/agent_extras.test.ts packages/dsh-plugin-abap-adt/test/reload.test.ts",
     "mock": "node packages/adt-mock/lib/cli.js",
     "smoke": "node scripts/smoke-tools.mjs",
     "bundle": "node scripts/bundle.mjs",
@@ -20,10 +20,9 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-settings": "^0.1.2-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1",
-    "@deepseek-ai/schemastery": "^3.18.2",
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.4",
     "@nefevcore/abap-adt-mock": "workspace:*",
     "@nefevcore/abap-adt-protocol": "workspace:*",
     "@types/node": "^24.0.0",

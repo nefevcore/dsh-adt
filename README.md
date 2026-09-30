@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@nefevcore/abap-adt-dsh-plugin?label=%40nefevcore%2Fabap-adt-dsh-plugin)](https://www.npmjs.com/package/@nefevcore/abap-adt-dsh-plugin)
 [![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![tests](https://img.shields.io/badge/tests-288-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-362-brightgreen)](#测试)
 [![dsh plugin](https://img.shields.io/badge/dsh--plugin-listed-blue)](https://github.com/topics/dsh-plugin)
 
 > **English** — Agent-native SAP ABAP access for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness): a Cordis plugin that speaks the SAP ADT REST protocol directly (`/sap/bc/adt`; no SAP libraries, no IDE) and registers **32 `adt_*` tools** covering the full loop *search → read → edit → activate → unit test → ATC → transport → execute → debug → error analysis*, plus agent-scale capabilities (protocol-level `$batch`, whole-package release gates, DDIC structured editors, one-step table creation from field lists, conflict-checked local snapshots, local export, offline abaplint, method-level read/edit, dependency-contract context prologues, a read-only capability sweep, transport co-change analysis) and conversational destination management (create connections from the local SAP GUI list by just chatting). Governance is two-sided: write-side per-destination policy knobs with dev/qa/prd environment profiles, read-side sensitive-table blocklists for data preview. Releasing a transport is deliberately a human decision and not exposed as a tool. Ships with a zero-config mock server, so you can try everything without an SAP system. Agent-facing usage guide with the critical limitations first: [docs/agent-guide.md](docs/agent-guide.md).
@@ -15,25 +15,27 @@
 
 ## 安装与更新
 
-安装和更新只支持 **dsh CLI** 一种方式（要求 pnpm 在 PATH——`corepack enable` 或 `npm i -g pnpm`；缺失时 dsh 会明确报错）。**0.8.0 起要求 DSH ≥ 0.1.2-rc.1**（settings 接缝从模块级 `installSettingsSection()` 迁到 `ctx.settings.installSection()`；旧版 DSH 请继续用 0.7.x）。四个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-core` 纯内核、`@nefevcore/abap-adt-dsh-plugin` DSH 宿主适配）：
+安装和更新通过 **DSH 插件管理器**（Web UI 的 Plugins 面板或 `plugin_manager` 工具；要求 pnpm 在 PATH——`corepack enable` 或 `npm i -g pnpm`）。**0.12.1 起要求 DSH ≥ 0.2.0-rc.2**（声明式预设 + volatile 配置模型，见下方「从 0.1.0 升级」；旧版 DSH 请继续用 0.12.0）。四个包均已发布到 npm（`@nefevcore/abap-adt-protocol` 协议客户端、`@nefevcore/abap-adt-mock` 内置 mock、`@nefevcore/abap-adt-core` 纯内核、`@nefevcore/abap-adt-dsh-plugin` DSH 宿主适配）。
+
+ABAP 开发模式的入口是仓库自带的**预设 bundle** [`presets/abap-dev/`](presets/abap-dev/)：一条 `@deepseek-ai/dsh-agent-preset` 声明行（`preset-abap-adt`），基于 shipped `standard` 预设（完整编码代理、不含插件开发工具集），把 persona 替换为 ABAP 专属人设（常用工具使用指引、开发流程指引，以及传输请求纪律：修改前必须向用户索取请求号并显式传 `transport`，绝不省略让后端自行建任务；释放传输保持人工决策），并在末尾追加 `abap-adt` 插件行。
+
+在本仓库（或其检出）中安装：
 
 ```bash
-# ① 安装（装进 web profile；仅安装，不自动加载）
-dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin
-
-# ② 生成按会话启用的 agent 预设（一次性；复制 standard 预设、追加插件行、剔除 tool-cordis/skill-filesystem 行，并把 persona 替换为 ABAP 专属人设——含工具指引/开发流程/传输请求纪律：修改前向用户要请求号）
-dsh plugin --profile web exec abap-adt-preset
-
-# 更新到最新版（更新不会动你的预设与配置）
-dsh plugin --profile web update @nefevcore/abap-adt-dsh-plugin
-
-# 或锁定指定版本
-dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
+pnpm install && pnpm build        # 构建 packages/*/lib —— 预设行按相对路径指向这里
 ```
 
-> ⏳ **发版后 24h 内更新被拦？** pnpm 11 默认开启供应链保护（`minimumReleaseAge: 1440`——新发布的包 24 小时内不被解析）。紧跟发版执行 `update` 时：默认 **loose 模式**会把新版本自动追加进 profile 的 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 并放行（一条 info 提示列出所加条目，属预期行为）；若你的环境**显式设置过** `minimumReleaseAge`（此时 strict 模式默认生效），会直接报 `ERR_PNPM_NO_MATURE_MATCHING_VERSION`——三个选择：等发布满 24h；或在该 yaml 手动加上四包的 `@<版本>` 豁免后重跑；或在终端交互式运行按提示确认。输出里出现的 `✓ Lockfile passes supply-chain policies (verified … ago)` 只是**按 lockfile 内容缓存的成功判定复用提示**，不是错误——内容或策略一变即自动重新校验，无需也无法手动"刷新验证时间"。
+然后让代理安装（或用 Web UI 的 Plugins 面板从目录安装）：
 
-**默认不加载，按会话启用（by design）**：包内不声明 `dsh.bundle`，安装只是把包放进 profile 的依赖里——`adt_*` 工具**只出现在用 `abap-adt` 预设创建的会话**，其他会话完全不受影响。安装时 dsh 会提示 `declares no dsh.bundle — installed as a plain dependency`，这正是预期行为。
+```
+plugin_manager { action: "install_bundle", target: "<仓库>/presets/abap-dev" }
+```
+
+安装结果以返回的 `application: "applied"` 为准；**重启 DSH** 后新建会话，在预设 chip 选「ABAP Development」即可。从 npm 使用（0.12.1 发布后）：把 `presets/abap-dev/cordis.patch.yml` 里 `abap-adt` 行的 `name` 从相对路径改成 `'@nefevcore/abap-adt-dsh-plugin'` 再安装。
+
+> ⏳ **发版后 24h 内更新被拦？** pnpm 11 默认开启供应链保护（`minimumReleaseAge: 1440`——新发布的包 24 小时内不被解析）。紧跟发版执行更新时：默认 **loose 模式**会把新版本自动追加进 profile 的 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 并放行（一条 info 提示列出所加条目，属预期行为）；若你的环境**显式设置过** `minimumReleaseAge`（此时 strict 模式默认生效），会直接报 `ERR_PNPM_NO_MATURE_MATCHING_VERSION`——三个选择：等发布满 24h；或在该 yaml 手动加上四包的 `@<版本>` 豁免后重跑；或在终端交互式运行按提示确认。
+
+**默认不加载，按会话启用（by design）**：插件包自身不声明 `dsh.bundle`，插件行只存在于预设的 plugins 列表中——`adt_*` 工具**只出现在用「ABAP Development」预设创建的会话**，其他会话完全不受影响。
 
 ### 架构：纯内核 + 宿主适配（多宿主共用一份引擎）
 
@@ -46,17 +48,27 @@ dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin@0.2.0
   - `ToolHost.get('host')` → 宿主环境声明缝（内核 `src/hostprofile.ts`）：宿主声明身份与凭证存储词汇，凭证相关文案/引导随宿主自适应；未声明按能力推断、措辞宿主中立。`workspaceConfigDir` 字段声明**工作区 destinations 目录**（存储权威 = `AdtRegistry.create({ hostProfile })`，DSH 声明 `.dsh-abap-adt`，其他宿主可用自己的目录，如 AgentChat 数据根下的 `.agentchat/abap-adt`；未声明默认 `.dsh-abap-adt`，既有工作区不受影响）
   - 执行上下文 `exec.signal` + `exec.agent.session.header.cwd`（per-call 工作区锚点）
 
-- **`@nefevcore/abap-adt-dsh-plugin`（DSH 宿主适配）**——`abap-adt` settings 命名空间（`~/.dsh/settings.yaml` 热更）+ DSH 工具注册边界（lossless-JSON 消毒）+ `abap-adt-preset` CLI；内核 API 全量 re-export，存量消费者无感。
+- **`@nefevcore/abap-adt-dsh-plugin`（DSH 宿主适配）**——`abap-adt` volatile entry config（DSH ≥ 0.2.0：行 config 为活引用，Settings 表单热更）+ DSH 工具注册边界（lossless-JSON 消毒）；内核 API 全量 re-export，存量消费者无感。
 
 - **AgentChat 内置行 `ac-sap-adt`**（[AgentChat 仓库](https://github.com/nefevcore/AgentChat) `src/ac-sap-adt/`）——第二宿主适配：32 工具带 `sap-adt` 能力标签门禁（Agent tags 显式授予才可见）；fs 缝 = 数据根子树内的 node:fs 适配器，credentials 缝 = 加密凭据存储；依赖 `@nefevcore/abap-adt-core`（semver），demo 目的地同样开箱即用。
 
   （0.6.0 曾以 dsh-plugin 包的 `./agent` 子路径过渡；0.7.0 起独立成包。）
 
-②生成的预设：复制 `standard` 预设（完整编码代理、不含插件开发工具集）到 `~/.dsh/.agent-presets/abap-adt/`，追加插件行、剔除源里可能携带的 `tool-cordis` / `skill-filesystem` 行，并**将 persona 替换为 ABAP 专属人设**（常用工具使用指引、开发流程指引，以及传输请求纪律：修改前必须向用户索取请求号并显式传 `transport`，绝不省略让后端自行建任务；释放传输保持人工决策）。刻意不复制部署默认预设——默认为 `cordis` 时会带入 `tool-cordis`（其 Host Cordis inspect provider 与活动 cordis 会话冲突），需要时 `--from` 可覆盖。支持 `--id/--from/--name/--force/--dry-run`。重启 DSH 后新建会话，在预设 chip 选「ABAP Development」即可。手工建预设的说明见 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md)。
+预设 bundle [`presets/abap-dev/`](presets/abap-dev/)：一条 `preset-abap-adt` 声明行（DSH ≥ 0.2.0 声明式预设），基于 shipped `standard` 预设（完整编码代理、不含插件开发工具集），剔除其 `skill-filesystem` 行（ABAP 会话用不上的插件开发机械，沿承审计 D2 的结论），**将 persona 替换为 ABAP 专属人设**（常用工具使用指引、开发流程指引，以及传输请求纪律：修改前必须向用户索取请求号并显式传 `transport`，绝不省略让后端自行建任务；释放传输保持人工决策），并在末尾追加 `abap-adt` 插件行。重启 DSH 后新建会话，在预设 chip 选「ABAP Development」即可。
 
-DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更免重启热生效——连接真实系统的 `destinations` 推荐放**工作区配置** `<工作区>/.dsh-abap-adt/destinations.yaml`（对话式创建见下），全局兜底/权限开关配置在 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
+DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更免重启热生效——连接真实系统的 `destinations` 推荐放**工作区配置** `<工作区>/.dsh-abap-adt/destinations.yaml`（对话式创建见下），全局兜底/权限开关配置在 `abap-adt` 条目的 volatile 配置（DSH Settings 的 Plugins 页表单，或预设行 `config:`，见下方「配置分层」）。
 
 ### 从 0.1.0 升级
+
+#### 0.12.1（适配 DSH 0.2.0：声明式预设 + volatile 配置）
+
+DSH 0.2.0 同时废弃了 0.12.0 及更早版本依赖的两个机制：目录式预设（`~/.dsh/.agent-presets/<id>/` 不再被读取——预设改为 bundle patch 中的 `@deepseek-ai/dsh-agent-preset` 声明行）与 settings 命名空间（`ctx.settings.installSection` 已移除；DSH 0.2.0 把旧 `~/.dsh/settings.yaml` 一次性导入 profile 后改名为 `.imported`）。0.12.1 全面迁移到当前规范：
+
+- **预设 bundle**：`presets/abap-dev/` 以声明行 `preset-abap-adt` 承载 ABAP Development 预设（standard 基底 + ABAP persona + `abap-adt` 插件行），`plugin_manager install_bundle` 安装；`abap-adt-preset` CLI 随机制一起移除（`bin` 已删）。
+- **配置模型**：插件 Config 包装为 `.volatile()`——行 config 是**活引用**；Settings（Plugins 页）的 abap-adt 表单编辑持久化到当前 profile 的 Cordis patch，Loader 原地提交新快照并广播 `loader/volatile-update`，插件原地重建目的地表（无重挂载、无重启）。D4 重建/销毁竞态测试按新接线重写仍绿。
+- **依赖对齐**：peer `@deepseek-ai/cordis ^4.0.4`；内核 `@deepseek-ai/schemastery ^3.18.4`（`.volatile()`）与 `@deepseek-ai/cosmokit ^1.8.5`（`Volatile` 引用）；移除 `@deepseek-ai/dsh-settings` peer。
+- **迁移**：DSH ≥ 0.2.0-rc.2 上安装 `presets/abap-dev` bundle 并重启；工作区 `.dsh-abap-adt/destinations.yaml` 与 `~/.dsh/.credentials.yaml` 原样保留；曾在 `settings.yaml` `abap-adt:` 段的全局配置迁入预设行 `config:` 或团队 `configFile`；删除失效的 `~/.dsh/.agent-presets/abap-adt/` 目录。
+- 测试 362 项全绿（CLI 测试随机制移除，新增 volatile 接线正/负用例）。
 
 #### 0.8.0（适配 DSH 0.1.2 破坏性更新：settings 接缝迁移）
 
@@ -180,29 +192,28 @@ destinations:
     strictSSL: false                     # 自签名证书（SAP 内网常见）时必须关
 ```
 
-> 工作区文件是**本会话工作区私有的最近覆盖层**：同名目的地覆盖全局配置，`defaultDestination` / 权限键就近生效。全局共享配置（所有工作区通用的兜底目的地、权限策略）仍走 `~/.dsh/settings.yaml` 的 `abap-adt:` 段（见下方「配置分层」）。
+> 工作区文件是**本会话工作区私有的最近覆盖层**：同名目的地覆盖全局配置，`defaultDestination` / 权限键就近生效。全局共享配置（所有工作区通用的兜底目的地、权限策略）走 `abap-adt` 条目的 volatile 配置（预设行 `config:` / Settings 表单写入的 profile patch 覆盖，见下方「配置分层」）。
 
 ### 配置分层（config layering）
 
-配置分**全局层（DSH settings）**与**工作区层**两段：插件把自身的配置 schema 注册为 `abap-adt` 命名空间，插件行的内联 config 是 composition base，`~/.dsh/settings.yaml` 的 `abap-adt:` 段是用户层——**保存即热生效**（目的地表与权限策略原地重建，无需重启 DSH）。工作区层是**每次工具调用时**按会话工作目录叠加的（预设挂载跨会话共享，所以按调用就近解析）。生效值**就近覆盖**：
+配置分**全局层（volatile entry config）**与**工作区层**两段：插件的 Config schema 声明为 volatile（DSH ≥ 0.2.0），插件行的内联 config 是**活引用**——DSH Settings（Plugins 页）的 `abap-adt` 表单编辑持久化到当前 profile 的 Cordis patch，Loader 原地提交新快照并通知插件，**保存即热生效**（目的地表与权限策略原地重建，无重挂载、无需重启 DSH）。工作区层是**每次工具调用时**按会话工作目录叠加的（预设挂载跨会话共享，所以按调用就近解析）。生效值**就近覆盖**：
 
 ```
 ① schema 默认值                              （demo 开、8123、defaultDestination=demo、无目的地）
-② 插件行内联 config                          （agent preset / cordis.patch.yml —— composition base）
+② 插件行内联 config                          （volatile 活引用；预设行 / profile patch 行覆盖——Settings 表单写这里）
 ③ 旧版独立文件 ~/.dsh/abap-adt.yml            （已废弃，仅迁移期兼容，出现即告警）
-④ settings.yaml 的 abap-adt: 用户段           （全局用户覆盖层）
-⑤ 显式 configFile（团队共享）                  （路径可来自 ②-④ 任一层；~ 展开、相对路径锚定 dsh home）
-⑥ 工作区文件 <会话工作区>/<宿主配置目录>/destinations.yaml（DSH 为 .dsh-abap-adt，目录随宿主声明，未声明默认 .dsh-abap-adt）
+④ 显式 configFile（团队共享）                  （路径可来自 ②-③ 任一层；~ 展开、相对路径锚定 dsh home）
+⑤ 工作区文件 <会话工作区>/<宿主配置目录>/destinations.yaml（DSH 为 .dsh-abap-adt，目录随宿主声明，未声明默认 .dsh-abap-adt）
                                              （最近层：同名目的地覆盖以上全部、可设 defaultDestination
                                               与权限键；按调用热生效，adt_create_destination 写这里）
-⑦ SAP_* 环境变量                              （仅权限六开关，且仅在 ①-⑥ 均未设置时生效）
+⑥ SAP_* 环境变量                              （仅权限六开关，且仅在 ①-⑤ 均未设置时生效）
 ```
 
 - `destinations` 跨层按名字合并：高层的同名条目覆盖低层，新名字追加——随包发布的 `destinations: []` 永远不会挡住其他层
-- settings 段/共享文件/工作区文件写错键名会**明确报错**（含路径与未知键名）；显式指定的 `configFile` 不存在则告警并跳过该层
+- 共享文件/工作区文件写错键名会**明确报错**（含路径与未知键名）；显式指定的 `configFile` 不存在则告警并跳过该层
 - 工作区层只认 `destinations` / `defaultDestination` / 权限六开关（`demo`、`demoPort`、`configFile` 属全局层）；文件格式与其他层完全一致，也可含按目的地的 `policy:` 块
 - 密码在 schema 中标记为 secret（settings 展示时自动脱敏）；解析优先级 `config.password` > `passwordEnv` 指定的**凭证引用**（宿主按层解析——DSH：进程环境变量 > `~/.dsh/.credentials.yaml` 凭证文件 > `.env`；其他宿主为其自己的存储，未挂凭证服务时仅环境变量；每次工具调用实时解析，改完即生效）> `ADT_PASSWORD`。**切勿把密码明文写进任何配置**——对话里直接把密码告诉代理即可：`adt_create_destination` 会把它存进宿主凭证存储（DSH 上即 `~/.dsh/.credentials.yaml`），destinations.yaml 只留 `passwordEnv` 引用；仅在无凭证存储或显式 `passwordInFile: true` 时才明文落盘（避免提交该文件；工具结果 note 与 destinations.yaml 自文档注释都会按当前宿主写明去路与解析链）
-- 未挂载 settings 服务或 dsh-fs 的精简 profile 自动降级：仅用插件行 config 解析，行为与组合时一致；文件系统能力（源码快照 / export / push / `sourceFile` / 本地检查）缺失时明确报错，其余 `adt_*` 工具不受影响
+- 未挂载 dsh-fs 的精简 profile 自动降级：仅用插件行 config 解析，行为与组合时一致；文件系统能力（源码快照 / export / push / `sourceFile` / 本地检查）缺失时明确报错，其余 `adt_*` 工具不受影响
 
 认证说明：
 - **on-prem 经典 ABAP**：Basic Auth（支持自签名证书时设 `strictSSL: false`）
@@ -212,7 +223,7 @@ destinations:
 
 所有会**修改 SAP 系统状态**的工具（`adt_object_edit` / `adt_object_write` / `adt_object_delete` / `adt_activate` / `adt_object_edit`（结构化型） / 传输工具族）在执行前都会经过**目标目的地**的权限策略（`src/policy.ts`），不满足即抛 `[POLICY]` 错误并指明具体规则。只读工具（搜索/读取/检查/测试/ATC/导出/查看传输请求/转储分析）不受限制——`allowedTransports` 只约束编辑类操作引用的传输号，读取任意请求详情不受该开关限制。两个高危能力各有独立开关：`adt_execute`（执行任意 ABAP，`allowExecution`）与 `adt_batch` 的写部分（`allowBatchWrites`，默认关）。
 
-六个独立开关支持**全局默认 + 按目的地覆盖**：顶层键是全局默认，每个 destination 可用自己的 `policy:` 块逐键覆盖（如生产系统只读、开发系统放开）。全局键生效值优先级为 **工作区文件 > settings 用户段/共享文件 > 插件行内联 config > `SAP_*` 环境变量 > 内置默认值**（详见上方「配置分层」；工作区文件的顶层权限键只作用于该文件中的目的地）：
+六个独立开关支持**全局默认 + 按目的地覆盖**：顶层键是全局默认，每个 destination 可用自己的 `policy:` 块逐键覆盖（如生产系统只读、开发系统放开）。全局键生效值优先级为 **工作区文件 > 共享文件 > 插件行 volatile config（预设行 / Settings 表单写入的行覆盖）> `SAP_*` 环境变量 > 内置默认值**（详见上方「配置分层」；工作区文件的顶层权限键只作用于该文件中的目的地）：
 
 | 开关 | config 键 | 环境变量 | 默认 | 含义 |
 |---|---|---|---|---|
@@ -223,16 +234,19 @@ destinations:
 | 代码执行 | `allowExecution` | `SAP_ALLOW_EXECUTION` | `true` | `false` 时 `adt_execute`（运行程序/类，可任意改系统状态）被拒绝——只读目的地的总闸 |
 | batch 写部分 | `allowBatchWrites` | `SAP_ALLOW_BATCH_WRITES` | `false` | `adt_batch` 默认只做只读 GET 扇出；开启后才允许 POST/PUT 内嵌请求（通用写无法逐对象校验策略，专用写工具仍是受管控路径；传输释放/删除路径永远禁止） |
 
-按目的地覆盖示例（settings.yaml）：
+按目的地覆盖示例（预设行 `config:`，Settings 表单写的就是这里的同结构行覆盖）：
 
 ```yaml
-abap-adt:
-  allowedPackages: 'Z*,$TMP'        # 全局默认
-  destinations:
-    - name: prd
-      policy:
-        enableTransports: false      # prd：禁用传输 + 只许 $TMP
-        allowedPackages: '$TMP'
+# presets/abap-dev/cordis.patch.yml 中 abap-adt 行的 config（或 profile patch 的行覆盖）
+- id: abap-adt
+  name: ../../packages/dsh-plugin-abap-adt
+  config:
+    allowedPackages: 'Z*,$TMP'        # 全局默认
+    destinations:
+      - name: prd
+        policy:
+          enableTransports: false      # prd：禁用传输 + 只许 $TMP
+          allowedPackages: '$TMP'
 ```
 
 要点：
@@ -269,7 +283,7 @@ abap-adt:
 
 ## 测试
 
-共 **288 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略（含读侧黑名单与环境分级 profile）、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**密码分层解析**（明文 > DSH 凭证服务 > 进程环境变量）、**工作区配置层**（叠加合并/默认目的地/权限键/客户端复用/原子写）、**SAP GUI 连接发现**（SAPUILandscape.xml 解析：直连/引用/负载均衡/Include/经典 ini 回退/多词搜索）与 **adt_create_destination 工具流**（GUI 导入/手工创建/覆盖保护/密码入凭证文件或明文回退）、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退、**CSRF 预热顺序锁定**——源自 impc-dev/D01 实战反馈）、**方法级读写 + 依赖契约序言 + 能力巡检**（`agent_extras.test.ts`：方法块定位/依赖提取排序/契约抽取的纯函数测试，方法窗口编址、序言"失败依赖可见"纪律、方法手术走 OCC 流水线、`adt_selfcheck` 判定表与 **发布目录计数锁定**——目录数漂移时测试先于文档失败）、**读侧治理与环境分级**（`read_policy.test.ts`：standard 档 KNA1 零请求拒绝、off 档不拦、豁免审计 note、SQL FROM/JOIN 提取）、**调试器全链路**（`debugger.test.ts`：断点→listen 命中→栈→变量→单步→写值→detach 对 mock 走完整循环 + 三档策略门）、**TABL 一步建表 + 文本元素 + co-change**（DDL 生成纯函数、blueSource 流激活验证、三子源解析、共变排序与截断纪律）。
+共 **362 项**（`pnpm test`，CI 发布前强制跑全量）：协议解析（XML/传输）、客户端 ↔ mock 端到端、权限策略（含读侧黑名单与环境分级 profile）、$batch/执行器/结构化编辑器/转储分析/版本比对/块编辑（含 2063 行真实生产语料回归）/快照冲突控制、abaplint 本地检查、版本 diff、发布门禁、配置分层、**密码分层解析**（明文 > DSH 凭证服务 > 进程环境变量）、**工作区配置层**（叠加合并/默认目的地/权限键/客户端复用/原子写）、**SAP GUI 连接发现**（SAPUILandscape.xml 解析：直连/引用/负载均衡/Include/经典 ini 回退/多词搜索）与 **adt_create_destination 工具流**（GUI 导入/手工创建/覆盖保护/密码入凭证文件或明文回退）、**真实后端 quirk 回归**（`quirks.test.ts`：传输状态码翻译与 400 回退、ATC 过滤回退与 P1–P4 推导、include 位置映射、release 多键回退、**CSRF 预热顺序锁定**——源自 impc-dev/D01 实战反馈）、**方法级读写 + 依赖契约序言 + 能力巡检**（`agent_extras.test.ts`：方法块定位/依赖提取排序/契约抽取的纯函数测试，方法窗口编址、序言"失败依赖可见"纪律、方法手术走 OCC 流水线、`adt_selfcheck` 判定表与 **发布目录计数锁定**——目录数漂移时测试先于文档失败）、**读侧治理与环境分级**（`read_policy.test.ts`：standard 档 KNA1 零请求拒绝、off 档不拦、豁免审计 note、SQL FROM/JOIN 提取）、**调试器全链路**（`debugger.test.ts`：断点→listen 命中→栈→变量→单步→写值→detach 对 mock 走完整循环 + 三档策略门）、**TABL 一步建表 + 文本元素 + co-change**（DDL 生成纯函数、blueSource 流激活验证、三子源解析、共变排序与截断纪律）、**volatile 接线**（`reload.test.ts`：`loader/volatile-update` 提交后原地重建、销毁竞态 D4——排队中的重建不得复活已销毁的注册表）。
 
 ## 路线图（可扩展方向）
 

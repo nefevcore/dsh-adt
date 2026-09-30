@@ -1,6 +1,6 @@
 {
   "name": "@nefevcore/abap-adt-core",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Host-neutral agent tool core for SAP ABAP ADT: the complete adt_* tool family (search → read → edit → activate → unit test → ATC → transport → execute → debug), destination registry, two-sided governance policy, OCC snapshots and config layering — consumed by host adapters such as @nefevcore/abap-adt-dsh-plugin (DeepSeek Harness) and AgentChat's ac-sap-adt row.",
   "type": "module",
   "main": "./lib/index.js",
@@ -18,8 +18,8 @@
     "build": "tsc -p ."
   },
   "dependencies": {
-    "@deepseek-ai/cosmokit": "^1.8.2",
-    "@deepseek-ai/schemastery": "^3.0.0",
+    "@deepseek-ai/cosmokit": "^1.8.5",
+    "@deepseek-ai/schemastery": "^3.18.4",
     "@nefevcore/abap-adt-mock": "workspace:*",
     "@nefevcore/abap-adt-protocol": "workspace:*",
     "@abaplint/core": "^2.120.23",

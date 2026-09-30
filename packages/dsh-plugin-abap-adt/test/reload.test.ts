@@ -1,16 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { AdtRegistry, LockLedger, builtinDefaults } from '@nefevcore/abap-adt-core';
+import { join, dirname } from 'node:path';
+import type { Volatile } from '@deepseek-ai/cosmokit';
+import { AdtRegistry, LockLedger, builtinDefaults, type PluginConfig } from '@nefevcore/abap-adt-core';
 import { apply } from '../lib/index.js';
 
 const dest = (name: string, overrides: Record<string, unknown> = {}) =>
   ({ name, url: `https://${name}.example.com`, strictSSL: true, timeoutMs: 60_000, ...overrides }) as never;
 
 // ---------------------------------------------------------------------------
-// AdtRegistry.reload (settings hot reload)
+// AdtRegistry.reload (config hot reload)
 // ---------------------------------------------------------------------------
 
 test('reload: swaps destinations and policy in place', async () => {
@@ -105,8 +106,9 @@ test('LockLedger: persist is atomic (tmp + rename, audit D5) — no torn or left
 });
 
 // ---------------------------------------------------------------------------
-// Audit P1 regressions (docs/audit-fix-plan.md): M5 demo credentials follow
-// the environment, D4 a queued rebuild cannot revive a disposed registry.
+// Audit P1 regression (docs/audit-fix-plan.md): M5 demo credentials follow
+// the environment, D4 a queued volatile rebuild cannot revive a disposed
+// registry.
 // ---------------------------------------------------------------------------
 
 test('M5: the demo destination uses the same credentials as the mock server', async () => {
@@ -135,58 +137,84 @@ test('M5: the demo destination uses the same credentials as the mock server', as
   }
 });
 
-test('D4: a settings change queued behind disposal cannot revive the registry', async () => {
-  // Minimal plugin-level harness: apply() with a fake Context whose
-  // `inject(['settings'], …)` callback we invoke manually, driving the very
-  // rebuild/dispose race the audit describes.
-  const infos: string[] = [];
-  const originalInfo = console.info;
-  console.info = ((msg: unknown, ...rest: unknown[]) => infos.push([msg, ...rest].join(' '))) as typeof console.info;
-  let settingsFn: ((sctx: unknown) => void) | undefined;
-  let watchCallback: (() => void) | undefined;
+/**
+ * Minimal plugin-level harness for the DSH ≥ 0.2.0 wiring: a fake Context
+ * capturing the `loader/volatile-update` listener, plus a fake
+ * `Volatile<PluginConfig>` reference whose committed snapshot the test
+ * swaps — exactly what the Loader does on a volatile settings edit.
+ */
+interface Harness {
+  dispose: () => Promise<void>;
+  commit(next: PluginConfig): void;
+  fireVolatileUpdate(): void;
+  registered: string[];
+}
+
+async function mountHarness(initial: PluginConfig): Promise<Harness> {
   const registered: string[] = [];
+  let listener: (() => void) | undefined;
+  let committed = initial;
   const fakeCtx = {
     fiber: { state: 0 }, // active fiber (never "unloading")
     tools: { register: (t: { name: string }) => registered.push(t.name) },
-    inject: (names: string[], cb: (sctx: unknown) => void) => {
-      if (names.includes('settings')) settingsFn = cb;
+    on: (event: string, cb: () => void) => {
+      if (event === 'loader/volatile-update') listener = cb;
     },
   } as never;
+  const ref: Volatile<PluginConfig> = { get: () => committed };
+  const dispose = await apply(fakeCtx, ref);
+  return {
+    dispose,
+    registered,
+    commit: (next) => {
+      committed = next;
+    },
+    fireVolatileUpdate: () => listener?.(),
+  };
+}
 
+test('volatile wiring: a committed config rebuilds the registry in place', async () => {
+  const infos: string[] = [];
+  const originalInfo = console.info;
+  console.info = ((msg: unknown, ...rest: unknown[]) => infos.push([msg, ...rest].join(' '))) as typeof console.info;
   try {
-    // Start with demo OFF; the settings layer then flips it ON — the change
+    const harness = await mountHarness({ ...builtinDefaults(), demo: false } as PluginConfig);
+    try {
+      assert.ok(harness.registered.length > 0, 'tools were registered');
+      // A settings edit lands: the Loader commits the new snapshot behind
+      // the same reference, then dispatches the event…
+      harness.commit({ ...builtinDefaults(), demo: true, demoPort: 0 } as PluginConfig);
+      harness.fireVolatileUpdate();
+      // …and the queued rebuild runs on the microtask chain.
+      await new Promise((r) => setImmediate(r));
+      const applied = infos.filter((i) => i.includes('config applied'));
+      assert.equal(applied.length, 1, `exactly one rebuild (got: ${applied.join(' | ')})`);
+      assert.match(applied[0]!, /demo/, 'the new snapshot reached the registry');
+    } finally {
+      await harness.dispose();
+    }
+  } finally {
+    console.info = originalInfo;
+  }
+});
+
+test('D4: a volatile update queued behind disposal cannot revive the registry', async () => {
+  const infos: string[] = [];
+  const originalInfo = console.info;
+  console.info = ((msg: unknown, ...rest: unknown[]) => infos.push([msg, ...rest].join(' '))) as typeof console.info;
+  try {
+    // Start with demo OFF; the volatile edit then flips it ON — the change
     // that would (pre-fix) restart the mock on a disposed registry.
-    const entryConfig = { ...builtinDefaults(), demo: false } as Parameters<typeof apply>[1];
-    let resolved: Parameters<typeof apply>[1] = entryConfig;
-    const dispose = await apply(fakeCtx, entryConfig);
-    assert.ok(registered.length > 0, 'tools were registered');
-    // Activate the settings service scope: installSection wires the source,
-    // fires onChange (rebuild #1), and registers a watch the test can drive.
-    settingsFn!({
-      settings: {
-        installSection: (
-          _owner: unknown,
-          _ns: string,
-          _schema: unknown,
-          _entry: unknown,
-          hooks: { setSource: (current: () => unknown) => void; onChange: () => void },
-        ) => {
-          hooks.setSource(() => resolved);
-          hooks.onChange();
-          watchCallback = hooks.onChange;
-        },
-      },
-      effect: (f: () => () => void) => void f(),
-    });
-    // A settings change arrives (rebuild #2 queued) …
-    resolved = { ...builtinDefaults(), demo: true };
-    watchCallback!();
+    const harness = await mountHarness({ ...builtinDefaults(), demo: false } as PluginConfig);
+    // A volatile change arrives (rebuild queued) …
+    harness.commit({ ...builtinDefaults(), demo: true } as PluginConfig);
+    harness.fireVolatileUpdate();
     // … and the plugin is unloaded immediately after, before the queued
     // rebuild gets to run its IO.
-    await dispose();
+    await harness.dispose();
     await new Promise((r) => setImmediate(r));
     // Even a LATE change (arriving after unload) must be a no-op.
-    watchCallback!();
+    harness.fireVolatileUpdate();
     await new Promise((r) => setImmediate(r));
     const applied = infos.filter((i) => i.includes('config applied'));
     assert.equal(applied.length, 0, `no reload may run at/after disposal (got: ${applied.join(' | ')})`);

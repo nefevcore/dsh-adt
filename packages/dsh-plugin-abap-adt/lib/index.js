@@ -5,20 +5,31 @@
  * Thin adapter over the host-neutral core (`@nefevcore/abap-adt-core`):
  * this package owns exactly the DSH wiring —
  *
- *   - the `abap-adt` settings namespace (composition row config = base,
- *     `~/.dsh/settings.yaml` `abap-adt:` section = user layer, hot reload),
+ *   - the `abap-adt` entry config (DSH ≥ 0.2.0 model: the Config schema is
+ *     volatile, so the composition row config is a LIVE reference — the
+ *     Loader commits settings edits in place and emits
+ *     `loader/volatile-update`, and this plugin rebuilds the destination
+ *     registry without a remount),
  *   - registration on the DSH tool registry (`ctx.tools`) with the
- *     lossless-JSON boundary sanitization (`deepCompact`),
- *   - the `abap-adt-preset` CLI (presets for DSH sessions).
+ *     lossless-JSON boundary sanitization (`deepCompact`).
  *
  * Everything else — the 32 `adt_*` tools, destination registry, policy,
  * OCC snapshots, debugger sessions, config layering — lives in the core and
  * is re-exported below for backward compatibility (the pre-0.7.0 `.` entry
  * exported the same surface).
  */
-import { Context } from '@deepseek-ai/cordis';
-import { AdtRegistry, assembleAdtTools, composeLayers, Config, credentialResolverOf, DebuggerManager, deepCompact, LockLedger, resolveEffectiveConfig, } from '@nefevcore/abap-adt-core';
+import { AdtRegistry, assembleAdtTools, composeLayers, Config as CoreConfig, credentialResolverOf, DebuggerManager, deepCompact, LockLedger, resolveEffectiveConfig, } from '@nefevcore/abap-adt-core';
 const name = 'abap-adt';
+/**
+ * The DSH entry schema: the core's host-neutral Config wrapped `.volatile()`
+ * (DSH ≥ 0.2.0 hot-reload model). The Loader parses the plugin row's config
+ * through THIS schema, so the value `apply` receives is a live
+ * `Volatile<PluginConfig>` reference: settings edits persist into the active
+ * profile's Cordis patch, HMR reconciles the entry, and the Loader commits
+ * the new snapshot behind the same reference — emitting
+ * `loader/volatile-update` — instead of remounting the plugin.
+ */
+const Config = CoreConfig.volatile();
 /**
  * DSH declaration on the core's host-detection seam (core
  * `src/hostprofile.ts`): the core keeps its credential/description wording
@@ -31,7 +42,7 @@ const DSH_HOST_PROFILE = {
     label: 'DSH',
     credentialStore: { label: 'DSH credential store', locationHint: '~/.dsh/.credentials.yaml' },
     passwordResolution: 'process env > ~/.dsh/.credentials.yaml > .env files',
-    globalConfigHint: 'overrides ~/.dsh/settings.yaml `abap-adt:`',
+    globalConfigHint: 'the abap-adt form in DSH Settings (Plugins page) or the composition row config',
     workspaceConfigDir: '.dsh-abap-adt',
 };
 // Only `tools` is a hard dependency (audit D1): without it the plugin has no
@@ -44,31 +55,32 @@ const inject = ['tools'];
 /**
  * Apply the plugin: build the destination registry and register every tool.
  *
- * Configuration follows the DSH settings seam: the plugin row's `config:`
- * block is the composition `base`, the user's `~/.dsh/settings.yaml`
- * `abap-adt:` section overrides it, and an explicit `configFile` (team
- * shared) is authoritative. When the settings service is not mounted the
- * composition entry alone drives the plugin, exactly as composed. Config
- * changes hot-reload the registry in place — only code changes need a DSH
- * restart.
+ * Configuration follows the DSH ≥ 0.2.0 volatile-config model: `config` is a
+ * LIVE reference (see {@link Config}). Settings edits (the abap-adt form on
+ * the Plugins page) persist into the active profile's Cordis patch, HMR
+ * reconciles the entry, the Loader commits the new snapshot behind the same
+ * reference, and the `loader/volatile-update` listener below rebuilds the
+ * registry — no remount, no restart. Each rebuild clones the current
+ * snapshot once (the layering pipeline and registry receive ordinary
+ * mutable data, exactly as in a plain mount). An explicit `configFile`
+ * (team shared) stays authoritative over the row config, exactly as
+ * composed.
  */
 async function apply(ctx, config) {
     const logger = ctx.logger?.(name);
     const warn = (message) => (logger?.warn ?? console.warn)(`abap-adt: ${message}`);
     const info = (message) => (logger?.info ?? console.info)(`abap-adt: ${message}`);
     const error = (message) => (logger?.error ?? console.error)(`abap-adt: ${message}`);
+    /** One mutable copy of the current committed config snapshot. */
+    const currentEntry = () => structuredClone(config.get());
     // Persistent lock ledger: survives process restarts so `adt_unlock_all` can
     // release locks left behind by crashed sessions (core src/locks.ts).
     const ledger = new LockLedger();
-    // Settings wiring (optional service): `source()` returns the resolved
-    // namespace value while a provider is attached and falls back to the
-    // composition entry otherwise. Every attach/detach/change fires onChange —
-    // including one synchronously at attach — so all rebuild state and the
-    // registry must exist BEFORE the section is installed.
-    let source = () => config;
+    // Hot reload: every loader/volatile-update queues a rebuild — serialized
+    // through `rebuildChain`, deduplicated against the last applied snapshot.
     let rebuildChain = Promise.resolve();
     let lastSnapshot = '';
-    // Set by the disposer BEFORE teardown (audit D4): a settings change queued
+    // Set by the disposer BEFORE teardown (audit D4): a volatile change queued
     // behind the current rebuild must never run registry.reload() on a disposed
     // registry — that would restart the demo mock outside any disposer's reach
     // (leaked listeners until process exit).
@@ -78,7 +90,7 @@ async function apply(ctx, config) {
     // ~/.dsh/.credentials.yaml > .env files, re-resolved per tool call. The
     // host profile is the STORAGE authority: it fixes the workspace config
     // directory (.dsh-abap-adt) and voices the file's self-documentation.
-    const registry = await AdtRegistry.create(composeLayers([config]), {
+    const registry = await AdtRegistry.create(composeLayers([currentEntry()]), {
         credentialResolver: credentialResolverOf(ctx),
         hostProfile: DSH_HOST_PROFILE,
     });
@@ -91,12 +103,7 @@ async function apply(ctx, config) {
             if (disposed)
                 return; // plugin already unloaded — do not revive the registry
             try {
-                const resolved = source();
-                const settingsAttached = resolved !== config;
-                const { config: effective, warnings } = await resolveEffectiveConfig({
-                    entry: config,
-                    resolved: settingsAttached ? resolved : undefined,
-                });
+                const { config: effective, warnings } = await resolveEffectiveConfig({ entry: currentEntry() });
                 for (const warning of warnings)
                     warn(warning);
                 const snapshot = JSON.stringify(effective);
@@ -106,7 +113,6 @@ async function apply(ctx, config) {
                 lastSnapshot = snapshot;
                 info(`config applied: ${registry.destinations.size} destination(s): ` +
                     `${[...registry.destinations.keys()].join(', ') || '(none)'}` +
-                    (settingsAttached ? ' [settings]' : '') +
                     (effective.configFileUsed ? `; config file: ${effective.configFileUsed}` : ''));
             }
             catch (err) {
@@ -115,20 +121,12 @@ async function apply(ctx, config) {
         });
         return rebuildChain;
     }
-    // Installed last: attach fires onChange immediately, and rebuild() above
-    // is ready for it by this point. (dsh ≥ 0.1.2 settings seam: the old
-    // module-level installSettingsSection() moved onto the service —
-    // ctx.inject wires the optional dependency and settingsCtx.settings
-    // owns the section lifecycle, with identical attach/detach semantics.)
-    ctx.inject(['settings'], (settingsCtx) => {
-        settingsCtx.settings.installSection(ctx, name, Config, config, {
-            setSource: (current) => {
-                source = current;
-            },
-            onChange: () => {
-                void rebuild();
-            },
-        });
+    // The Loader commits volatile values BEFORE dispatching, so the rebuild
+    // above always reads the already-updated `config` (cordis-plugin-loader
+    // `_commitVolatile`; a listener failure is logged by the Loader and never
+    // fails the entry update).
+    ctx.on('loader/volatile-update', () => {
+        void rebuild();
     });
     const deps = { registry, ledger, debugger: debuggerManager };
     // Host facade for the core's environment-detection seam: declares the DSH

@@ -13,43 +13,46 @@ pnpm bundle
 # 产物: dist/dsh-plugin-abap-adt.bundle.mjs（约 5.8MB，内联 ADT 协议 + mock + abaplint）
 ```
 
-**接收方用法**（无需克隆仓库、无需构建）：
+**接收方用法**（无需克隆仓库、无需构建；DSH ≥ 0.2.0）：
 
-1. 把 `dsh-plugin-abap-adt.bundle.mjs` 放到任意目录（如 `C:\tools\`）
-2. **推荐：装成 agent preset（按会话启用，不影响其他工作区）**——按仓库里的模板 [`presets/abap-adt.example/`](presets/abap-adt.example/README.md) 三步走：
-   - 官方 `cordis` 预设的 `agent.cordis.yml` **完整复制**为 `~\.dsh\.agent-presets\abap-adt\agent.cordis.yml`，末尾追加插件行（同目录 `agent.cordis.append.yml`，`name` 指向 bundle 文件）：
+1. 把 `dsh-plugin-abap-adt.bundle.mjs` 放到任意目录（如 `C:\tools\abap-adt\`）
+2. **装成 agent preset（按会话启用，不影响其他工作区）**——把仓库里的
+   [`presets/abap-dev/`](presets/abap-dev/) 两个文件（`package.json` +
+   `cordis.patch.yml`）复制到同一目录，把 `cordis.patch.yml` 里 `abap-adt` 行的
+   `name` 改为指向 bundle 文件的相对路径（Loader 以 patch 文件为锚点解析）：
 
    ```yaml
-   # 追加在官方 cordis 预设所有行之后
    - id: abap-adt
-     name: 'file:///C:/tools/dsh-plugin-abap-adt.bundle.mjs'
+     name: ./dsh-plugin-abap-adt.bundle.mjs   # 与 patch 文件同目录
      config:
        demo: true          # 免 SAP 系统体验
-     # destinations / 权限管控放 ~/.dsh/settings.yaml 的 abap-adt: 段（下一步），预设行不用再动
+       # destinations / 权限管控放工作区 .dsh-abap-adt/destinations.yaml 或
+       # abap-adt 条目的 volatile 配置（Settings Plugins 页表单），预设行不用再动
    ```
 
-   - 把模板 [`settings-section.example`](presets/abap-adt.example/settings-section.example) 的 `abap-adt:` 段合并进 `~\.dsh\settings.yaml`，填真实系统（保存即热生效，无需重启）：
+3. 让代理执行 `plugin_manager { action: "install_bundle", target: "<该目录>" }`
+   （或用 Web UI 的 Plugins 面板从目录安装），重启 DSH（`dsh web`）；新建会话时在
+   预设 chip 选「ABAP Development」，即可使用全部 `adt_*` 工具。
+
+4. 连接真实系统：按 [`presets/abap-dev/destinations.example`](presets/abap-dev/destinations.example)
+   在工作区写 `.dsh-abap-adt/destinations.yaml`（保存即热生效），或在 DSH Settings
+   的 Plugins 页填 `abap-adt` 表单：
 
    ```yaml
-   # ~/.dsh/settings.yaml 的 abap-adt: 段
-   abap-adt:
-     defaultDestination: dev
-     destinations:
-       - name: dev
-         url: https://你的SAP主机:端口
-         client: '100'
-         username: 用户名
-         passwordEnv: ADT_DEV_PASSWORD   # 密码走环境变量
-         strictSSL: false                # 自签名证书时
+   # <工作区>/.dsh-abap-adt/destinations.yaml
+   defaultDestination: dev
+   destinations:
+     - name: dev
+       url: https://你的SAP主机:端口
+       client: '100'
+       username: 用户名
+       passwordEnv: ADT_DEV_PASSWORD   # 密码走环境变量
+       strictSSL: false                # 自签名证书时
    ```
 
-   - 同目录放模板里的 `preset.yml`（显示名）
+> 全局（所有会话）加载不受支持——启用统一走 agent preset 声明行（按会话），见根 README「安装与更新」。
 
-3. 重启 DSH（`dsh web`）；新建会话时在工作区旁的预设 chip 选该预设，即可使用全部 `adt_*` 工具。
-
-> `cordis.patch.yml` 的 `- insert:` 插入机制已废弃，全局（所有会话）加载不再是受支持方式——启用统一走上面的 agent preset 行（按会话），见根 README「安装与更新」。
-
-> 配置分层（就近覆盖）：`~\.dsh\settings.yaml` 的 `abap-adt:` 段 > 插件行内联 config > `SAP_*` 环境变量（仅权限六开关兜底）> 内置默认；旧版独立文件 `~\.dsh\abap-adt.yml` 已废弃。`destinations` 跨层按名字合并，settings 同名条目覆盖内联。详见主 README「配置分层」。
+> 配置分层（就近覆盖）：工作区文件 > 显式 configFile > 插件行 volatile config（Settings 表单/预设行）> `SAP_*` 环境变量（仅权限开关兜底）> 内置默认；旧版独立文件 `~\.dsh\abap-adt.yml` 已废弃。`destinations` 跨层按名字合并，高层同名条目覆盖低层。详见主 README「配置分层」。
 
 > 注意：接收方的 profile 里必须已有 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/schemastery`（标准 dsh profile 自带）。
 
@@ -81,7 +84,7 @@ corepack pnpm build
 
 ## 方式 3：npm 发布（最规范，接收方两条命令安装启用）
 
-四个包按依赖顺序发布：`@nefevcore/abap-adt-protocol` → `abap-adt-mock` → `abap-adt-core` → `abap-adt-dsh-plugin`（0.7.0 内核拆分后 core 是第四个包；插件包**刻意不声明** `dsh.bundle`——安装只是进 profile 依赖、不自动加载，须用 `abap-adt-preset` CLI 生成预设按会话启用，见根 README「安装与更新」）。
+四个包按依赖顺序发布：`@nefevcore/abap-adt-protocol` → `abap-adt-mock` → `abap-adt-core` → `abap-adt-dsh-plugin`（0.7.0 内核拆分后 core 是第四个包；插件包**刻意不声明** `dsh.bundle`——安装只是进 profile 依赖、不自动加载，启用走 `presets/abap-dev/` 预设 bundle 的声明行，见根 README「安装与更新」）。
 
 ### 发版流程：推 `v*` 标签，Actions 自动发布
 
@@ -114,16 +117,18 @@ CI 发布的唯一前提是 tag 推上 GitHub；直连超时 / SSL reset 时：
 
 > 前提（各包一次性配置）：npmjs.com 包页面 → Settings → **Trusted Publishing** 添加 `nefevcore / dsh-adt / publish.yml`（environment 留空）——只在包已存在时可配，所以**任何新包的第一次发布必须手动一次**（v0.1.0 首发即此情形）。
 
-**接收方安装（无需克隆、无需构建）：**
-```bash
-# 要求 pnpm 在 PATH（dsh CLI 内部即 pnpm）
-dsh plugin --profile web add @nefevcore/abap-adt-dsh-plugin
-dsh plugin --profile web exec abap-adt-preset   # 生成按会话启用的预设；装完不自动加载
-```
+**接收方安装（无需克隆、无需构建；DSH ≥ 0.2.0）**：把
+[`presets/abap-dev/`](presets/abap-dev/) 复制到任意目录，`cordis.patch.yml` 里
+`abap-adt` 行的 `name` 改为 `'@nefevcore/abap-adt-dsh-plugin'`，然后让代理执行
+`plugin_manager { action: "install_bundle", target: "<该目录>" }`（或 Web UI 的
+Plugins 面板从目录安装）。
 
-重启 DSH 后新建会话、在预设 chip 选「ABAP Development」即可用（demo 目的地）。要接真实系统/设权限：把 [`presets/abap-adt.example/settings-section.example`](presets/abap-adt.example/settings-section.example) 的 `abap-adt:` 段合并进 `~/.dsh/settings.yaml` 填好即可（保存即热生效）。**注意：`dsh plugin add` 只装依赖、不创建预设**——预设由 `exec abap-adt-preset` 生成；手工定制按方式 1 的 preset 模板来。
+重启 DSH 后新建会话、在预设 chip 选「ABAP Development」即可用（demo 目的地）。
+要接真实系统/设权限：按 [`presets/abap-dev/destinations.example`](presets/abap-dev/destinations.example)
+在工作区写 `.dsh-abap-adt/destinations.yaml`，或在 DSH Settings 的 Plugins 页填
+`abap-adt` 表单（都保存即热生效）。
 
-> 注意：包不声明 `dsh.bundle`，装进 profile 只是依赖，**不会全局加载**——`adt_*` 工具只出现在用该预设创建的会话（按会话隔离是刻意设计）。
+> 注意：插件包不声明 `dsh.bundle`，预设行只存在于 `preset-abap-adt` 声明里，**不会全局加载**——`adt_*` 工具只出现在用该预设创建的会话（按会话隔离是刻意设计）。
 
 **内网/公司场景**：可搭 [Verdaccio](https://verdaccio.org) 私有源，`pnpm publish --registry http://内网源`，同事 `--registry` 指向内网源安装。
 
@@ -156,7 +161,7 @@ gh repo edit nefevcore/dsh-adt --add-topic \
 改代码后（走方式 3 发 npm 的完整流程见上方「发版流程」）：
 ```bash
 pnpm build            # 编译
-pnpm test             # 全量测试（随版本增长，当前 300 项）
+pnpm test             # 全量测试（随版本增长，当前 362 项）
 pnpm bundle           # 重新生成单文件（方式 1 分发时）
 ```
 **接收方加载的是文件 URL → 必须重启 DSH 才会加载新代码**（Node ESM 缓存钉住旧模块，HMR 只重跑配置）。

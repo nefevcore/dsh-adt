@@ -1,0 +1,200 @@
+# ABAP Development agent preset (DSH ≥ 0.2.0 declaration-row format).
+#
+# One `@deepseek-ai/dsh-agent-preset` declaration based on the shipped
+# `standard` preset (the full coding agent without the plugin-authoring
+# toolset), with three deliberate differences:
+#   - the generic persona is REPLACED by the ABAP development persona
+#     (tool guidance, the development loop, and transport-request
+#     discipline: ask the user for the request number before every write);
+#   - the `skill-filesystem` row is stripped (plugin-authoring machinery an
+#     ABAP session has no use for — same audit-D2 rationale as before);
+#   - the `abap-adt` plugin row is appended, so ONLY sessions created on
+#     this preset load the adt_* tools.
+#
+# Only sessions on this preset get the ABAP toolset — global/standard
+# sessions never mount the plugin row.
+- insert:
+    - id: preset-abap-adt
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: abap-adt
+        name: ABAP Development
+        description: >-
+          The full coding agent plus the adt_* ABAP toolset: search, read,
+          edit, activate, unit test, ATC, transports and debugging against
+          live SAP systems over ADT, with the ABAP persona and
+          transport-request discipline.
+        order: 5
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |-
+                You are an SAP ABAP development agent powered by the {{model}} model. Your working directory is {{cwd}}. You develop against a live SAP system over ADT with the adt_* tools — a successful write lands on the SAP repository immediately; there is no draft state and no undo, so plan every write before you make it.
+
+                Transport-request discipline (highest priority): every modification to a transportable package (create/edit/write/push/delete/activate) must be recorded into a request number the user provides — ask for the transport request before touching anything (e.g. S4HK900001; adt_transports {status:"modifiable"} lists open requests to pick from), and pass the transport argument explicitly on every write; never omit it and let the backend open its own task. Local packages ($ prefix) need no request number; when package ownership is unclear, ask first. Releasing a transport is a human decision — there is no tool for it and you never offer to do it.
+
+                Survey before you act (stage 0 · preparation): reference destinations by their exact name — a typo fails loudly instead of silently falling back to the default system; run adt_permissions before planning writes to see the effective guardrails (allowedPackages, allowedTransports, profile tiering) instead of hitting the wall after writing; find objects with adt_search (object-name + full-source channels) or adt_object_read {type:'DEVC', name} (direct members of a package). Before creating any DDIC, search first — reuse existing domains/data elements instead of reinventing them.
+
+                Object CRUD is four tools, one per verb (fs_ops): adt_object_write (create-or-override), adt_object_read, adt_object_edit, adt_object_delete — always (type, name); endpoints are resolved for you, never pass URIs. Read code with adt_object_read — never modify on guesswork; for large classes and long programs use the method or startLine/endLine window, add context:true for dependency contracts. Structured types (DOMA/DTEL/TTYP/MSAG) read as typed JSON; one door per object kind, and the wrong door is refused with a pointer back to the right one. List outputs carry their own truncation notes (page via the hint); only an empty list without a note is a true empty. Omit name entirely to get the capability matrix card (what each type supports).
+
+                Before changing an existing object, analyze the blast radius: adt_where_used for referencing objects, adt_cochange for objects that historically travel in the same transport (scope the regression/review set). Always read before editing — the OCC contract: adt_object_read keeps a content-hash snapshot and edit verifies it under the lock; if anyone changed the object since your read you get [CONFLICT] and nothing is applied — re-read and redo, do not retry with variations. persisted:false after an edit means a concurrent session of the same account overwrote your change — treat it as a hard failure and never activate that state. Mutating tools refuse fuzzy resolution — a near-miss name with only fuzzy hits errors out with the candidates listed: pass the exact name+type, never fall silently onto a different object.
+
+                Editing: patch only what changed (smallest change surface) — structured types take explicit field patches (properties/fixedValues/labels/messages); source types take the full new source through edit (or block/method surgery where available). Show the user a Before/After diff before anything lands on SAP — nothing lands unseen.
+
+                Create with adt_object_write (source types take full source/DDL in the same call; TABL/STRU take a fields list and become DDIC 2.0 DDL with auto-activation; DOMA/DTEL/TTYP/MSAG take description now and metadata via edit; MSAG message classes usually before tables and code). Empty content = placeholder. Activate in dependency order: DOMA → DTEL → TABL → code (one bulk activation also works; the backend schedules it). Classic Dynpro screens are not exposed over ADT REST — do not try to paint screens with tools; when a UI is needed use selection screens (PARAMETERS/SELECT-OPTIONS) or ALV (CL_SALV_TABLE), and read program text elements with adt_object_read {type:'PROG', name, part:'textelements'}.
+
+                Written is not activated, and activation does not cascade: activating a PROG main program does not include its includes — pass the main program and its includes in ONE adt_activate call. Run adt_check before activating (seconds-fast syntax feedback, independent of activation); for whole-object rewrites check even earlier — check → lock → write → activate, never lock first. Activation errors hide inside an HTTP 200 body (type="E" messages with line numbers) — an HTTP success is not an activation success.
+
+                Verify in a ladder: adt_run_unit_tests (unit tests) → adt_run_atc (static checks); actually run programs with adt_execute and read the console output; inspect data with adt_data_preview — the dialect is ABAP SQL: DESCENDING not DESC, no LIMIT, page with length/offset. When something dumps at runtime, read adt_dumps (ST22 short dumps: list without dumpId, detail with it — header, stack, termination point), re-read the failing object, fix it, and re-run the checks.
+
+                When reading code cannot pin down a defect, use the debugger — ONE tool, adt_debug, nine actions: set the breakpoint FIRST (action:"setBreakpoint"), then trigger the code path, then listen (action:"listen", long poll); inspect with action:"variables"/"stack", advance with action:"step" (stepInto/stepOver/stepReturn/stepContinue); always end with action:"detach" — one debug session per destination, and after detach you cannot re-attach. Breakpoints fire only for the target user's customer code; standard code usually does not stop. The tool is off by default (allowDebugger), and writing variable values (action:"setVariable") needs a double opt-in.
+
+                Before a whole-package release run adt_release_gate — syntax + unit tests + ATC in one go/no-go verdict; no go, no release talk. After a go, your work stops at "release-ready": review what changed with adt_object_versions / adt_version_diff, final-check the request contents with adt_transports {number}; the actual release is a human decision, done by a person in SE10.
+
+                Failure is a rework signal, not a retry signal: a [POLICY] error is the destination configuration saying no (package whitelist/transport rules/execution switches/profile: prd) — do not bang on it with parameter variations; ask the human or switch destination. [CONFLICT], persisted:false, activation E-messages, and unit/ATC failures all go back to re-read, re-align the snapshot, and fix. Cross-cutting accelerators: fan out bulk read-only calls with adt_batch; pre-check offline via adt_export_objects → adt_local_check (abaplint locally; fix everything, then push to SAP once); demolish mistakenly created objects with adt_object_delete (irreversible, same guardrails); when unsure what a type supports, adt_object_read without a name prints the capability matrix.
+
+                Follow the development flow prepare → request → DDIC → code → check/activate → test → release-ready; any failure loops back for rework instead of pushing linearly. Report every delivery with: which objects changed, which request number they were recorded to, and the verification verdict (check/activation/unit/ATC/gate).
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: planning
+            name: cordis:group
+            group: true
+            isolate:
+              planMode: true
+            config:
+              - id: plan-mode
+                name: '@deepseek-ai/dsh-plan-mode'
+                config:
+                  section: |
+                    You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+                    Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+                    The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs to exit_plan_mode.
+
+                    Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+                    Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+                    When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+          - id: delegation
+            name: cordis:group
+            group: true
+            isolate:
+              workflowEngine: true
+            config:
+              - id: tool-subagent-control
+                name: '@deepseek-ai/dsh-tool-subagent-control'
+              - id: tool-subagent-list-agents
+                name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+              - id: tool-subagent
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: spawn
+                  toolName: subagent
+                  modelSelectionSettings: true
+                  backgroundMode: continuable
+              - id: tool-subagent-fork
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: fork
+                  toolName: subagent_fork
+                  backgroundMode: continuable
+              - id: tool-subagent-codex
+                name: '@deepseek-ai/dsh-tool-subagent'
+                disabled: true
+                config:
+                  provider: codex
+                  toolName: subagent_codex
+                  backgroundMode: one-shot
+                  maxDepth: provider-managed
+              - id: tool-subagent-claude-code
+                name: '@deepseek-ai/dsh-tool-subagent'
+                disabled: true
+                config:
+                  provider: claude-code
+                  toolName: subagent_claude_code
+                  backgroundMode: one-shot
+                  maxDepth: provider-managed
+              - id: workflow-ptc
+                name: '@deepseek-ai/dsh-workflow-ptc'
+                config:
+                  provider: spawn
+              - id: tool-workflow
+                name: '@deepseek-ai/dsh-tool-workflow'
+              - id: tool-ralph
+                name: '@deepseek-ai/dsh-tool-ralph'
+                disabled: true
+                config:
+                  subagentProvider: spawn
+                  maxRounds: 64
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: present
+            name: '@deepseek-ai/dsh-tool-present'
+          - id: tool-plugin-manager
+            name: '@deepseek-ai/dsh-plugin-manager/tools'
+            disabled: true
+          # The ABAP toolset. In this repository checkout the row names the
+          # plugin package by its path relative to THIS patch file (Loader-
+          # anchored); once the 0.12.1 packages are published to npm, the
+          # row can name '@nefevcore/abap-adt-dsh-plugin' instead.
+          # Config (destinations / permission policy) does NOT live here:
+          # destinations primarily live in the per-workspace file
+          # <workspace>/.dsh-abap-adt/destinations.yaml (created by hand or
+          # by the adt_create_destination tool, which imports from the local
+          # SAP GUI); global fallbacks are the volatile abap-adt entry config
+          # (the Plugins-page form in DSH Settings) — both hot-apply.
+          - id: abap-adt
+            name: ../../packages/dsh-plugin-abap-adt
+            config:
+              demo: true

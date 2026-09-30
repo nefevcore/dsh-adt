@@ -1,21 +1,21 @@
 /**
- * Plugin configuration schema (schemastery) and the DSH-settings layering
+ * Plugin configuration schema (schemastery) and the config-layering
  * pipeline.
  *
- * The plugin registers its Config schema as the `abap-adt` settings namespace
- * via `ctx.settings.installSection` (see index.ts), so the composition entry (the
- * plugin row's `config:` block) becomes the namespace `base` and the user's
- * `~/.dsh/settings.yaml` `abap-adt:` section becomes the user layer. The
- * effective config resolves nearest-wins:
+ * Hosts compose this schema with their own config model: the DSH adapter
+ * wraps it `.volatile()` so the composition row config parses into a live
+ * reference (settings edits commit in place and hot-reload the registry,
+ * DSH ≥ 0.2.0); AgentChat and other hosts read it plainly. The effective
+ * config resolves nearest-wins:
  *
  *   1. schema defaults (lowest) — demo on, port 8123, defaultDestination demo
- *   2. composition base — the plugin row config (preset / cordis.patch.yml)
+ *   2. composition row config — the plugin row's `config:` block (preset /
+ *      profile patch)
  *   3. legacy file — auto-discovered `${DSH_HOME:-~/.dsh}/abap-adt.yml`
  *      (DEPRECATED: kept one release for migration; warns when present)
- *   4. settings user section — `abap-adt:` in ~/.dsh/settings.yaml
- *   5. explicit `configFile` — authoritative team-shared override; its path
+ *   4. explicit `configFile` — authoritative team-shared override; its path
  *      comes from any lower layer
- *   6. workspace file — `<session cwd>/<host config dir>/destinations.yaml`
+ *   5. workspace file — `<session cwd>/<host config dir>/destinations.yaml`
  *      (nearest; per-session, resolved at tool-call time because the preset
  *      mount is shared across sessions — see registry.ts viewFor())
  *
@@ -25,127 +25,127 @@
  * (see policy.ts), and only then the built-in defaults there.
  */
 import z from '@deepseek-ai/schemastery';
-declare const destinationSchema: z<Schemastery.ObjectS<{
-    name: z<string, string>;
+declare const destinationSchema: z<Schemastery.ObjectS<NoInfer<{
+    name: z<string, string, "defined">;
     /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
-    url: z<string, string>;
+    url: z<string, string, "defined">;
     /**
      * Free-text description of the connection (what the system is for, which
      * project/team/landscape it belongs to). Shown by adt_list_destinations
      * so an agent can pick the right destination for a task — write it for
      * your future self, not for the machine.
      */
-    description: z<string, string>;
+    description: z<string, string, "plain">;
     /** SAP client (mandant). */
-    client: z<string, string>;
+    client: z<string, string, "plain">;
     /** Logon language, e.g. `EN`, `ZH`. */
-    language: z<string, string>;
-    username: z<string, string>;
+    language: z<string, string, "plain">;
+    username: z<string, string, "plain">;
     /** Static password (prefer `passwordEnv` / env var conventions). */
-    password: z<string, string>;
+    password: z<string, string, "plain">;
     /** Name of the environment variable holding the password. */
-    passwordEnv: z<string, string>;
-    strictSSL: z<boolean, boolean>;
-    timeoutMs: z<number, number>;
+    passwordEnv: z<string, string, "plain">;
+    strictSSL: z<boolean, boolean, "defined">;
+    timeoutMs: z<number, number, "defined">;
     /**
      * Environment profile of this destination (see policy.ts): `dev` (default)
      * keeps the plain knob semantics; `qa` defaults execution/batch writes to
      * off; `prd` hard-denies them regardless of configuration.
      */
-    profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd">;
+    profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd", "plain">;
     /** Destination-level policy overrides (see policy.ts for semantics). */
-    policy: z<Schemastery.ObjectS<{
-        enableTransports: z<boolean, boolean>;
-        allowedTransports: z<string, string>;
-        allowTransportableEdits: z<boolean, boolean>;
-        allowedPackages: z<string, string>;
-        allowExecution: z<boolean, boolean>;
-        allowBatchWrites: z<boolean, boolean>;
-        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
-        blockedTables: z<string[], string[]>;
-        allowedTables: z<string[], string[]>;
-        allowDebugger: z<boolean, boolean>;
-        allowDebugVariables: z<boolean, boolean>;
-    }>, Schemastery.ObjectT<{
-        enableTransports: z<boolean, boolean>;
-        allowedTransports: z<string, string>;
-        allowTransportableEdits: z<boolean, boolean>;
-        allowedPackages: z<string, string>;
-        allowExecution: z<boolean, boolean>;
-        allowBatchWrites: z<boolean, boolean>;
-        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
-        blockedTables: z<string[], string[]>;
-        allowedTables: z<string[], string[]>;
-        allowDebugger: z<boolean, boolean>;
-        allowDebugVariables: z<boolean, boolean>;
-    }>>;
-}>, Schemastery.ObjectT<{
-    name: z<string, string>;
+    policy: z<Schemastery.ObjectS<NoInfer<{
+        enableTransports: z<boolean, boolean, "plain">;
+        allowedTransports: z<string, string, "plain">;
+        allowTransportableEdits: z<boolean, boolean, "plain">;
+        allowedPackages: z<string, string, "plain">;
+        allowExecution: z<boolean, boolean, "plain">;
+        allowBatchWrites: z<boolean, boolean, "plain">;
+        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
+        blockedTables: z<string[], string[], "plain">;
+        allowedTables: z<string[], string[], "plain">;
+        allowDebugger: z<boolean, boolean, "plain">;
+        allowDebugVariables: z<boolean, boolean, "plain">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enableTransports: z<boolean, boolean, "plain">;
+        allowedTransports: z<string, string, "plain">;
+        allowTransportableEdits: z<boolean, boolean, "plain">;
+        allowedPackages: z<string, string, "plain">;
+        allowExecution: z<boolean, boolean, "plain">;
+        allowBatchWrites: z<boolean, boolean, "plain">;
+        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
+        blockedTables: z<string[], string[], "plain">;
+        allowedTables: z<string[], string[], "plain">;
+        allowDebugger: z<boolean, boolean, "plain">;
+        allowDebugVariables: z<boolean, boolean, "plain">;
+    }>>, "plain">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    name: z<string, string, "defined">;
     /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
-    url: z<string, string>;
+    url: z<string, string, "defined">;
     /**
      * Free-text description of the connection (what the system is for, which
      * project/team/landscape it belongs to). Shown by adt_list_destinations
      * so an agent can pick the right destination for a task — write it for
      * your future self, not for the machine.
      */
-    description: z<string, string>;
+    description: z<string, string, "plain">;
     /** SAP client (mandant). */
-    client: z<string, string>;
+    client: z<string, string, "plain">;
     /** Logon language, e.g. `EN`, `ZH`. */
-    language: z<string, string>;
-    username: z<string, string>;
+    language: z<string, string, "plain">;
+    username: z<string, string, "plain">;
     /** Static password (prefer `passwordEnv` / env var conventions). */
-    password: z<string, string>;
+    password: z<string, string, "plain">;
     /** Name of the environment variable holding the password. */
-    passwordEnv: z<string, string>;
-    strictSSL: z<boolean, boolean>;
-    timeoutMs: z<number, number>;
+    passwordEnv: z<string, string, "plain">;
+    strictSSL: z<boolean, boolean, "defined">;
+    timeoutMs: z<number, number, "defined">;
     /**
      * Environment profile of this destination (see policy.ts): `dev` (default)
      * keeps the plain knob semantics; `qa` defaults execution/batch writes to
      * off; `prd` hard-denies them regardless of configuration.
      */
-    profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd">;
+    profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd", "plain">;
     /** Destination-level policy overrides (see policy.ts for semantics). */
-    policy: z<Schemastery.ObjectS<{
-        enableTransports: z<boolean, boolean>;
-        allowedTransports: z<string, string>;
-        allowTransportableEdits: z<boolean, boolean>;
-        allowedPackages: z<string, string>;
-        allowExecution: z<boolean, boolean>;
-        allowBatchWrites: z<boolean, boolean>;
-        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
-        blockedTables: z<string[], string[]>;
-        allowedTables: z<string[], string[]>;
-        allowDebugger: z<boolean, boolean>;
-        allowDebugVariables: z<boolean, boolean>;
-    }>, Schemastery.ObjectT<{
-        enableTransports: z<boolean, boolean>;
-        allowedTransports: z<string, string>;
-        allowTransportableEdits: z<boolean, boolean>;
-        allowedPackages: z<string, string>;
-        allowExecution: z<boolean, boolean>;
-        allowBatchWrites: z<boolean, boolean>;
-        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
-        blockedTables: z<string[], string[]>;
-        allowedTables: z<string[], string[]>;
-        allowDebugger: z<boolean, boolean>;
-        allowDebugVariables: z<boolean, boolean>;
-    }>>;
-}>>;
-export declare const Config: z<Schemastery.ObjectS<{
+    policy: z<Schemastery.ObjectS<NoInfer<{
+        enableTransports: z<boolean, boolean, "plain">;
+        allowedTransports: z<string, string, "plain">;
+        allowTransportableEdits: z<boolean, boolean, "plain">;
+        allowedPackages: z<string, string, "plain">;
+        allowExecution: z<boolean, boolean, "plain">;
+        allowBatchWrites: z<boolean, boolean, "plain">;
+        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
+        blockedTables: z<string[], string[], "plain">;
+        allowedTables: z<string[], string[], "plain">;
+        allowDebugger: z<boolean, boolean, "plain">;
+        allowDebugVariables: z<boolean, boolean, "plain">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enableTransports: z<boolean, boolean, "plain">;
+        allowedTransports: z<string, string, "plain">;
+        allowTransportableEdits: z<boolean, boolean, "plain">;
+        allowedPackages: z<string, string, "plain">;
+        allowExecution: z<boolean, boolean, "plain">;
+        allowBatchWrites: z<boolean, boolean, "plain">;
+        blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
+        blockedTables: z<string[], string[], "plain">;
+        allowedTables: z<string[], string[], "plain">;
+        allowDebugger: z<boolean, boolean, "plain">;
+        allowDebugVariables: z<boolean, boolean, "plain">;
+    }>>, "plain">;
+}>>, "plain">;
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     /**
      * Authoritative external config file (team-shared destinations / permission
      * policy). `~` is expanded; relative paths anchor to the dsh home. Its path
      * may come from the composition row or the settings user section.
      */
-    configFile: z<string, string>;
+    configFile: z<string, string, "plain">;
     /** In-process demo destination backed by the mock ADT server (default on). */
-    demo: z<boolean, boolean>;
-    demoPort: z<number, number>;
+    demo: z<boolean, boolean, "defined">;
+    demoPort: z<number, number, "defined">;
     /** Default destination name used by tools when none is given. */
-    defaultDestination: z<string, string>;
+    defaultDestination: z<string, string, "defined">;
     /**
      * GLOBAL permission-policy defaults. These apply to every destination
      * without its own `policy:` block; a destination-level `policy:` entry
@@ -154,27 +154,27 @@ export declare const Config: z<Schemastery.ObjectS<{
      * default (see `src/policy.ts`).
      */
     /** Allow the transport tool family and transport usage (env: SAP_ENABLE_TRANSPORTS). */
-    enableTransports: z<boolean, boolean>;
+    enableTransports: z<boolean, boolean, "plain">;
     /** Comma-separated glob list of allowed transport request numbers, e.g. `D01K96*` (env: SAP_ALLOWED_TRANSPORTS). */
-    allowedTransports: z<string, string>;
+    allowedTransports: z<string, string, "plain">;
     /** Allow edits (write/create/delete/activate) on transportable (non-$TMP) packages (env: SAP_ALLOW_TRANSPORTABLE_EDITS). */
-    allowTransportableEdits: z<boolean, boolean>;
+    allowTransportableEdits: z<boolean, boolean, "plain">;
     /** Comma-separated glob list of packages that may be edited, e.g. `Z*,$TMP` (env: SAP_ALLOWED_PACKAGES). */
-    allowedPackages: z<string, string>;
+    allowedPackages: z<string, string, "plain">;
     /** Allow running programs / classrun classes via adt_execute (env: SAP_ALLOW_EXECUTION). */
-    allowExecution: z<boolean, boolean>;
+    allowExecution: z<boolean, boolean, "plain">;
     /** Allow write parts (POST/PUT) inside adt_batch — off by default (env: SAP_ALLOW_BATCH_WRITES). */
-    allowBatchWrites: z<boolean, boolean>;
+    allowBatchWrites: z<boolean, boolean, "plain">;
     /** Read-side governance profile for row reads (off|minimal|standard|strict; default off; env: SAP_BLOCKED_TABLES_PROFILE). */
-    blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+    blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
     /** Extra blocked table names/patterns added on top of the catalog (env: SAP_BLOCKED_TABLES, comma-separated). */
-    blockedTables: z<string[], string[]>;
+    blockedTables: z<string[], string[], "plain">;
     /** Exemptions from the blocked-table catalog — audited on every use (env: SAP_ALLOWED_TABLES, comma-separated). */
-    allowedTables: z<string[], string[]>;
+    allowedTables: z<string[], string[], "plain">;
     /** Allow the ABAP debugger tool family (adt_debug_*) — off by default (env: SAP_ALLOW_DEBUGGER). */
-    allowDebugger: z<boolean, boolean>;
+    allowDebugger: z<boolean, boolean, "plain">;
     /** Allow changing debuggee variable values in the debugger — double opt-in (env: SAP_ALLOW_DEBUG_VARIABLES). */
-    allowDebugVariables: z<boolean, boolean>;
+    allowDebugVariables: z<boolean, boolean, "plain">;
     destinations: z<({
         name?: string | null | undefined;
         url?: string | null | undefined;
@@ -200,73 +200,73 @@ export declare const Config: z<Schemastery.ObjectS<{
             allowDebugger?: boolean | null | undefined;
             allowDebugVariables?: boolean | null | undefined;
         } & import("@deepseek-ai/cosmokit").Dict) | null | undefined;
-    } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<{
-        name: z<string, string>;
+    } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+        name: z<string, string, "defined">;
         /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
-        url: z<string, string>;
+        url: z<string, string, "defined">;
         /**
          * Free-text description of the connection (what the system is for, which
          * project/team/landscape it belongs to). Shown by adt_list_destinations
          * so an agent can pick the right destination for a task — write it for
          * your future self, not for the machine.
          */
-        description: z<string, string>;
+        description: z<string, string, "plain">;
         /** SAP client (mandant). */
-        client: z<string, string>;
+        client: z<string, string, "plain">;
         /** Logon language, e.g. `EN`, `ZH`. */
-        language: z<string, string>;
-        username: z<string, string>;
+        language: z<string, string, "plain">;
+        username: z<string, string, "plain">;
         /** Static password (prefer `passwordEnv` / env var conventions). */
-        password: z<string, string>;
+        password: z<string, string, "plain">;
         /** Name of the environment variable holding the password. */
-        passwordEnv: z<string, string>;
-        strictSSL: z<boolean, boolean>;
-        timeoutMs: z<number, number>;
+        passwordEnv: z<string, string, "plain">;
+        strictSSL: z<boolean, boolean, "defined">;
+        timeoutMs: z<number, number, "defined">;
         /**
          * Environment profile of this destination (see policy.ts): `dev` (default)
          * keeps the plain knob semantics; `qa` defaults execution/batch writes to
          * off; `prd` hard-denies them regardless of configuration.
          */
-        profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd">;
+        profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd", "plain">;
         /** Destination-level policy overrides (see policy.ts for semantics). */
-        policy: z<Schemastery.ObjectS<{
-            enableTransports: z<boolean, boolean>;
-            allowedTransports: z<string, string>;
-            allowTransportableEdits: z<boolean, boolean>;
-            allowedPackages: z<string, string>;
-            allowExecution: z<boolean, boolean>;
-            allowBatchWrites: z<boolean, boolean>;
-            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
-            blockedTables: z<string[], string[]>;
-            allowedTables: z<string[], string[]>;
-            allowDebugger: z<boolean, boolean>;
-            allowDebugVariables: z<boolean, boolean>;
-        }>, Schemastery.ObjectT<{
-            enableTransports: z<boolean, boolean>;
-            allowedTransports: z<string, string>;
-            allowTransportableEdits: z<boolean, boolean>;
-            allowedPackages: z<string, string>;
-            allowExecution: z<boolean, boolean>;
-            allowBatchWrites: z<boolean, boolean>;
-            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
-            blockedTables: z<string[], string[]>;
-            allowedTables: z<string[], string[]>;
-            allowDebugger: z<boolean, boolean>;
-            allowDebugVariables: z<boolean, boolean>;
-        }>>;
-    }>[]>;
-}>, Schemastery.ObjectT<{
+        policy: z<Schemastery.ObjectS<NoInfer<{
+            enableTransports: z<boolean, boolean, "plain">;
+            allowedTransports: z<string, string, "plain">;
+            allowTransportableEdits: z<boolean, boolean, "plain">;
+            allowedPackages: z<string, string, "plain">;
+            allowExecution: z<boolean, boolean, "plain">;
+            allowBatchWrites: z<boolean, boolean, "plain">;
+            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
+            blockedTables: z<string[], string[], "plain">;
+            allowedTables: z<string[], string[], "plain">;
+            allowDebugger: z<boolean, boolean, "plain">;
+            allowDebugVariables: z<boolean, boolean, "plain">;
+        }>>, Schemastery.ObjectT<NoInfer<{
+            enableTransports: z<boolean, boolean, "plain">;
+            allowedTransports: z<string, string, "plain">;
+            allowTransportableEdits: z<boolean, boolean, "plain">;
+            allowedPackages: z<string, string, "plain">;
+            allowExecution: z<boolean, boolean, "plain">;
+            allowBatchWrites: z<boolean, boolean, "plain">;
+            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
+            blockedTables: z<string[], string[], "plain">;
+            allowedTables: z<string[], string[], "plain">;
+            allowDebugger: z<boolean, boolean, "plain">;
+            allowDebugVariables: z<boolean, boolean, "plain">;
+        }>>, "plain">;
+    }>>[], "plain">;
+}>>, Schemastery.ObjectT<NoInfer<{
     /**
      * Authoritative external config file (team-shared destinations / permission
      * policy). `~` is expanded; relative paths anchor to the dsh home. Its path
      * may come from the composition row or the settings user section.
      */
-    configFile: z<string, string>;
+    configFile: z<string, string, "plain">;
     /** In-process demo destination backed by the mock ADT server (default on). */
-    demo: z<boolean, boolean>;
-    demoPort: z<number, number>;
+    demo: z<boolean, boolean, "defined">;
+    demoPort: z<number, number, "defined">;
     /** Default destination name used by tools when none is given. */
-    defaultDestination: z<string, string>;
+    defaultDestination: z<string, string, "defined">;
     /**
      * GLOBAL permission-policy defaults. These apply to every destination
      * without its own `policy:` block; a destination-level `policy:` entry
@@ -275,27 +275,27 @@ export declare const Config: z<Schemastery.ObjectS<{
      * default (see `src/policy.ts`).
      */
     /** Allow the transport tool family and transport usage (env: SAP_ENABLE_TRANSPORTS). */
-    enableTransports: z<boolean, boolean>;
+    enableTransports: z<boolean, boolean, "plain">;
     /** Comma-separated glob list of allowed transport request numbers, e.g. `D01K96*` (env: SAP_ALLOWED_TRANSPORTS). */
-    allowedTransports: z<string, string>;
+    allowedTransports: z<string, string, "plain">;
     /** Allow edits (write/create/delete/activate) on transportable (non-$TMP) packages (env: SAP_ALLOW_TRANSPORTABLE_EDITS). */
-    allowTransportableEdits: z<boolean, boolean>;
+    allowTransportableEdits: z<boolean, boolean, "plain">;
     /** Comma-separated glob list of packages that may be edited, e.g. `Z*,$TMP` (env: SAP_ALLOWED_PACKAGES). */
-    allowedPackages: z<string, string>;
+    allowedPackages: z<string, string, "plain">;
     /** Allow running programs / classrun classes via adt_execute (env: SAP_ALLOW_EXECUTION). */
-    allowExecution: z<boolean, boolean>;
+    allowExecution: z<boolean, boolean, "plain">;
     /** Allow write parts (POST/PUT) inside adt_batch — off by default (env: SAP_ALLOW_BATCH_WRITES). */
-    allowBatchWrites: z<boolean, boolean>;
+    allowBatchWrites: z<boolean, boolean, "plain">;
     /** Read-side governance profile for row reads (off|minimal|standard|strict; default off; env: SAP_BLOCKED_TABLES_PROFILE). */
-    blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
+    blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
     /** Extra blocked table names/patterns added on top of the catalog (env: SAP_BLOCKED_TABLES, comma-separated). */
-    blockedTables: z<string[], string[]>;
+    blockedTables: z<string[], string[], "plain">;
     /** Exemptions from the blocked-table catalog — audited on every use (env: SAP_ALLOWED_TABLES, comma-separated). */
-    allowedTables: z<string[], string[]>;
+    allowedTables: z<string[], string[], "plain">;
     /** Allow the ABAP debugger tool family (adt_debug_*) — off by default (env: SAP_ALLOW_DEBUGGER). */
-    allowDebugger: z<boolean, boolean>;
+    allowDebugger: z<boolean, boolean, "plain">;
     /** Allow changing debuggee variable values in the debugger — double opt-in (env: SAP_ALLOW_DEBUG_VARIABLES). */
-    allowDebugVariables: z<boolean, boolean>;
+    allowDebugVariables: z<boolean, boolean, "plain">;
     destinations: z<({
         name?: string | null | undefined;
         url?: string | null | undefined;
@@ -321,62 +321,62 @@ export declare const Config: z<Schemastery.ObjectS<{
             allowDebugger?: boolean | null | undefined;
             allowDebugVariables?: boolean | null | undefined;
         } & import("@deepseek-ai/cosmokit").Dict) | null | undefined;
-    } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<{
-        name: z<string, string>;
+    } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+        name: z<string, string, "defined">;
         /** Scheme + host + port, e.g. `https://sap.example.com:443`. */
-        url: z<string, string>;
+        url: z<string, string, "defined">;
         /**
          * Free-text description of the connection (what the system is for, which
          * project/team/landscape it belongs to). Shown by adt_list_destinations
          * so an agent can pick the right destination for a task — write it for
          * your future self, not for the machine.
          */
-        description: z<string, string>;
+        description: z<string, string, "plain">;
         /** SAP client (mandant). */
-        client: z<string, string>;
+        client: z<string, string, "plain">;
         /** Logon language, e.g. `EN`, `ZH`. */
-        language: z<string, string>;
-        username: z<string, string>;
+        language: z<string, string, "plain">;
+        username: z<string, string, "plain">;
         /** Static password (prefer `passwordEnv` / env var conventions). */
-        password: z<string, string>;
+        password: z<string, string, "plain">;
         /** Name of the environment variable holding the password. */
-        passwordEnv: z<string, string>;
-        strictSSL: z<boolean, boolean>;
-        timeoutMs: z<number, number>;
+        passwordEnv: z<string, string, "plain">;
+        strictSSL: z<boolean, boolean, "defined">;
+        timeoutMs: z<number, number, "defined">;
         /**
          * Environment profile of this destination (see policy.ts): `dev` (default)
          * keeps the plain knob semantics; `qa` defaults execution/batch writes to
          * off; `prd` hard-denies them regardless of configuration.
          */
-        profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd">;
+        profile: z<"dev" | "qa" | "prd", "dev" | "qa" | "prd", "plain">;
         /** Destination-level policy overrides (see policy.ts for semantics). */
-        policy: z<Schemastery.ObjectS<{
-            enableTransports: z<boolean, boolean>;
-            allowedTransports: z<string, string>;
-            allowTransportableEdits: z<boolean, boolean>;
-            allowedPackages: z<string, string>;
-            allowExecution: z<boolean, boolean>;
-            allowBatchWrites: z<boolean, boolean>;
-            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
-            blockedTables: z<string[], string[]>;
-            allowedTables: z<string[], string[]>;
-            allowDebugger: z<boolean, boolean>;
-            allowDebugVariables: z<boolean, boolean>;
-        }>, Schemastery.ObjectT<{
-            enableTransports: z<boolean, boolean>;
-            allowedTransports: z<string, string>;
-            allowTransportableEdits: z<boolean, boolean>;
-            allowedPackages: z<string, string>;
-            allowExecution: z<boolean, boolean>;
-            allowBatchWrites: z<boolean, boolean>;
-            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict">;
-            blockedTables: z<string[], string[]>;
-            allowedTables: z<string[], string[]>;
-            allowDebugger: z<boolean, boolean>;
-            allowDebugVariables: z<boolean, boolean>;
-        }>>;
-    }>[]>;
-}>>;
+        policy: z<Schemastery.ObjectS<NoInfer<{
+            enableTransports: z<boolean, boolean, "plain">;
+            allowedTransports: z<string, string, "plain">;
+            allowTransportableEdits: z<boolean, boolean, "plain">;
+            allowedPackages: z<string, string, "plain">;
+            allowExecution: z<boolean, boolean, "plain">;
+            allowBatchWrites: z<boolean, boolean, "plain">;
+            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
+            blockedTables: z<string[], string[], "plain">;
+            allowedTables: z<string[], string[], "plain">;
+            allowDebugger: z<boolean, boolean, "plain">;
+            allowDebugVariables: z<boolean, boolean, "plain">;
+        }>>, Schemastery.ObjectT<NoInfer<{
+            enableTransports: z<boolean, boolean, "plain">;
+            allowedTransports: z<string, string, "plain">;
+            allowTransportableEdits: z<boolean, boolean, "plain">;
+            allowedPackages: z<string, string, "plain">;
+            allowExecution: z<boolean, boolean, "plain">;
+            allowBatchWrites: z<boolean, boolean, "plain">;
+            blockedTablesProfile: z<"off" | "minimal" | "standard" | "strict", "off" | "minimal" | "standard" | "strict", "plain">;
+            blockedTables: z<string[], string[], "plain">;
+            allowedTables: z<string[], string[], "plain">;
+            allowDebugger: z<boolean, boolean, "plain">;
+            allowDebugVariables: z<boolean, boolean, "plain">;
+        }>>, "plain">;
+    }>>[], "plain">;
+}>>, "plain">;
 export type DestinationConfig = Schemastery.TypeT<typeof destinationSchema>;
 export type PluginConfig = Schemastery.TypeT<typeof Config>;
 /** Fully-resolved config handed to `AdtRegistry` (non-policy keys always set). */
@@ -466,12 +466,14 @@ export declare function parseYamlDocument(raw: string, path: string): unknown;
 export declare function parseExternalConfigText(raw: string, path: string): Partial<PluginConfig>;
 /** Inputs to {@link resolveEffectiveConfig}. */
 interface EffectiveSource {
-    /** Composition entry: the plugin row's `config:` block (namespace `base`). */
+    /** Composition entry: the plugin row's `config:` block (live volatile reference). */
     entry: PluginConfig;
     /**
-     * Settings-resolved value (schema defaults + base + the user section from
-     * `~/.dsh/settings.yaml`). Omit when no settings service is mounted — the
-     * entry alone is then the composition layer, exactly as composed.
+     * Higher overlay the caller resolved on top of the entry. Omit when the
+     * entry alone is the composition layer, exactly as composed — the DSH
+     * adapter passes only the entry (settings overlays live IN the volatile
+     * entry reference itself since DSH 0.2.0); other hosts may compose their
+     * own resolved layer here.
      */
     resolved?: PluginConfig;
 }

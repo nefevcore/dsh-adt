@@ -1,0 +1,12 @@
+{
+  "name": "@nefevcore/abap-adt-preset",
+  "version": "0.12.1",
+  "private": true,
+  "type": "module",
+  "description": "ABAP Development agent preset bundle for DeepSeek Harness: the standard coding agent plus the adt_* ABAP toolset, an ABAP-specific persona, and transport-request discipline.",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,21 +1,21 @@
 /**
- * Plugin configuration schema (schemastery) and the DSH-settings layering
+ * Plugin configuration schema (schemastery) and the config-layering
  * pipeline.
  *
- * The plugin registers its Config schema as the `abap-adt` settings namespace
- * via `ctx.settings.installSection` (see index.ts), so the composition entry (the
- * plugin row's `config:` block) becomes the namespace `base` and the user's
- * `~/.dsh/settings.yaml` `abap-adt:` section becomes the user layer. The
- * effective config resolves nearest-wins:
+ * Hosts compose this schema with their own config model: the DSH adapter
+ * wraps it `.volatile()` so the composition row config parses into a live
+ * reference (settings edits commit in place and hot-reload the registry,
+ * DSH ≥ 0.2.0); AgentChat and other hosts read it plainly. The effective
+ * config resolves nearest-wins:
  *
  *   1. schema defaults (lowest) — demo on, port 8123, defaultDestination demo
- *   2. composition base — the plugin row config (preset / cordis.patch.yml)
+ *   2. composition row config — the plugin row's `config:` block (preset /
+ *      profile patch)
  *   3. legacy file — auto-discovered `${DSH_HOME:-~/.dsh}/abap-adt.yml`
  *      (DEPRECATED: kept one release for migration; warns when present)
- *   4. settings user section — `abap-adt:` in ~/.dsh/settings.yaml
- *   5. explicit `configFile` — authoritative team-shared override; its path
+ *   4. explicit `configFile` — authoritative team-shared override; its path
  *      comes from any lower layer
- *   6. workspace file — `<session cwd>/<host config dir>/destinations.yaml`
+ *   5. workspace file — `<session cwd>/<host config dir>/destinations.yaml`
  *      (nearest; per-session, resolved at tool-call time because the preset
  *      mount is shared across sessions — see registry.ts viewFor())
  *
