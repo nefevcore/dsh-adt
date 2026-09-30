@@ -70,6 +70,8 @@ DSH 0.2.0 同时废弃了 0.12.0 及更早版本依赖的两个机制：目录�
 - **迁移**：DSH ≥ 0.2.0-rc.2 上安装 `presets/abap-dev` bundle 并重启；工作区 `.dsh-abap-adt/destinations.yaml` 与 `~/.dsh/.credentials.yaml` 原样保留；曾在 `settings.yaml` `abap-adt:` 段的全局配置迁入预设行 `config:` 或团队 `configFile`；删除失效的 `~/.dsh/.agent-presets/abap-adt/` 目录。
 - 测试 362 项全绿（CLI 测试随机制移除，新增 volatile 接线正/负用例）。
 
+> 📋 v0.1 → v0.2 的完整契约变化分析（预设/配置/分发/事件/版本陷阱与迁移清单）见 [`docs/dsh-0.2-plugin-contract-changes.md`](docs/dsh-0.2-plugin-contract-changes.md)。
+
 #### 0.8.0（适配 DSH 0.1.2 破坏性更新：settings 接缝迁移）
 
 DSH 0.1.2-rc.1 把 `@deepseek-ai/dsh-settings` 的模块级辅助 `installSettingsSection()` / `settingsNamespace()` 移到了服务方法 `ctx.settings.installSection(owner, ns, schema, entry, hooks)`（由 `ctx.inject(['settings'], …)` 接线，attach/detach 语义不变）。旧插件在新 DSH 上挂载预设时报 `does not provide an export named 'installSettingsSection'`（升级中途还可能出现瞬时的 `Cannot find package '@deepseek-ai/cordis'`——profile 模块回退链接重新指健康装机后即消失）。
