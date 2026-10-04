@@ -23,7 +23,7 @@ Looking for more DSH plugins? Browse the [`dsh-plugin`](https://github.com/topic
 
 ## Install & update (DSH ≥ 0.2.0)
 
-**0.12.1 requires DSH ≥ 0.2.0-rc.2** (volatile entry config; older DSH: stay on 0.12.0). Installation goes through the **DSH Plugin Manager** (the Web UI Plugins panel or the `plugin_manager` tool; requires pnpm on PATH). DSH profiles are pnpm-managed (`~/.dsh/profiles/<name>/` has a `pnpm-workspace.yaml`) — **don't run `npm install` inside a profile**.
+**0.12.2 requires DSH ≥ 0.2.0-rc.2** (volatile entry config; older DSH: stay on 0.12.0). Installation goes through the **DSH Plugin Manager** (the Web UI Plugins panel or the `plugin_manager` tool; requires pnpm on PATH). DSH profiles are pnpm-managed (`~/.dsh/profiles/<name>/` has a `pnpm-workspace.yaml`) — **don't run `npm install` inside a profile**. The npm tarball (≥ 0.12.2) ships `preset/cordis.patch.yml`, so a creator-mode agent can install everything from npm alone with the repository's `presets/abap-dev/INSTALL-PROMPT.md`.
 
 **Not loaded by default, by design.** The package declares no `dsh.bundle` of its own: nothing promotes it into the global layer, and per-session scoping is exactly what this plugin wants. Activation happens through the **ABAP Development preset bundle** ([`presets/abap-dev/`](../../presets/abap-dev/) in the repository): one `@deepseek-ai/dsh-agent-preset` declaration row (`preset-abap-adt`) based on the shipped `standard` preset, with the persona replaced by an ABAP-specific one (tool guidance, development loop, transport-request discipline) and this plugin appended as its `abap-adt` row — so ONLY sessions created on that preset load the `adt_*` tools.
 
@@ -47,7 +47,7 @@ The plugin row inside the preset (what scopes the tools):
     # and permission policy in the volatile abap-adt entry config (below)
 ```
 
-### Upgrading to 0.12.1 (DSH 0.1.x → 0.2.0)
+### Upgrading to 0.12.2 (DSH 0.1.x → 0.2.0)
 
 DSH 0.2.0 removed both mechanisms 0.12.0 and earlier relied on: directory presets (`~/.dsh/.agent-presets/<id>/` is no longer read) and the settings namespace (`ctx.settings.installSection` is gone; DSH imported the old `settings.yaml` once and renamed it `.imported`). After upgrading DSH and this plugin:
 

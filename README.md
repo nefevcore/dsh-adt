@@ -36,7 +36,7 @@ pnpm install && pnpm build        # 构建 packages/*/lib —— 预设行以绝
 plugin_manager { action: "install_bundle", target: "<仓库>/presets/abap-dev" }
 ```
 
-安装结果以返回的 `application: "applied"` 为准；**重启 DSH** 后新建会话，在预设 chip 选「ABAP Development」即可。从 npm 使用（0.12.1 发布后）：把 `presets/abap-dev/cordis.patch.yml` 里 `abap-adt` 行的 `name` 从 file URL 改成 `'@nefevcore/abap-adt-dsh-plugin'`（要求包已安装在解析可达的位置）再安装。
+安装结果以返回的 `application: "applied"` 为准；**重启 DSH** 后新建会话，在预设 chip 选「ABAP Development」即可。从 npm 使用：让接收方在 cordis（创造模式）会话里粘贴 [`presets/abap-dev/INSTALL-PROMPT.md`](presets/abap-dev/INSTALL-PROMPT.md)，Agent 自动从 npm 完成安装与预设配置（需 ≥0.12.2 的 tarball——0.12.1 的 tarball 不含 `preset/` 文件）。
 
 > ⏳ **发版后 24h 内更新被拦？** pnpm 11 默认开启供应链保护（`minimumReleaseAge: 1440`——新发布的包 24 小时内不被解析）。紧跟发版执行更新时：默认 **loose 模式**会把新版本自动追加进 profile 的 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 并放行（一条 info 提示列出所加条目，属预期行为）；若你的环境**显式设置过** `minimumReleaseAge`（此时 strict 模式默认生效），会直接报 `ERR_PNPM_NO_MATURE_MATCHING_VERSION`——三个选择：等发布满 24h；或在该 yaml 手动加上四包的 `@<版本>` 豁免后重跑；或在终端交互式运行按提示确认。
 
@@ -64,6 +64,12 @@ plugin_manager { action: "install_bundle", target: "<仓库>/presets/abap-dev" }
 DSH 的 profile 由 pnpm 管理（`~/.dsh/profiles/web/` 下有 `pnpm-workspace.yaml`），**不要用 npm 装进 profile**（会生成 package-lock 并破坏 pnpm 布局）。**装/更新插件、新建预设后重启 DSH**；之后的配置变更免重启热生效——连接真实系统的 `destinations` 推荐放**工作区配置** `<工作区>/.dsh-abap-adt/destinations.yaml`（对话式创建见下），全局兜底/权限开关配置在 `abap-adt` 条目的 volatile 配置（DSH Settings 的 Plugins 页表单，或预设行 `config:`，见下方「配置分层」）。
 
 ### 从 0.1.0 升级
+
+#### 0.12.2（npm 分发补丁）
+
+- **插件 tarball 自足化**：prepack 钩子（`scripts/copy-preset.mjs`）把预设声明同步进 `@nefevcore/abap-adt-dsh-plugin` 的 `preset/cordis.patch.yml`——接收方一个 npm 包即可拿到插件 + 依赖 + 预设（0.12.1 的 tarball 缺该文件，npm 安装流程需 ≥ 0.12.2）。
+- **创造模式一键安装提示词**：[`presets/abap-dev/INSTALL-PROMPT.md`](presets/abap-dev/INSTALL-PROMPT.md)——接收方在 cordis 预设会话整段粘贴，Agent 自动 npm 下载、落盘、改写 file URL、`install_bundle`、验证；离线兜底为 `dist/share-abap-adt/` 分享包。
+- 无行为变化，测试 362 项全绿。
 
 #### 0.12.1（适配 DSH 0.2.0：声明式预设 + volatile 配置）
 

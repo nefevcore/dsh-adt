@@ -7,7 +7,7 @@
 ## 方式 1：npm + 创造模式提示词（最简单，推荐）
 
 **只需发一段提示词**——下载、落盘、路径改写、安装、验证全部由对方的 Agent
-（cordis/创造模式预设的会话）从 npm 自动完成（前提：0.12.1 四包已发布、对方机器有
+（cordis/创造模式预设的会话）从 npm 自动完成（前提：0.12.2 四包已发布、对方机器有
 node/npm）：
 
 > 把 [`presets/abap-dev/INSTALL-PROMPT.md`](presets/abap-dev/INSTALL-PROMPT.md)

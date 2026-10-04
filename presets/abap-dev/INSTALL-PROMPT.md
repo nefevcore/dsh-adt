@@ -6,13 +6,13 @@
 
 ---
 
-请帮我安装 ABAP 开发插件并配置「ABAP Development」agent 预设。资源全部从 npm 获取（包 `@nefevcore/abap-adt-dsh-plugin`，当前 `^0.12.1`）。严格按以下步骤执行，**除第 5 步指定的那一行外，不要改动任何文件内容**（persona 文本必须逐字保留）：
+请帮我安装 ABAP 开发插件并配置「ABAP Development」agent 预设。资源全部从 npm 获取（包 `@nefevcore/abap-adt-dsh-plugin`，当前 `^0.12.2`）。严格按以下步骤执行，**除第 5 步指定的那一行外，不要改动任何文件内容**（persona 文本必须逐字保留）：
 
 1. 前置检查：`npm -v` 可用（不可用则停止并告诉我）。创建目录 `~/.dsh/abap-adt-preset/`（Windows 即 `%USERPROFILE%\.dsh\abap-adt-preset`）。
 2. 在该目录写入 `package.json`，内容原样如下（单行 JSON）：
    `{ "name": "abap-adt-preset-local", "private": true, "type": "module", "dsh": { "bundle": { "patch": "./cordis.patch.yml" } } }`
 3. 安装插件（npm 会连依赖一起装进该目录的 `node_modules/`）：
-   `npm install --prefix <~/.dsh/abap-adt-preset 的绝对路径> @nefevcore/abap-adt-dsh-plugin@^0.12.1`
+   `npm install --prefix <~/.dsh/abap-adt-preset 的绝对路径> @nefevcore/abap-adt-dsh-plugin@^0.12.2`
 4. 复制预设声明：把 `~/.dsh/abap-adt-preset/node_modules/@nefevcore/abap-adt-dsh-plugin/preset/cordis.patch.yml` 复制为 `~/.dsh/abap-adt-preset/cordis.patch.yml`。
 5. 改写插件行：编辑该文件中 `id: abap-adt` 的行，把 `name:` 值替换为插件入口的**绝对 file URL**——`file:///` + `~/.dsh/abap-adt-preset/node_modules/@nefevcore/abap-adt-dsh-plugin/lib/index.js` 的绝对路径（正斜杠形式）。保留引号与缩进，其余内容一字不动。
 6. 安装 bundle：调用 `plugin_manager { "action": "install_bundle", "target": "<~/.dsh/abap-adt-preset 的绝对路径>" }`，确认返回 `application: "applied"`（若报 `ambiguous-install`，说明该 profile 已装过，直接进入验证）。

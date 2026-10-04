@@ -40,9 +40,9 @@ pnpm install && pnpm build
 > 一次安装（`~/.dsh/profiles/<name>/package.json` 的 `dsh.profile.bundles` 即
 > 安装凭证）。
 
-从 npm 使用（0.12.1 发布后）：把 `cordis.patch.yml` 里 `abap-adt` 行的
-`name` 从 file URL 改成 `'@nefevcore/abap-adt-dsh-plugin'`（要求该包已安装在
-解析可达的位置）再安装。
+从 npm 使用（0.12.2 发布后）：让接收方在 cordis（创造模式）会话里粘贴
+[INSTALL-PROMPT.md](./INSTALL-PROMPT.md)，Agent 自动从 npm 完成下载、落盘与
+安装（插件 tarball 自带 `preset/cordis.patch.yml`，需 ≥ 0.12.2）。
 
 ## 配置放哪里
 
