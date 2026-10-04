@@ -22,8 +22,13 @@ ABAP 开发模式的入口是仓库自带的**预设 bundle** [`presets/abap-dev
 在本仓库（或其检出）中安装：
 
 ```bash
-pnpm install && pnpm build        # 构建 packages/*/lib —— 预设行按相对路径指向这里
+pnpm install && pnpm build        # 构建 packages/*/lib —— 预设行以绝对 file URL 指向这里
 ```
+
+> ⚠️ 预设 plugins 列表里的行由 agent-preset **registry 的锚点**（在 dsh 安装内）解析，
+> 不在 patch 文件旁——相对路径行无法使用。仓库的 `cordis.patch.yml` 里 `abap-adt` 行
+> 写的是**绝对 file URL**（`file:///<仓库>/packages/dsh-plugin-abap-adt/lib/index.js`）；
+> **检出路径不同必须改这一行**。它始终加载当前 `pnpm build` 产物。
 
 然后让代理安装（或用 Web UI 的 Plugins 面板从目录安装）：
 
@@ -31,7 +36,7 @@ pnpm install && pnpm build        # 构建 packages/*/lib —— 预设行按相
 plugin_manager { action: "install_bundle", target: "<仓库>/presets/abap-dev" }
 ```
 
-安装结果以返回的 `application: "applied"` 为准；**重启 DSH** 后新建会话，在预设 chip 选「ABAP Development」即可。从 npm 使用（0.12.1 发布后）：把 `presets/abap-dev/cordis.patch.yml` 里 `abap-adt` 行的 `name` 从相对路径改成 `'@nefevcore/abap-adt-dsh-plugin'` 再安装。
+安装结果以返回的 `application: "applied"` 为准；**重启 DSH** 后新建会话，在预设 chip 选「ABAP Development」即可。从 npm 使用（0.12.1 发布后）：把 `presets/abap-dev/cordis.patch.yml` 里 `abap-adt` 行的 `name` 从 file URL 改成 `'@nefevcore/abap-adt-dsh-plugin'`（要求包已安装在解析可达的位置）再安装。
 
 > ⏳ **发版后 24h 内更新被拦？** pnpm 11 默认开启供应链保护（`minimumReleaseAge: 1440`——新发布的包 24 小时内不被解析）。紧跟发版执行更新时：默认 **loose 模式**会把新版本自动追加进 profile 的 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 并放行（一条 info 提示列出所加条目，属预期行为）；若你的环境**显式设置过** `minimumReleaseAge`（此时 strict 模式默认生效），会直接报 `ERR_PNPM_NO_MATURE_MATCHING_VERSION`——三个选择：等发布满 24h；或在该 yaml 手动加上四包的 `@<版本>` 豁免后重跑；或在终端交互式运行按提示确认。
 

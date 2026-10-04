@@ -16,7 +16,7 @@
 ## 安装（仓库检出内）
 
 ```bash
-# 1. 构建插件包（预设行按 Loader 锚定的相对路径指向本仓库构建产物）
+# 1. 构建插件包（预设行以绝对 file URL 指向 <仓库>/packages/dsh-plugin-abap-adt/lib/index.js）
 pnpm install && pnpm build
 
 # 2. 安装 bundle —— 让代理执行，或用 Web UI 的 Plugins 面板从目录安装
@@ -25,12 +25,18 @@ pnpm install && pnpm build
 # 3. 重启 DSH，新建会话时在预设 chip 选「ABAP Development」
 ```
 
+> ⚠️ **预设插件行的解析锚点在 dsh 安装内**（agent-preset registry 的上下文），
+> 不在 本 patch 文件旁——相对路径行**无法**用于预设 plugins 列表。行名必须是
+> 自足的**绝对 file URL**（如本仓库的 `cordis.patch.yml` 所写）；**换检出路径时
+> 改 `abap-adt` 行的 `name`**。该行始终加载当前 `pnpm build` 产物——改代码后
+> 重新 `pnpm build`，重启会话宿主即生效。
+
 安装结果以返回的 `application: "applied"` 为准；`plugin_manager list_plugins`
 应出现 `preset-abap-adt` 行（`enabled: true, fiberPhase: active`）。
 
-从 npm 使用（0.12.1 四包发布后）：把 `cordis.patch.yml` 里 `abap-adt` 行的
-`name` 从相对路径 `../../packages/dsh-plugin-abap-adt` 改成
-`'@nefevcore/abap-adt-dsh-plugin'` 再安装。
+从 npm 使用（0.12.1 发布后）：把 `cordis.patch.yml` 里 `abap-adt` 行的
+`name` 从 file URL 改成 `'@nefevcore/abap-adt-dsh-plugin'`（要求该包已安装在
+解析可达的位置）再安装。
 
 ## 配置放哪里
 

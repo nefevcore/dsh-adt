@@ -19,11 +19,12 @@ pnpm bundle
 2. **装成 agent preset（按会话启用，不影响其他工作区）**——把仓库里的
    [`presets/abap-dev/`](presets/abap-dev/) 两个文件（`package.json` +
    `cordis.patch.yml`）复制到同一目录，把 `cordis.patch.yml` 里 `abap-adt` 行的
-   `name` 改为指向 bundle 文件的相对路径（Loader 以 patch 文件为锚点解析）：
+   `name` 改为指向 bundle 文件的**绝对 file URL**（预设行的解析锚点在 dsh 安装内
+   的 agent-preset registry，**不在 patch 文件旁，相对路径无法使用**）：
 
    ```yaml
    - id: abap-adt
-     name: ./dsh-plugin-abap-adt.bundle.mjs   # 与 patch 文件同目录
+     name: 'file:///C:/tools/abap-adt/dsh-plugin-abap-adt.bundle.mjs'   # 绝对 file URL
      config:
        demo: true          # 免 SAP 系统体验
        # destinations / 权限管控放工作区 .dsh-abap-adt/destinations.yaml 或
@@ -71,8 +72,8 @@ git clone <repo-url>
 cd dsh-abap-adt
 corepack pnpm install --registry https://registry.npmmirror.com
 corepack pnpm build
-# 然后按方式 1 的步骤 2 配置（agent preset 方式），name 指向本仓库的
-# packages/dsh-plugin-abap-adt/lib/index.js
+# 然后按方式 1 的步骤 2 配置（agent preset 方式），name 用绝对 file URL 指向本仓库的
+# packages/dsh-plugin-abap-adt/lib/index.js（检出在哪就写哪，不能用相对路径）
 ```
 
 **推送前须知（本仓库已清理）：**
@@ -119,7 +120,9 @@ CI 发布的唯一前提是 tag 推上 GitHub；直连超时 / SSL reset 时：
 
 **接收方安装（无需克隆、无需构建；DSH ≥ 0.2.0）**：把
 [`presets/abap-dev/`](presets/abap-dev/) 复制到任意目录，`cordis.patch.yml` 里
-`abap-adt` 行的 `name` 改为 `'@nefevcore/abap-adt-dsh-plugin'`，然后让代理执行
+`abap-adt` 行的 `name` 改为 `'@nefevcore/abap-adt-dsh-plugin'`（⚠️ 预设行的解析
+锚点在 dsh 安装内的 agent-preset registry——裸包名只有在解析可达时才可行；不通时
+退回方式 1 的绝对 file URL 指向本地文件），然后让代理执行
 `plugin_manager { action: "install_bundle", target: "<该目录>" }`（或 Web UI 的
 Plugins 面板从目录安装）。
 

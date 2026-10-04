@@ -184,10 +184,15 @@
           - id: tool-plugin-manager
             name: '@deepseek-ai/dsh-plugin-manager/tools'
             disabled: true
-          # The ABAP toolset. In this repository checkout the row names the
-          # plugin package by its path relative to THIS patch file (Loader-
-          # anchored); once the 0.12.1 packages are published to npm, the
-          # row can name '@nefevcore/abap-adt-dsh-plugin' instead.
+          # The ABAP toolset. Preset plugin rows are resolved by the agent-
+          # preset REGISTRY's anchor (inside the dsh installation), NOT beside
+          # this patch file — a checkout-relative path cannot work here. The
+          # name must be self-sufficient: an absolute file URL to the built
+          # plugin entry (always loads the current `pnpm build` output, with
+          # workspace deps resolving from the repository's node_modules).
+          # EDIT THIS to your checkout path. Once the packages are published
+          # to npm AND installed resolution-reachable, the row can name
+          # '@nefevcore/abap-adt-dsh-plugin' instead.
           # Config (destinations / permission policy) does NOT live here:
           # destinations primarily live in the per-workspace file
           # <workspace>/.dsh-abap-adt/destinations.yaml (created by hand or
@@ -195,6 +200,6 @@
           # SAP GUI); global fallbacks are the volatile abap-adt entry config
           # (the Plugins-page form in DSH Settings) — both hot-apply.
           - id: abap-adt
-            name: ../../packages/dsh-plugin-abap-adt
+            name: 'file:///C:/Users/xiaofeng/Documents/Dev/WorkDev/adt/packages/dsh-plugin-abap-adt/lib/index.js'
             config:
               demo: true
