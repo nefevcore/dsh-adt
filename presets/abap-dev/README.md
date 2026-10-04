@@ -34,6 +34,12 @@ pnpm install && pnpm build
 安装结果以返回的 `application: "applied"` 为准；`plugin_manager list_plugins`
 应出现 `preset-abap-adt` 行（`enabled: true, fiberPhase: active`）。
 
+> ⚠️ **每个 profile 独立安装**：`dsh web`（web profile）与桌面应用（desktop
+> profile）是**不同的 profile**——`plugin_manager install_bundle` 只装入当前会话
+> 所在宿主的 profile。桌面与 CLI 交替使用时，需要在**对应宿主的会话里**各执行
+> 一次安装（`~/.dsh/profiles/<name>/package.json` 的 `dsh.profile.bundles` 即
+> 安装凭证）。
+
 从 npm 使用（0.12.1 发布后）：把 `cordis.patch.yml` 里 `abap-adt` 行的
 `name` 从 file URL 改成 `'@nefevcore/abap-adt-dsh-plugin'`（要求该包已安装在
 解析可达的位置）再安装。
