@@ -4,38 +4,32 @@
 
 ---
 
-## 方式 1：分享包 + 创造模式提示词（最简单，推荐给同事）
+## 方式 1：npm + 创造模式提示词（最简单，推荐）
 
-**发一个文件夹，同事贴一段提示词**——落盘、路径改写、安装、验证全部由对方的
-Agent（cordis/创造模式预设的会话）自动完成：
+**只需发一段提示词**——下载、落盘、路径改写、安装、验证全部由对方的 Agent
+（cordis/创造模式预设的会话）从 npm 自动完成（前提：0.12.1 四包已发布、对方机器有
+node/npm）：
 
-```bash
-pnpm bundle && pnpm build   # 确保产物新鲜
-# 组装分享包（4 个文件）：
-#   dist/share-abap-adt/
-#     dsh-plugin-abap-adt.bundle.mjs   自包含插件（内联协议客户端 + mock + abaplint）
-#     package.json                     预设 bundle 清单
-#     cordis.patch.yml                 预设声明（ABAP persona + adt_* 工具行）
-#     INSTALL-PROMPT.md                给对方 Agent 的提示词（即 [presets/abap-dev/INSTALL-PROMPT.md](presets/abap-dev/INSTALL-PROMPT.md)）
-```
+> 把 [`presets/abap-dev/INSTALL-PROMPT.md`](presets/abap-dev/INSTALL-PROMPT.md)
+> 的内容发给同事。同事在 DSH 桌面应用用 **cordis（创造模式）预设**新建会话，
+> 整段粘贴即可。Agent 会自动：`npm install` 插件包到 `~/.dsh/abap-adt-preset/`
+> → 复制包内自带的 `preset/cordis.patch.yml` → 按本机路径改写 `abap-adt` 行的
+> 绝对 file URL（**预设行的解析锚点在 dsh 安装内，相对路径无法使用**——提示词里
+> 已写明）→ `install_bundle` → 验证行状态与 demo mock → 提示重启选预设。
+> 以后更新：同事重跑一次 `npm install ... @latest` + 重启即可。
 
-把 `dist/share-abap-adt/` 打包发给同事（IM/网盘/U盘均可）。同事的操作只有两步：
-
-1. 解压到任意目录，在 DSH 桌面应用用 **cordis（创造模式）预设**新建会话
-2. 把 `INSTALL-PROMPT.md` 的内容整段粘贴给 Agent
-
-Agent 会自动：复制到 `~/.dsh/abap-adt-preset/` → 按本机路径改写 `abap-adt` 行的
-绝对 file URL（**预设行的解析锚点在 dsh 安装内，相对路径无法使用**——提示词里已写明）
-→ `install_bundle` → 验证行状态与 demo mock → 提示重启选预设。
+**离线兜底**（对方没有 npm/网络受限时）：`pnpm bundle && pnpm build` 后把
+`dist/share-abap-adt/`（自包含 mjs + 预设两文件）打包发送，对方 Agent 按提示词
+同样的步骤执行，只是第 1-4 步换成"复制本文件夹三个文件到
+`~/.dsh/abap-adt-preset/`"、file URL 指向其中的 mjs。
 
 > 多 profile 提示：安装只进当前宿主的 profile；同事若同时用 `dsh web`，在 web 宿主
 > 的会话里再贴一次同一提示词即可（提示词里已注明）。
 
 > 全局（所有会话）加载不受支持——启用统一走 agent preset 声明行（按会话），见根 README「安装与更新」。
 
-> 配置分层（就近覆盖）：工作区文件 > 显式 configFile > 插件行 volatile config（Settings 表单/预设行）> `SAP_*` 环境变量（仅权限开关兜底）> 内置默认；旧版独立文件 `~\.dsh\abap-adt.yml` 已废弃。`destinations` 跨层按名字合并，高层同名条目覆盖低层。详见主 README「配置分层」。
-
-> 注意：接收方的 profile 里必须已有 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/schemastery`（标准 dsh profile 自带）。
+> 注意：接收方的 dsh 安装自带 `@deepseek-ai/cordis`、`@deepseek-ai/schemastery`
+> 等运行时依赖（标准 dsh 自带）；npm 安装解决的是插件自身的依赖树。
 
 ---
 

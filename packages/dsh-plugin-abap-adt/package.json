@@ -12,10 +12,12 @@
     }
   },
   "files": [
-    "lib"
+    "lib",
+    "preset"
   ],
   "scripts": {
-    "build": "tsc -p ."
+    "build": "tsc -p .",
+    "prepack": "node ../../scripts/copy-preset.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cosmokit": "^1.8.5",
