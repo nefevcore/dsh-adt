@@ -4,52 +4,32 @@
 
 ---
 
-## 方式 1：单文件 bundle（最简单，推荐给同事快速试用）
+## 方式 1：分享包 + 创造模式提示词（最简单，推荐给同事）
 
-**一条命令生成自包含的 ESM 单文件**（内联 ADT 协议客户端 + mock 服务器；`@deepseek-ai/*` 从接收方的 DSH profile 解析）：
+**发一个文件夹，同事贴一段提示词**——落盘、路径改写、安装、验证全部由对方的
+Agent（cordis/创造模式预设的会话）自动完成：
 
 ```bash
-pnpm bundle
-# 产物: dist/dsh-plugin-abap-adt.bundle.mjs（约 5.8MB，内联 ADT 协议 + mock + abaplint）
+pnpm bundle && pnpm build   # 确保产物新鲜
+# 组装分享包（4 个文件）：
+#   dist/share-abap-adt/
+#     dsh-plugin-abap-adt.bundle.mjs   自包含插件（内联协议客户端 + mock + abaplint）
+#     package.json                     预设 bundle 清单
+#     cordis.patch.yml                 预设声明（ABAP persona + adt_* 工具行）
+#     INSTALL-PROMPT.md                给对方 Agent 的提示词（即 [presets/abap-dev/INSTALL-PROMPT.md](presets/abap-dev/INSTALL-PROMPT.md)）
 ```
 
-**接收方用法**（无需克隆仓库、无需构建；DSH ≥ 0.2.0）：
+把 `dist/share-abap-adt/` 打包发给同事（IM/网盘/U盘均可）。同事的操作只有两步：
 
-1. 把 `dsh-plugin-abap-adt.bundle.mjs` 放到任意目录（如 `C:\tools\abap-adt\`）
-2. **装成 agent preset（按会话启用，不影响其他工作区）**——把仓库里的
-   [`presets/abap-dev/`](presets/abap-dev/) 两个文件（`package.json` +
-   `cordis.patch.yml`）复制到同一目录，把 `cordis.patch.yml` 里 `abap-adt` 行的
-   `name` 改为指向 bundle 文件的**绝对 file URL**（预设行的解析锚点在 dsh 安装内
-   的 agent-preset registry，**不在 patch 文件旁，相对路径无法使用**）：
+1. 解压到任意目录，在 DSH 桌面应用用 **cordis（创造模式）预设**新建会话
+2. 把 `INSTALL-PROMPT.md` 的内容整段粘贴给 Agent
 
-   ```yaml
-   - id: abap-adt
-     name: 'file:///C:/tools/abap-adt/dsh-plugin-abap-adt.bundle.mjs'   # 绝对 file URL
-     config:
-       demo: true          # 免 SAP 系统体验
-       # destinations / 权限管控放工作区 .dsh-abap-adt/destinations.yaml 或
-       # abap-adt 条目的 volatile 配置（Settings Plugins 页表单），预设行不用再动
-   ```
+Agent 会自动：复制到 `~/.dsh/abap-adt-preset/` → 按本机路径改写 `abap-adt` 行的
+绝对 file URL（**预设行的解析锚点在 dsh 安装内，相对路径无法使用**——提示词里已写明）
+→ `install_bundle` → 验证行状态与 demo mock → 提示重启选预设。
 
-3. 让代理执行 `plugin_manager { action: "install_bundle", target: "<该目录>" }`
-   （或用 Web UI 的 Plugins 面板从目录安装），重启 DSH（`dsh web`）；新建会话时在
-   预设 chip 选「ABAP Development」，即可使用全部 `adt_*` 工具。
-
-4. 连接真实系统：按 [`presets/abap-dev/destinations.example`](presets/abap-dev/destinations.example)
-   在工作区写 `.dsh-abap-adt/destinations.yaml`（保存即热生效），或在 DSH Settings
-   的 Plugins 页填 `abap-adt` 表单：
-
-   ```yaml
-   # <工作区>/.dsh-abap-adt/destinations.yaml
-   defaultDestination: dev
-   destinations:
-     - name: dev
-       url: https://你的SAP主机:端口
-       client: '100'
-       username: 用户名
-       passwordEnv: ADT_DEV_PASSWORD   # 密码走环境变量
-       strictSSL: false                # 自签名证书时
-   ```
+> 多 profile 提示：安装只进当前宿主的 profile；同事若同时用 `dsh web`，在 web 宿主
+> 的会话里再贴一次同一提示词即可（提示词里已注明）。
 
 > 全局（所有会话）加载不受支持——启用统一走 agent preset 声明行（按会话），见根 README「安装与更新」。
 
